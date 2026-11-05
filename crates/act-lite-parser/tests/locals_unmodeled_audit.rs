@@ -6,12 +6,14 @@ use std::collections::BTreeSet;
 /// same commit.
 const KNOWN_UNMODELED: &[&str] = &[
     "Bash",
+    "CMake",
     "Cpp",
     "CSharp",
     "Css",
     "Dart",
     "Dockerfile",
     "Elixir",
+    "GraphQl",
     "HclTerraform",
     "Html",
     "Java",
@@ -19,8 +21,11 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Json",
     "Kotlin",
     "Lua",
+    "Make",
     "Markdown",
+    "Nix",
     "Php",
+    "Protobuf",
     "Python",
     "Ruby",
     "Scala",
@@ -29,6 +34,7 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Swift",
     "Toml",
     "Tsx",
+    "Xml",
     "Yaml",
 ];
 
