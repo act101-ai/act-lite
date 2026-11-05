@@ -22,7 +22,7 @@ ledger does it:
 | Create | Create a node with its id, title and a link to `nodes/<id>.md`. Use the id the ledger assigns as the node id and name the node file after it. |
 | Edge | Record that one node depends on another, as a dependency that blocks readiness. |
 | State | Set each of `TODO`, `PLANNED`, `IN-PROGRESS`, `DONE`, `BLOCKED(reason)`, `DROPPED(evidence)`. Where the ledger has no status for a state, record it with a label. |
-| Tier | Record `light`, `standard` or `strong`. |
+| Tier | Record `simple`, `normal` or `demanding`. |
 | Refs | Add commits and acceptance results to a node. |
 | Export | List every node with its id, its dependencies, its state in this skill's states, and its tier. |
 | Lifecycle | For each state change, what an adopted ticket workflow requires (the workflows the graph header records). |

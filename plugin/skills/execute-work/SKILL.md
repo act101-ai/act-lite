@@ -118,8 +118,8 @@ Each stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session: a `strong` reviewer for the graph stage and for a `strong` node,
-   else `standard`. Tell it to find defects, not to approve. Give it the
+   session: a `demanding`-tier reviewer for the graph stage and for a `demanding` node,
+   else `normal`. Tell it to find defects, not to approve. Give it the
    artifact, the spec section it answers, the contracts it touches, and the
    review focus. It reports each finding with its location, the failure it
    causes, and the evidence.
@@ -167,7 +167,7 @@ never edit it.
    - Acceptance passes and the stage passes: keep (§5.5).
    - Otherwise: start a new round on the same branch, driven by the failure
      output and the confirmed findings. From the second round, set the
-     node's Tier to `strong`.
+     node's Tier to `demanding`.
    - After three failed rounds: discard the node's branch and checkout, set
      `BLOCKED(<diagnosis>)`, and re-plan the node (split it, change its scope
      or its approach) before any further attempt. When the new plan is
@@ -187,9 +187,11 @@ and technicality.
 
 | Tier | Work |
 |---|---|
-| `light` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `standard` | Ordinary implementation from a complete plan; node reviews. |
-| `strong` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `simple` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
+| `normal` | Ordinary implementation from a complete plan; node reviews. |
+| `demanding` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+
+A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the tier.
 
 ### 5.4 Found issues
 
@@ -221,7 +223,7 @@ from one breaks the main checkout.
 When every node is `DONE` or `DROPPED`:
 
 1. Run the verification stage (§4) over the whole branch, from where it left
-   the default branch to its head, at the `strong` tier, with the
+   the default branch to its head, at the `demanding` tier, with the
    header's review focus. Confirmed findings become nodes and run through
    §5.2.
 2. When the stage passes, deliver the branch in §2 precedence: the

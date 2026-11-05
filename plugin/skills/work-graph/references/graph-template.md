@@ -37,7 +37,7 @@ To continue in any session: "resume the work in `docs/work/<program>/graph.md`".
 
 | ID | Node | Depends | State | Tier | Refs |
 |----|------|---------|-------|-------|------|
-| N1 | <what the node delivers> | — | TODO | standard | — |
+| N1 | <what the node delivers> | — | TODO | normal | — |
 
 ## Log
 
