@@ -49,6 +49,9 @@ async fn run(cli: &Cli) -> anyhow::Result<()> {
                 act_lite_cli::mcp::serve(cli.workspace.as_deref(), !cli.disable_lsp).await
             }
         },
+        Command::Analyze(args) => {
+            act_lite_cli::analyze::command::execute(args, cli.format, cli.workspace.as_deref())
+        }
         Command::Env(args) => {
             act_lite_cli::env::execute(&args.subcommand, cli.workspace.as_deref())
                 .context("Env command failed")

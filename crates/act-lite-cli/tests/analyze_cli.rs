@@ -49,7 +49,7 @@ fn conv(root: &Path) {
         root,
         "src/lib.rs",
         &format!(
-            "fn a() {{\n    let x = 1;\n    let y = 2;\n    let z = 3;\n    let w = 4;\n    let v = 5;\n}}\n{TEST_MOD}"
+            "fn a() {{\n    let x = 1;\n    let y = 2;\n    let z = 3;\n    let w = 4;\n    let v = 5;\n    let u = 6;\n}}\n{TEST_MOD}"
         ),
     );
     let big = format!("//{}\n", "x".repeat(SIZE_CAP + 1 - 3));
