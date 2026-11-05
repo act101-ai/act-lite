@@ -55,6 +55,3 @@ h(x::T) where {T} = x
 macro twice(ex)
     ex
 end
-k(v) = map(v) do u
-    u * 2
-end

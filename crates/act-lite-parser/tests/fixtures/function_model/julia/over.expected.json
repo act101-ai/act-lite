@@ -38,21 +38,5 @@
     "nesting": 0,
     "complexity": 1,
     "parameters": 1
-  },
-  {
-    "name": "k",
-    "range": "58:1-60:4",
-    "lines": 1,
-    "nesting": 0,
-    "complexity": 1,
-    "parameters": 1
-  },
-  {
-    "name": null,
-    "range": "58:15-60:4",
-    "lines": 3,
-    "nesting": 0,
-    "complexity": 1,
-    "parameters": 1
   }
 ]
