@@ -2,7 +2,7 @@
 
 use crate::client::{LspClient, LspClientTrait};
 use crate::config::ServerConfig;
-use crate::error::Result;
+use crate::error::{LspError, Result};
 use crate::servers::LspServer;
 use act_lite_parser::Grammar;
 use std::collections::{HashMap, HashSet};
@@ -17,6 +17,19 @@ pub struct LspPool {
 
     /// Servers whose LSP install or spawn failed; never retried within this process lifetime.
     failed_installs: Arc<RwLock<HashSet<LspServer>>>,
+
+    /// Why the install command of a server failed, for servers whose install
+    /// ran in this process and did not make the server available.
+    install_failures: Arc<std::sync::Mutex<HashMap<LspServer, String>>>,
+
+    /// One lock per server: a caller holds it while it starts that server, so
+    /// a concurrent caller waits and reuses the result instead of installing
+    /// or spawning the server a second time.
+    starting: tokio::sync::Mutex<HashMap<LspServer, Arc<tokio::sync::Mutex<()>>>>,
+
+    /// Whether a missing server may be installed (`ACT_LITE_INSTALL_LSP`,
+    /// read when the pool is created).
+    allow_install: bool,
 
     /// Workspace root directory.
     workspace_root: PathBuf,
@@ -33,6 +46,9 @@ impl LspPool {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             failed_installs: Arc::new(RwLock::new(HashSet::new())),
+            install_failures: Arc::default(),
+            starting: tokio::sync::Mutex::default(),
+            allow_install: crate::installer::install_opted_in(),
             workspace_root,
             disabled: false,
             shut_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -44,23 +60,22 @@ impl LspPool {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             failed_installs: Arc::new(RwLock::new(HashSet::new())),
+            install_failures: Arc::default(),
+            starting: tokio::sync::Mutex::default(),
+            allow_install: false,
             workspace_root: PathBuf::new(),
             disabled: true,
             shut_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
-    /// Gets or creates an LSP client for the given grammar.
-    ///
-    /// Returns `None` if LSP is disabled or the server fails to spawn.
     /// Starts servers for `grammars` that are already installed, concurrently,
     /// without ever triggering an install.
     ///
     /// Warming exists so the first real query does not pay the cold start. It
-    /// must not become a cost of its own: `get_client` runs the installer, and
-    /// warming every detected language serially through it starves the query it
-    /// was meant to accelerate — a `rename` sat past the client's 120s patience
-    /// and the agent hand-edited fifty sites instead.
+    /// must not become a cost of its own: with the install opt-in, `get_client`
+    /// runs the installer, which may take minutes per server. Nothing in this
+    /// workspace calls it.
     pub fn warm(self: &Arc<Self>, grammars: impl IntoIterator<Item = Grammar>) {
         if self.disabled {
             return;
@@ -91,13 +106,8 @@ impl LspPool {
     /// Like [`get_client`](Self::get_client), but never installs: answers
     /// `None` when the server binary is not already on PATH.
     ///
-    /// This is the accessor for warming, and it applies the same guard
-    /// [`warm`](Self::warm) does, for the reason given there — `get_client`
-    /// runs `installer::ensure_installed`, which shells out to a package
-    /// manager with no timeout. Warming happens while the MCP server is coming
-    /// up, so an install reached from here is an unbounded network operation on
-    /// a startup path, on every launch, for a server the user never asked to
-    /// install.
+    /// Queries use it, through [`get_query_client`](Self::get_query_client),
+    /// unless the user opted in to installation.
     pub async fn get_installed_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
         if self.disabled {
             return None;
@@ -117,19 +127,29 @@ impl LspPool {
     /// or, when `ACT_LITE_INSTALL_LSP=1`, [`get_client`](Self::get_client),
     /// which installs a missing server first.
     pub async fn get_query_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
-        if crate::installer::install_opted_in() {
+        if self.allow_install {
             self.get_client(grammar).await
         } else {
             self.get_installed_client(grammar).await
         }
     }
 
+    /// Gets or creates an LSP client for the given grammar.
+    ///
+    /// Returns `None` if LSP is disabled or the server fails to spawn. A
+    /// missing server binary is installed first only when the pool allows it
+    /// (`ACT_LITE_INSTALL_LSP`).
     pub async fn get_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
         if self.disabled || self.is_shut_down() {
             return None;
         }
 
         let server = LspServer::for_grammar(grammar)?;
+
+        // One caller at a time starts a server; the others wait here and then
+        // find its client, or its failure, below.
+        let lock = Arc::clone(self.starting.lock().await.entry(server).or_default());
+        let _starting = lock.lock().await;
 
         // Check if we already have a client
         {
@@ -162,14 +182,22 @@ impl LspPool {
         let language = server.binary_name().to_string();
 
         // Ensure the binary is installed before attempting to spawn
-        if let Err(e) = crate::installer::ensure_installed(
-            &config,
-            &language,
-            crate::installer::install_opted_in(),
-        )
-        .await
+        if let Err(e) =
+            crate::installer::ensure_installed(&config, &language, self.allow_install).await
         {
             warn!("LSP binary not available for {:?}: {}", server, e);
+            if let LspError::InstallFailed {
+                command, reason, ..
+            } = &e
+            {
+                self.install_failures.lock().unwrap().insert(
+                    server,
+                    format!(
+                        "act-lite ran `{command}`, but `{}` is still not available: {reason}",
+                        server.binary_name()
+                    ),
+                );
+            }
             self.failed_installs.write().await.insert(server);
             return None;
         }
@@ -270,6 +298,13 @@ impl LspPool {
         &self.workspace_root
     }
 
+    /// Why the server for `grammar` is still unavailable after its install
+    /// command ran in this process, or `None` when no install ran or failed.
+    pub fn install_failure(&self, grammar: Grammar) -> Option<String> {
+        let server = LspServer::for_grammar(grammar)?;
+        self.install_failures.lock().unwrap().get(&server).cloned()
+    }
+
     /// Returns whether LSP is globally disabled for this pool.
     pub fn is_disabled(&self) -> bool {
         self.disabled
@@ -324,6 +359,7 @@ fn which_on_path(command: &str) -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
     use crate::servers::LspServer;
+    use crate::test_path::PathGuard;
 
     #[tokio::test]
     async fn test_pool_creation() {
@@ -342,14 +378,12 @@ mod tests {
         assert!(client.is_none());
     }
 
-    /// Warming must never shell out to a package manager.
+    /// `get_installed_client` must never shell out to a package manager.
     ///
-    /// `get_client` runs `installer::ensure_installed`, which executes the
-    /// grammar's install command (`npm install -g typescript-language-server
-    /// typescript`, `brew install …`) through `sh` with no timeout. The MCP
-    /// server warms every detected language while starting up, so reaching that
-    /// path from a warm turns each launch into an unbounded install — the exact
-    /// hazard [`LspPool::warm`] guards against with its PATH check.
+    /// With the install opt-in, `get_client` runs `installer::ensure_installed`,
+    /// which executes the grammar's install command (`npm install -g
+    /// typescript-language-server typescript`, `brew install …`) through `sh`
+    /// for up to 10 minutes. `get_installed_client` must not reach it.
     ///
     /// With nothing on PATH, `get_installed_client` must answer `None` and
     /// leave `failed_installs` untouched. That set is the marker: only
@@ -365,7 +399,7 @@ mod tests {
 
         assert!(
             client.is_none(),
-            "no server on PATH, so there is nothing to warm"
+            "no server on PATH, so there is nothing to start"
         );
         assert!(
             !pool
@@ -373,43 +407,48 @@ mod tests {
                 .read()
                 .await
                 .contains(&LspServer::TypeScriptLanguageServer),
-            "the installer ran: warming must not attempt an install"
+            "the installer ran: get_installed_client must not attempt an install"
         );
     }
 
-    /// Serializes the `PATH` mutation in the test above against the rest of this
-    /// binary's tests, and restores the previous value on drop.
-    struct PathGuard {
-        previous: Option<std::ffi::OsString>,
-        /// Held, not read: it is the exclusion itself, released on drop.
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
+    /// Two concurrent callers for the same missing server run its install
+    /// command once; both see the same outcome. The `sh` on `PATH` here only
+    /// records the command it was given, then exits without installing.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn concurrent_get_client_installs_once() {
+        use std::os::unix::fs::PermissionsExt;
 
-    static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let temp = tempfile::tempdir().unwrap();
+        let sh = temp.path().join("sh");
+        std::fs::write(
+            &sh,
+            "#!/bin/sh\necho \"$2\" >> \"${0%/*}/log\"\n/bin/sleep 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _path = PathGuard::set(temp.path());
 
-    impl PathGuard {
-        fn set(dir: &std::path::Path) -> Self {
-            let lock = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-            let previous = std::env::var_os("PATH");
-            // SAFETY: the only PATH writer in this binary, serialized by the lock.
-            unsafe { std::env::set_var("PATH", dir) };
-            Self {
-                previous,
-                _lock: lock,
-            }
-        }
-    }
+        let mut pool = LspPool::new(PathBuf::from("/workspace"));
+        pool.allow_install = true;
+        let (a, b) = tokio::join!(
+            pool.get_client(Grammar::TypeScript),
+            pool.get_client(Grammar::TypeScript)
+        );
 
-    impl Drop for PathGuard {
-        fn drop(&mut self) {
-            // SAFETY: as above — still holding the lock.
-            unsafe {
-                match self.previous.take() {
-                    Some(previous) => std::env::set_var("PATH", previous),
-                    None => std::env::remove_var("PATH"),
-                }
-            }
-        }
+        assert!(a.is_none() && b.is_none(), "the install made no server");
+        let log = std::fs::read_to_string(temp.path().join("log")).unwrap();
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            ["npm install -g typescript-language-server typescript"],
+            "the install command ran exactly once"
+        );
+        let failure = pool.install_failure(Grammar::TypeScript).unwrap();
+        assert!(
+            failure.contains("npm install -g typescript-language-server typescript")
+                && failure.contains("still not available"),
+            "{failure}"
+        );
     }
 
     #[cfg(unix)]
@@ -453,7 +492,7 @@ mod tests {
                 .read()
                 .await
                 .contains(&LspServer::TypeScriptLanguageServer),
-            "the installer ran: warming must not attempt an install"
+            "the installer ran: get_installed_client must not attempt an install"
         );
     }
 
