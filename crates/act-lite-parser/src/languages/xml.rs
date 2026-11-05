@@ -28,6 +28,11 @@ impl LanguageSupport for XmlSupport {
 
     fn node_kind(&self, node: &tree_sitter::Node) -> NodeKind {
         match node.kind() {
+            "document" => NodeKind::Module,
+            "element" | "STag" | "ETag" | "EmptyElemTag" => NodeKind::Object,
+            "Attribute" => NodeKind::Property,
+            "Name" => NodeKind::Identifier,
+            "AttValue" | "CharData" => NodeKind::Expression,
             "Comment" => NodeKind::Comment,
             _ => NodeKind::Unknown,
         }

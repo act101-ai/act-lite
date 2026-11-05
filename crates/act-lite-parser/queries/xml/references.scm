@@ -4,3 +4,6 @@
 (ETag (Name) @reference)
 
 (EmptyElemTag (Name) @reference)
+
+; Attribute names
+(Attribute (Name) @reference)
