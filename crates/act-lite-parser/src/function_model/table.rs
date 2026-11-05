@@ -1127,15 +1127,19 @@ impl Ctx<'_> {
         let arguments = children(node)
             .into_iter()
             .find(|c| c.kind() == "arguments")?;
-        let head = *named_children(arguments).first()?;
-        if head.kind() == "binary_operator"
-            && head
+        Some(self.elixir_unguarded(*named_children(arguments).first()?))
+    }
+
+    /// The left operand of a `when` guard, or the node itself without one.
+    fn elixir_unguarded<'t>(&self, node: Node<'t>) -> Node<'t> {
+        if node.kind() == "binary_operator"
+            && node
                 .child_by_field_name("operator")
                 .is_some_and(|o| text(o, self.source) == "when")
         {
-            return head.child_by_field_name("left");
+            return node.child_by_field_name("left").unwrap_or(node);
         }
-        Some(head)
+        node
     }
 
     fn elixir_parameters(&self, node: Node) -> u32 {
@@ -1144,6 +1148,7 @@ impl Ctx<'_> {
                 .into_iter()
                 .find(|c| c.kind() == "stab_clause")
                 .and_then(|clause| clause.child_by_field_name("left"))
+                .map(|left| self.elixir_unguarded(left))
                 .map_or(0, |args| named_children(args).len() as u32);
         }
         match self.elixir_head(node) {

@@ -1102,7 +1102,7 @@ fn functions_iterates_lazily_in_location_order() {
 // in location order, expected count).
 #[test]
 fn parameter_forms() {
-    let cases: [(Grammar, &str, usize, u32); 27] = [
+    let cases: [(Grammar, &str, usize, u32); 30] = [
         (Grammar::C, "int f(void) { return 0; }", 0, 0),
         (Grammar::C, "int f(int a, ...) { return 0; }", 0, 2),
         (
@@ -1137,6 +1137,19 @@ fn parameter_forms() {
         ),
         (Grammar::Elixir, "f = fn a, b -> a end", 0, 2),
         (Grammar::Elixir, "def g do\n  1\nend", 0, 0),
+        (
+            Grammar::Elixir,
+            "f = fn a, b, c, d, e, f when a > 0 -> a end",
+            0,
+            6,
+        ),
+        (Grammar::Elixir, "f = fn a, b, c, d, e, f -> a end", 0, 6),
+        (
+            Grammar::Elixir,
+            "defmodule M do\n  def h(a, b, c) when a > 0, do: a\nend",
+            0,
+            3,
+        ),
         (Grammar::Go, "package p\nfunc f(int, string) {}", 0, 2),
         (
             Grammar::Java,

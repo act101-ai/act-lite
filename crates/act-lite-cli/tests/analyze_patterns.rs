@@ -412,6 +412,16 @@ fn a5_parameters_by_family() {
 }
 
 #[test]
+fn elixir_guarded_anonymous_function_counts_all_its_parameters() {
+    let src = "f = fn a, b, c, d, e, f when a > 0 -> a end\n";
+    let rules: Vec<_> = reported(&findings_of("lib/g.ex", src))
+        .into_iter()
+        .map(|(_, rule, value)| (rule, value))
+        .collect();
+    assert_eq!(rules, [(json!("long_parameter_list"), json!(6))]);
+}
+
+#[test]
 fn no_function_gives_details_with_zero_counts() {
     let dir = workspace(&[("src/lib.rs", "const X: u8 = 1;\n")]);
     let out = analyze(dir.path()).unwrap();
