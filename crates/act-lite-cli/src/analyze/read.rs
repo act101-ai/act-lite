@@ -2,7 +2,7 @@
 //! the removal of embedded test code, one file at a time.
 
 use super::discovery::{Candidate, Skip};
-use super::embedded::{TestRegion, blank, test_regions};
+use super::embedded::{blank, test_regions};
 use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile};
 use act_lite_core::CompactRange;
 use act_lite_parser::{Grammar, SourceFile};
@@ -75,6 +75,144 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
         parse_failures,
         test_exclusions,
     })
+}
+
+/// What reading found besides the files themselves.
+#[derive(Default)]
+pub struct ReadOutcome {
+    /// Sorted by `rel`; empty from [`Reader::finish`].
+    pub parsed: Vec<Parsed>,
+    pub skipped: Vec<Skip>,
+    pub parse_failures: Vec<ParseFailure>,
+    pub test_exclusions: Vec<ExcludedEntry>,
+}
+
+/// Files read on demand, one at a time.
+pub trait FileSource: Send {
+    /// The next supported-language file in `rel` order, read now. The caller
+    /// owns the result and drops it when done.
+    fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError>;
+
+    /// Reads a file returned by `next_file` again, with the same blanking.
+    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError>;
+}
+
+/// A [`FileSource`] over a list of candidates.
+pub struct Reader {
+    files: Vec<Candidate>,
+    next: usize,
+    include_tests: bool,
+    cancel: CancellationToken,
+    outcome: ReadOutcome,
+}
+
+impl Reader {
+    /// Takes the candidates `supported` accepts, in `rel` order. Nothing is
+    /// read until `next_file`.
+    pub fn new(
+        files: &[Candidate],
+        supported: &dyn Fn(Grammar) -> bool,
+        include_tests: bool,
+        cancel: &CancellationToken,
+    ) -> Reader {
+        let mut files: Vec<Candidate> = files
+            .iter()
+            .filter(|f| supported(f.grammar))
+            .cloned()
+            .collect();
+        files.sort_by(|a, b| a.rel.as_bytes().cmp(b.rel.as_bytes()));
+        Reader {
+            files,
+            next: 0,
+            include_tests,
+            cancel: cancel.clone(),
+            outcome: ReadOutcome::default(),
+        }
+    }
+
+    /// The skips, parse failures and test exclusions of every file pulled so
+    /// far, each list sorted.
+    pub fn finish(mut self) -> ReadOutcome {
+        let outcome = &mut self.outcome;
+        outcome
+            .skipped
+            .sort_by(|a, b| a.file.file.as_bytes().cmp(b.file.file.as_bytes()));
+        outcome
+            .parse_failures
+            .sort_by(|a, b| a.file.as_bytes().cmp(b.file.as_bytes()));
+        outcome.test_exclusions.sort_by(|a, b| {
+            let key = |e: &ExcludedEntry| {
+                e.range
+                    .as_ref()
+                    .map(|r| (r.start_line(), r.start_col(), r.end_line(), r.end_col()))
+            };
+            a.path
+                .as_bytes()
+                .cmp(b.path.as_bytes())
+                .then_with(|| key(a).cmp(&key(b)))
+        });
+        self.outcome
+    }
+}
+
+impl FileSource for Reader {
+    fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError> {
+        while let Some(file) = self.files.get(self.next) {
+            if self.cancel.is_cancelled() {
+                return Err(AnalyzeError::Cancelled);
+            }
+            self.next += 1;
+            match read_file(file, self.include_tests)? {
+                ReadResult::Parsed {
+                    parsed,
+                    parse_failures,
+                    test_exclusions,
+                } => {
+                    self.outcome.parse_failures.extend(parse_failures);
+                    self.outcome.test_exclusions.extend(test_exclusions);
+                    return Ok(Some(parsed));
+                }
+                ReadResult::Skipped(skip) => self.outcome.skipped.push(skip),
+                ReadResult::TestFile(entry) => self.outcome.test_exclusions.push(entry),
+            }
+        }
+        Ok(None)
+    }
+
+    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        let failed = |cause: String| AnalyzeError::Failed {
+            analysis: "analyze",
+            cause,
+        };
+        let Some(file) = self.files[..self.next].iter().find(|f| f.rel == rel) else {
+            return Err(failed(format!("{rel} was not returned by this reader")));
+        };
+        match read_file(file, self.include_tests)? {
+            ReadResult::Parsed { parsed, .. } => Ok(parsed),
+            ReadResult::Skipped(skip) => Err(failed(format!(
+                "cannot read {rel} again: {}",
+                skip.file.reason
+            ))),
+            ReadResult::TestFile(_) => Err(failed(format!("{rel} is now a test file"))),
+        }
+    }
+}
+
+/// Reads every supported-language file and keeps them all in `parsed`.
+pub fn read_files(
+    files: &[Candidate],
+    supported: &dyn Fn(Grammar) -> bool,
+    include_tests: bool,
+    cancel: &CancellationToken,
+) -> Result<ReadOutcome, AnalyzeError> {
+    let mut reader = Reader::new(files, supported, include_tests, cancel);
+    let mut parsed = Vec::new();
+    while let Some(file) = reader.next_file()? {
+        parsed.push(file);
+    }
+    let mut outcome = reader.finish();
+    outcome.parsed = parsed;
+    Ok(outcome)
 }
 
 /// The range of the first ERROR or MISSING node in document order.
@@ -351,5 +489,224 @@ mod tests {
         write(dir.path(), "t.rs", b"#![cfg(test)]\nfn t() {}\n");
         let (_, _, exclusion) = parsed(read_file(&candidate(dir.path(), "t.rs"), true));
         assert!(exclusion.is_empty());
+    }
+
+    fn rust_only(g: Grammar) -> bool {
+        g == Grammar::Rust
+    }
+
+    fn conv(root: &Path) -> Vec<Candidate> {
+        write(root, "src/lib.rs", LIB.as_bytes());
+        write(root, "src/big.rs", &rust_of_len(8_388_609));
+        write(
+            root,
+            "src/broken.rs",
+            b"fn broken() {\n    let a = 1;\n    let b = 2;\n    let c = ;\n    a + b\n}\n",
+        );
+        write(root, "src/more.rs", b"fn more() {}\n");
+        write(root, "src/zz.rs", b"#![cfg(test)]\nfn t() {}\n");
+        write(root, "notes.toml", b"a = 1\n");
+        let mut files: Vec<Candidate> = [
+            "src/zz.rs",
+            "src/more.rs",
+            "src/lib.rs",
+            "src/big.rs",
+            "src/broken.rs",
+        ]
+        .iter()
+        .map(|rel| candidate(root, rel))
+        .collect();
+        files.push(Candidate {
+            path: root.join("notes.toml"),
+            rel: "notes.toml".to_string(),
+            grammar: Grammar::Toml,
+        });
+        files
+    }
+
+    fn pulled(reader: &mut Reader) -> Vec<String> {
+        let mut rels = Vec::new();
+        while let Some(p) = reader.next_file().unwrap() {
+            rels.push(p.rel);
+        }
+        rels
+    }
+
+    #[test]
+    fn reader_yields_supported_files_in_rel_order_and_finish_reports_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        assert_eq!(
+            pulled(&mut reader),
+            ["src/broken.rs", "src/lib.rs", "src/more.rs"]
+        );
+        let out = reader.finish();
+        assert!(out.parsed.is_empty());
+        let skipped: Vec<_> = out
+            .skipped
+            .iter()
+            .map(|s| (s.file.file.as_str(), s.file.kind))
+            .collect();
+        assert_eq!(skipped, [("src/big.rs", SkipKind::SizeLimit)]);
+        assert_eq!(out.parse_failures.len(), 1);
+        assert_eq!(out.parse_failures[0].file, "src/broken.rs");
+        assert_eq!(out.parse_failures[0].range.start_line(), 4);
+        let tests: Vec<_> = out
+            .test_exclusions
+            .iter()
+            .map(|e| (e.path.as_str(), e.range.as_ref().map(|r| r.to_string())))
+            .collect();
+        assert_eq!(
+            tests,
+            [
+                ("src/lib.rs", Some("10:1-14:2".to_string())),
+                ("src/zz.rs", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn read_files_collects_parsed_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let out = read_files(&files, &rust_only, false, &CancellationToken::new()).unwrap();
+        let rels: Vec<_> = out.parsed.iter().map(|p| p.rel.as_str()).collect();
+        assert_eq!(rels, ["src/broken.rs", "src/lib.rs", "src/more.rs"]);
+        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.parse_failures.len(), 1);
+        assert_eq!(out.test_exclusions.len(), 2);
+        assert!(!has_mod_tests(&out.parsed[1]));
+    }
+
+    #[test]
+    fn read_files_with_tests_included_has_no_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let out = read_files(&files, &rust_only, true, &CancellationToken::new()).unwrap();
+        assert!(out.test_exclusions.is_empty());
+        assert_eq!(out.parsed.len(), 4);
+        assert!(has_mod_tests(&out.parsed[1]));
+    }
+
+    #[test]
+    fn unsupported_language_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![Candidate {
+            path: dir.path().join("absent.toml"),
+            rel: "absent.toml".to_string(),
+            grammar: Grammar::Toml,
+        }];
+        let out = read_files(&files, &rust_only, false, &CancellationToken::new()).unwrap();
+        assert!(out.parsed.is_empty() && out.skipped.is_empty());
+    }
+
+    #[test]
+    fn cancelled_token_stops_before_any_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(matches!(
+            read_files(&files, &rust_only, false, &cancel),
+            Err(AnalyzeError::Cancelled)
+        ));
+        let mut reader = Reader::new(&files, &rust_only, false, &cancel);
+        assert!(matches!(reader.next_file(), Err(AnalyzeError::Cancelled)));
+        let out = reader.finish();
+        assert!(out.skipped.is_empty() && out.parse_failures.is_empty());
+    }
+
+    #[test]
+    fn reread_gives_an_equal_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        let first = reader.next_file().unwrap().unwrap();
+        let second = reader.next_file().unwrap().unwrap();
+        assert_eq!(second.rel, "src/lib.rs");
+        let again = reader.reread("src/lib.rs").unwrap();
+        assert_eq!(again.rel, second.rel);
+        assert_eq!(again.source.path(), second.source.path());
+        assert_eq!(again.source.content(), second.source.content());
+        assert_eq!(
+            again.source.tree().root_node().to_sexp(),
+            second.source.tree().root_node().to_sexp()
+        );
+        assert!(!has_mod_tests(&again));
+        drop(first);
+    }
+
+    #[test]
+    fn reread_of_an_unknown_file_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        reader.next_file().unwrap();
+        for rel in ["nope.rs", "src/more.rs", "notes.toml"] {
+            assert!(
+                matches!(reader.reread(rel), Err(AnalyzeError::Failed { .. })),
+                "{rel}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn rss_kib() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_files_are_not_kept_by_the_reader() {
+        // Other tests of the process allocate at the same time, so the
+        // measurement runs in a child process that runs only this test.
+        const NAME: &str = "analyze::read::tests::dropped_files_are_not_kept_by_the_reader";
+        if std::env::var_os("ACT_RSS_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME])
+                .env("ACT_RSS_CHILD", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        for n in 0..3 {
+            let rel = format!("f{n}.rs");
+            let mut text = String::new();
+            let mut i = 0;
+            while text.len() < 1 << 20 {
+                text.push_str(&format!("fn f{i}(a: u32) -> u32 {{ a + {i} }}\n"));
+                i += 1;
+            }
+            write(dir.path(), &rel, text.as_bytes());
+            files.push(candidate(dir.path(), &rel));
+        }
+        // The allocator keeps the pages of the first parse; read one file
+        // first so that only growth by retained files counts.
+        drop(read_file(&files[0], false).unwrap());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        let before = rss_kib();
+        let mut rels = Vec::new();
+        while let Some(p) = reader.next_file().unwrap() {
+            rels.push(p.rel.clone());
+            drop(p);
+        }
+        let after = rss_kib();
+        assert_eq!(rels.len(), 3);
+        assert!(
+            after < before + 2048,
+            "resident set grew from {before} KiB to {after} KiB"
+        );
     }
 }
