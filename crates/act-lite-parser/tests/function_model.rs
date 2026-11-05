@@ -48,20 +48,421 @@ fn supported() -> Vec<Grammar> {
         .collect()
 }
 
+// The node kinds of each language's row of the function-construct table,
+// copied from the table by hand: functions, parameters, if, else-if,
+// multi-way and arms, loops, try and handlers, conditional expressions,
+// logical operators.
+const JAVASCRIPT_KINDS: &[&str] = &[
+    "function_declaration",
+    "function_expression",
+    "generator_function_declaration",
+    "generator_function",
+    "arrow_function",
+    "method_definition",
+    "class_static_block",
+    "formal_parameters",
+    "if_statement",
+    "switch_statement",
+    "switch_case",
+    "switch_default",
+    "for_statement",
+    "for_in_statement",
+    "while_statement",
+    "do_statement",
+    "try_statement",
+    "catch_clause",
+    "ternary_expression",
+    "binary_expression",
+];
+const TYPESCRIPT_KINDS: &[&str] = &[
+    "function_declaration",
+    "function_expression",
+    "generator_function_declaration",
+    "generator_function",
+    "arrow_function",
+    "method_definition",
+    "class_static_block",
+    "formal_parameters",
+    "required_parameter",
+    "optional_parameter",
+    "this",
+    "if_statement",
+    "switch_statement",
+    "switch_case",
+    "switch_default",
+    "for_statement",
+    "for_in_statement",
+    "while_statement",
+    "do_statement",
+    "try_statement",
+    "catch_clause",
+    "ternary_expression",
+    "binary_expression",
+];
+
+fn table_kinds(grammar: Grammar) -> &'static [&'static str] {
+    match grammar {
+        Grammar::Bash => &[
+            "function_definition",
+            "if_statement",
+            "elif_clause",
+            "case_statement",
+            "case_item",
+            "for_statement",
+            "c_style_for_statement",
+            "while_statement",
+            "ternary_expression",
+            "list",
+            "binary_expression",
+        ],
+        Grammar::C => &[
+            "function_definition",
+            "parameter_list",
+            "parameter_declaration",
+            "variadic_parameter",
+            "if_statement",
+            "switch_statement",
+            "case_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "conditional_expression",
+            "binary_expression",
+        ],
+        Grammar::Cpp => &[
+            "function_definition",
+            "lambda_expression",
+            "parameter_list",
+            "parameter_declaration",
+            "optional_parameter_declaration",
+            "variadic_parameter_declaration",
+            "if_statement",
+            "switch_statement",
+            "case_statement",
+            "for_statement",
+            "for_range_loop",
+            "while_statement",
+            "do_statement",
+            "try_statement",
+            "catch_clause",
+            "conditional_expression",
+            "binary_expression",
+        ],
+        Grammar::CSharp => &[
+            "method_declaration",
+            "constructor_declaration",
+            "destructor_declaration",
+            "operator_declaration",
+            "conversion_operator_declaration",
+            "accessor_declaration",
+            "local_function_statement",
+            "lambda_expression",
+            "anonymous_method_expression",
+            "property_declaration",
+            "indexer_declaration",
+            "arrow_expression_clause",
+            "parameter_list",
+            "bracketed_parameter_list",
+            "parameter",
+            "implicit_parameter",
+            "if_statement",
+            "switch_statement",
+            "switch_section",
+            "switch_expression",
+            "switch_expression_arm",
+            "for_statement",
+            "foreach_statement",
+            "while_statement",
+            "do_statement",
+            "try_statement",
+            "catch_clause",
+            "conditional_expression",
+            "binary_expression",
+        ],
+        Grammar::Dart => &[
+            "lambda_expression",
+            "class_member_definition",
+            "function_body",
+            "function_expression",
+            "getter_signature",
+            "setter_signature",
+            "formal_parameter_list",
+            "formal_parameter",
+            "optional_formal_parameters",
+            "if_statement",
+            "switch_statement",
+            "switch_label",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "try_statement",
+            "catch_clause",
+            "conditional_expression",
+            "logical_and_expression",
+            "logical_or_expression",
+            "if_null_expression",
+        ],
+        Grammar::Elixir => &[
+            "call",
+            "do_block",
+            "anonymous_function",
+            "arguments",
+            "stab_clause",
+            "rescue_block",
+            "catch_block",
+            "binary_operator",
+        ],
+        Grammar::Go => &[
+            "function_declaration",
+            "method_declaration",
+            "func_literal",
+            "parameter_list",
+            "parameter_declaration",
+            "variadic_parameter_declaration",
+            "if_statement",
+            "expression_switch_statement",
+            "type_switch_statement",
+            "select_statement",
+            "expression_case",
+            "type_case",
+            "communication_case",
+            "default_case",
+            "for_statement",
+            "binary_expression",
+        ],
+        Grammar::Java => &[
+            "method_declaration",
+            "constructor_declaration",
+            "compact_constructor_declaration",
+            "static_initializer",
+            "block",
+            "class_body",
+            "lambda_expression",
+            "formal_parameters",
+            "formal_parameter",
+            "spread_parameter",
+            "receiver_parameter",
+            "inferred_parameters",
+            "if_statement",
+            "switch_expression",
+            "switch_label",
+            "for_statement",
+            "enhanced_for_statement",
+            "while_statement",
+            "do_statement",
+            "try_statement",
+            "try_with_resources_statement",
+            "catch_clause",
+            "ternary_expression",
+            "binary_expression",
+        ],
+        Grammar::JavaScript | Grammar::Jsx => JAVASCRIPT_KINDS,
+        Grammar::TypeScript | Grammar::Tsx => TYPESCRIPT_KINDS,
+        Grammar::Kotlin => &[
+            "function_declaration",
+            "secondary_constructor",
+            "anonymous_initializer",
+            "getter",
+            "setter",
+            "anonymous_function",
+            "lambda_literal",
+            "function_value_parameters",
+            "parameter",
+            "parameter_with_optional_type",
+            "lambda_parameters",
+            "variable_declaration",
+            "multi_variable_declaration",
+            "if_expression",
+            "when_expression",
+            "when_entry",
+            "when_condition",
+            "for_statement",
+            "while_statement",
+            "do_while_statement",
+            "try_expression",
+            "catch_block",
+            "conjunction_expression",
+            "disjunction_expression",
+            "elvis_expression",
+        ],
+        Grammar::Lua => &[
+            "function_declaration",
+            "function_definition",
+            "parameters",
+            "identifier",
+            "vararg_expression",
+            "if_statement",
+            "elseif_statement",
+            "for_statement",
+            "while_statement",
+            "repeat_statement",
+            "binary_expression",
+        ],
+        Grammar::Php => &[
+            "function_definition",
+            "method_declaration",
+            "anonymous_function",
+            "arrow_function",
+            "formal_parameters",
+            "simple_parameter",
+            "variadic_parameter",
+            "property_promotion_parameter",
+            "if_statement",
+            "else_if_clause",
+            "switch_statement",
+            "case_statement",
+            "default_statement",
+            "match_expression",
+            "match_conditional_expression",
+            "match_default_expression",
+            "for_statement",
+            "foreach_statement",
+            "while_statement",
+            "do_statement",
+            "try_statement",
+            "catch_clause",
+            "conditional_expression",
+            "binary_expression",
+        ],
+        Grammar::Python => &[
+            "function_definition",
+            "lambda",
+            "parameters",
+            "lambda_parameters",
+            "keyword_separator",
+            "positional_separator",
+            "decorated_definition",
+            "if_statement",
+            "elif_clause",
+            "match_statement",
+            "case_clause",
+            "for_statement",
+            "while_statement",
+            "try_statement",
+            "except_clause",
+            "conditional_expression",
+            "boolean_operator",
+        ],
+        Grammar::Ruby => &[
+            "method",
+            "singleton_method",
+            "lambda",
+            "block",
+            "do_block",
+            "method_parameters",
+            "lambda_parameters",
+            "block_parameters",
+            "hash_splat_nil",
+            "if",
+            "unless",
+            "if_modifier",
+            "unless_modifier",
+            "elsif",
+            "case",
+            "when",
+            "case_match",
+            "in_clause",
+            "else",
+            "while",
+            "until",
+            "for",
+            "while_modifier",
+            "until_modifier",
+            "begin",
+            "rescue",
+            "rescue_modifier",
+            "conditional",
+            "binary",
+        ],
+        Grammar::Rust => &[
+            "function_item",
+            "closure_expression",
+            "parameters",
+            "parameter",
+            "variadic_parameter",
+            "self_parameter",
+            "closure_parameters",
+            "if_expression",
+            "match_expression",
+            "match_arm",
+            "for_expression",
+            "while_expression",
+            "loop_expression",
+            "binary_expression",
+            "let_chain",
+        ],
+        Grammar::Scala => &[
+            "function_definition",
+            "lambda_expression",
+            "parameters",
+            "parameter",
+            "bindings",
+            "if_expression",
+            "match_expression",
+            "case_clause",
+            "for_expression",
+            "while_expression",
+            "do_while_expression",
+            "try_expression",
+            "catch_clause",
+            "infix_expression",
+        ],
+        Grammar::Swift => &[
+            "function_declaration",
+            "init_declaration",
+            "deinit_declaration",
+            "subscript_declaration",
+            "computed_getter",
+            "computed_setter",
+            "computed_modify",
+            "willset_clause",
+            "didset_clause",
+            "computed_property",
+            "lambda_literal",
+            "parameter",
+            "lambda_parameter",
+            "if_statement",
+            "guard_statement",
+            "switch_statement",
+            "switch_entry",
+            "default_keyword",
+            "for_statement",
+            "while_statement",
+            "repeat_while_statement",
+            "do_statement",
+            "catch_block",
+            "ternary_expression",
+            "conjunction_expression",
+            "disjunction_expression",
+            "nil_coalescing_expression",
+        ],
+        _ => &[],
+    }
+}
+
 #[test]
-fn every_table_node_kind_exists_in_its_grammar() {
-    let mut missing = Vec::new();
+fn node_kinds_are_the_table_kinds_and_exist_in_the_grammar() {
+    let mut failures = Vec::new();
     for grammar in supported() {
-        let kinds = function_model::node_kinds(grammar);
-        assert!(!kinds.is_empty(), "{grammar:?} has no table row");
+        let mut expected: Vec<&str> = table_kinds(grammar).to_vec();
+        expected.sort_unstable();
+        expected.dedup();
+        assert!(!expected.is_empty(), "{grammar:?} has no table row");
+        let mut actual = function_model::node_kinds(grammar);
+        actual.sort_unstable();
+        if actual != expected {
+            failures.push(format!(
+                "{grammar:?}: node_kinds {actual:?}\n  table {expected:?}"
+            ));
+        }
         let language = grammar.language_support().ts_language();
-        for kind in kinds {
+        for kind in expected {
             if tree_sitter::Query::new(&language, &format!("({kind}) @probe")).is_err() {
-                missing.push(format!("{grammar:?}: {kind}"));
+                failures.push(format!("{grammar:?}: {kind} is not in the grammar"));
             }
         }
     }
-    assert!(missing.is_empty(), "kinds not in the grammar: {missing:#?}");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
@@ -821,4 +1222,312 @@ fn names_of_special_forms() {
         names(Grammar::C, "int *g(void) { return 0; }\n"),
         some(&["g"])
     );
+}
+
+// A multi-line string counts every line it spans, blank lines inside it included.
+#[test]
+fn multi_line_strings_count_every_line_they_span() {
+    let cases: [(Grammar, &str, u32); 8] = [
+        (Grammar::Bash, "f() {\n  echo \"a\n\n\n\nb\"\n}\n", 7),
+        (
+            Grammar::Kotlin,
+            "fun f() {\n    val s = \"\"\"\n\n$x\n\n\"\"\"\n}\n",
+            7,
+        ),
+        (
+            Grammar::Scala,
+            "object O {\n  def f() = {\n    s\"\"\"\n\n$x\n\n\"\"\"\n  }\n}\n",
+            7,
+        ),
+        (
+            Grammar::Dart,
+            "void f() {\n  var s = \"\"\"\n\n$x\n\n\"\"\";\n}\n",
+            7,
+        ),
+        (
+            Grammar::Php,
+            "<?php\nfunction f() {\n    $s = <<<EOT\n\n$x\n\nEOT;\n}\n",
+            7,
+        ),
+        (
+            Grammar::Python,
+            "def f():\n    x = 1\n    s = \"\"\"\n\na\n\n\"\"\"\n    return s\n",
+            8,
+        ),
+        (
+            Grammar::JavaScript,
+            "function f() {\n    const s = `\n\na\n\n`;\n}\n",
+            7,
+        ),
+        (Grammar::Ruby, "def f\n  s = \"a\n\n\nb\"\n  s\nend\n", 7),
+    ];
+    let mut failures = Vec::new();
+    for (grammar, source, expected) in cases {
+        let fs = functions(grammar, source);
+        let lines = fs.first().map(|f| f.metrics.lines);
+        if lines != Some(expected) {
+            failures.push(format!("{grammar:?}: {lines:?}, expected {expected}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn php_keyword_operators_are_case_insensitive() {
+    let fs = functions(
+        Grammar::Php,
+        "<?php function f($a, $b) { return $a AND $b Or $a; }",
+    );
+    assert_eq!(fs[0].metrics.complexity, 3);
+}
+
+// Every anonymous-function kind of the table gives an unnamed function. Each
+// case is (grammar, text before the function, the function, text after it,
+// index of the function in location order, expected metrics); the range is
+// derived from where the function text sits in the source.
+#[test]
+fn anonymous_functions_are_unnamed_functions() {
+    let m = |nesting, complexity| metrics(1, nesting, complexity, Some(1));
+    let cases: [(Grammar, &str, &str, &str, usize, Metrics); 28] = [
+        (
+            Grammar::Cpp,
+            "void g() { auto l = ",
+            "[](int x) { if (x) { return 1; } return 0; }",
+            "; }",
+            1,
+            m(1, 2),
+        ),
+        (
+            Grammar::CSharp,
+            "class C { void M() { F f = ",
+            "x => x ? 1 : 0",
+            "; } }",
+            1,
+            m(0, 2),
+        ),
+        (
+            Grammar::CSharp,
+            "class C { void M() { F f = ",
+            "delegate (int x) { if (x > 0) { return 1; } return 0; }",
+            "; } }",
+            1,
+            m(1, 2),
+        ),
+        (
+            Grammar::Dart,
+            "void g() { var f = ",
+            "(x) => x ? 1 : 0",
+            "; }",
+            1,
+            m(0, 2),
+        ),
+        (
+            Grammar::Elixir,
+            "f = ",
+            "fn x -> if x, do: 1, else: 0 end",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Go,
+            "package p\nfunc g() { f := ",
+            "func(x int) int { if x > 0 { return 1 }; return 0 }",
+            "; _ = f }",
+            1,
+            m(1, 2),
+        ),
+        (
+            Grammar::Java,
+            "class A { void m() { F f = ",
+            "x -> x > 0 ? 1 : 0",
+            "; } }",
+            1,
+            m(0, 2),
+        ),
+        (
+            Grammar::JavaScript,
+            "const f = ",
+            "x => x ? 1 : 0",
+            ";",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::JavaScript,
+            "const f = ",
+            "function (x) { if (x) { return 1; } return 0; }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::JavaScript,
+            "const f = ",
+            "function* (x) { if (x) { yield 1; } }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Jsx,
+            "const f = ",
+            "x => x ? <a /> : null",
+            ";",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Jsx,
+            "const f = ",
+            "function (x) { if (x) { return 1; } return 0; }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::TypeScript,
+            "const f = ",
+            "(x: number) => x ? 1 : 0",
+            ";",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::TypeScript,
+            "const f = ",
+            "function (x: number) { if (x) { return 1; } return 0; }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Tsx,
+            "const f = ",
+            "(x: number) => x ? <a /> : null",
+            ";",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Tsx,
+            "const f = ",
+            "function* (x: number) { if (x) { yield 1; } }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Kotlin,
+            "val f = ",
+            "{ x: Int -> if (x > 0) 1 else 0 }",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Kotlin,
+            "val f = ",
+            "fun(x: Int): Int { return if (x > 0) 1 else 0 }",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Lua,
+            "local f = ",
+            "function(x) if x then return 1 end return 0 end",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Php,
+            "<?php $f = ",
+            "function ($x) { if ($x) { return 1; } return 0; }",
+            ";",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Php,
+            "<?php $f = ",
+            "fn($x) => $x ? 1 : 0",
+            ";",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Python,
+            "f = ",
+            "lambda x: 1 if x else 0",
+            "\n",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Ruby,
+            "f = ",
+            "->(x) { x ? 1 : 0 }",
+            "\n",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Ruby,
+            "xs.each ",
+            "{ |x| puts(x) if x }",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Ruby,
+            "xs.each ",
+            "do |x| puts(x) if x end",
+            "\n",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Rust,
+            "fn g() { let c = ",
+            "|x: u8| if x > 0 { 1 } else { 0 }",
+            "; }",
+            1,
+            m(1, 2),
+        ),
+        (
+            Grammar::Scala,
+            "object O { val f = ",
+            "(x: Int) => if (x > 0) 1 else 0",
+            " }",
+            0,
+            m(1, 2),
+        ),
+        (
+            Grammar::Swift,
+            "let f = ",
+            "{ (x: Int) in x > 0 ? 1 : 0 }",
+            "\n",
+            0,
+            m(0, 2),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (grammar, before, function, after, index, expected) in cases {
+        let source = format!("{before}{function}{after}");
+        let line = before.matches('\n').count() + 1;
+        let column = before.len() - before.rfind('\n').map_or(0, |i| i + 1) + 1;
+        let range = format!("{line}:{column}-{line}:{}", column + function.len());
+        let actual = functions(grammar, &source)
+            .get(index)
+            .map(|f| (f.name.clone(), f.range.to_string(), f.metrics));
+        if actual != Some((None, range.clone(), expected)) {
+            failures.push(format!(
+                "{grammar:?} {function:?}: {actual:?}, expected {range} {expected:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
