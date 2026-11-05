@@ -274,6 +274,31 @@ pub struct AnalyzeParams {
     pub limit: u32,
 }
 
+/// Parameters for the analyze_patterns tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PatternsParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+}
+
+/// Parameters for the analyze_hotspots tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HotspotsParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+}
+
+/// Parameters for the analyze_clones tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClonesParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+    /// Report only the clone classes with a member at or below one of these paths,
+    /// relative to the workspace root. Default: every class.
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub focus: Vec<String>,
+}
+
 /// Parameters for the analyze_fixture tool.
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -282,7 +307,6 @@ pub struct FixtureParams {
     pub shared: AnalyzeParams,
 }
 
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 impl AnalyzeParams {
     /// The checked request for the workspace `root`.
     pub fn request(&self, root: &Path) -> Result<Request, AnalyzeError> {
@@ -317,7 +341,6 @@ where
 
 /// The hint shown with an analyzer's result: how to narrow a truncated
 /// result, and the counts of any cut evidence list; else `usual`.
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub fn analyze_hint(
     total: u64,
     truncated: bool,

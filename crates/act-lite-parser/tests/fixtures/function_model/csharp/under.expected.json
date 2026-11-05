@@ -1,0 +1,10 @@
+[
+  {
+    "name": "F",
+    "range": "2:5-51:6",
+    "lines": 50,
+    "nesting": 4,
+    "complexity": 10,
+    "parameters": 5
+  }
+]

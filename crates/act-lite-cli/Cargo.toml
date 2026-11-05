@@ -1,6 +1,6 @@
 [package]
 name = "act-lite-cli"
-description = "act-lite: navigation-only code queries and sequestered secrets for AI agents"
+description = "act-lite: code queries, code-health analysis and sequestered secrets for AI agents"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -30,6 +30,7 @@ rpassword = "7"
 schemars = "1.2"
 serde.workspace = true
 serde_json.workspace = true
+siphasher = "1.0.1"
 tokio.workspace = true
 tokio-util = "0.7"
 tracing.workspace = true

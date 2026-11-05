@@ -1046,8 +1046,11 @@ lang!(yaml {
 
 // ---- initialize, tools/list ----
 
-/// The eight tools of the README's `mcp serve` section.
-const README_TOOLS: [&str; 8] = [
+/// The eleven tools of the README's `mcp serve` section.
+const README_TOOLS: [&str; 11] = [
+    "analyze_clones",
+    "analyze_hotspots",
+    "analyze_patterns",
     "callers",
     "definition",
     "references",
@@ -1081,7 +1084,7 @@ fn initialize_answers_as_act_lite() {
 }
 
 #[test]
-fn tools_list_is_the_readme_eight() {
+fn tools_list_is_the_readme_eleven() {
     let readme =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"))
             .unwrap();
