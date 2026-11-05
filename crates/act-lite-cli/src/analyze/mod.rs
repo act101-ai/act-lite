@@ -7,3 +7,4 @@ pub mod embedded;
 pub mod envelope;
 pub mod glob;
 pub mod ignore;
+pub mod read;
