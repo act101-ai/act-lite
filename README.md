@@ -173,6 +173,83 @@ The server exposes eight tools: `status`, `skeleton`, `symbols`,
 `status` lists the 30 languages and, for each language server, whether it is
 `ready` or `not_installed`.
 
+## `act-lite analyze`
+
+```bash
+act-lite analyze <analyzer> [PATH]... [OPTIONS]
+act-lite --workspace /path/to/repo analyze <analyzer> src --include-tests --limit 20
+```
+
+The command prints one JSON object, the result described under
+[Analysis results](#analysis-results), and nothing else. The workspace root is
+`--workspace`, else the current directory.
+
+**Names.** An analyzer's command is its MCP tool name without the `analyze_`
+prefix, with `_` changed to `-`; the `analysis` value in the result is the
+command name. A tool parameter `snake_case` is the flag `--kebab-case`, an
+array is a repeatable flag, and a boolean is a presence flag. `paths` is the
+positional arguments.
+
+| MCP tool | Command | `analysis` |
+|---|---|---|
+| `analyze_patterns` | `act-lite analyze patterns` | `patterns` |
+| `analyze_hotspots` | `act-lite analyze hotspots` | `hotspots` |
+| `analyze_clones` | `act-lite analyze clones` | `clones` |
+| `analyze_cycles` | `act-lite analyze cycles` | `cycles` |
+| `analyze_coupling` | `act-lite analyze coupling` | `coupling` |
+| `analyze_impact` | `act-lite analyze impact` | `impact` |
+| `graph` | `act-lite analyze graph` | `graph` |
+
+**Shared parameters.** Every analyzer takes these:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `[PATH]...` | the workspace root | Files or directories to analyze. A relative path resolves against the workspace root, not the current directory. Each path must exist and be inside the root. |
+| `--include <GLOB>` | none | Repeatable. When given, a file must match at least one glob. |
+| `--exclude <GLOB>` | none | Repeatable. A file that matches any glob is left out, and is not reported. |
+| `--include-tests` | off | Analyze test files and embedded test code. |
+| `--include-generated` | off | Analyze generated files and directories. |
+| `--include-vendored` | off | Analyze vendored directories. |
+| `--include-ignored` | off | Analyze ignored paths. |
+| `--limit <N>` | 100 | The most findings returned, 0 to 1000. |
+
+**Glob syntax.** A glob is matched against the workspace-relative path of a
+file, with `/` separators. `*` matches any characters except `/`. `?` matches
+one character except `/`. `**` as a whole path component matches zero or more
+components. Every other character matches itself, case-sensitively. There are
+no character classes, and a pattern that ends in `/` matches no file. A
+pattern without `/` matches the file name at any depth: `*.rs` matches `a.rs`
+and `src/x/a.rs`. A pattern with `/` matches the whole path: `src/**/x.rs`
+matches `src/x.rs` and `src/a/b/x.rs`, and not `src/ax.rs`.
+
+**Exit status.** A result exits 0, whatever its `status`. A request error
+exits 1 and prints one line to stderr:
+`{"error":{"message":"<message>","chain":[]}}` (under `--format text`,
+`Error: <message>`). An argument that clap rejects, such as `--limit abc`,
+exits 2.
+
+| Request error | Message |
+|---|---|
+| A path does not exist | the not-found text |
+| A path is outside the workspace root, after symlinks and `..` are resolved | `path must be inside the workspace root: <path>` |
+| `--limit` is above 1000 | `limit must be between 0 and 1000, got <n>` |
+| No recognized file in a supported language is left in scope | `no files to analyze in the requested scope: <t> excluded as tests, <g> as generated, <v> as vendored, <i> as ignored; <f> left out by include or exclude; <u> unrecognized. Re-run with the matching include option (tests, generated, vendored, ignored).` |
+| An internal failure | `<analysis> failed: <cause>` |
+
+The paths are checked in order, and the first that fails is reported.
+
+**Narrowing a truncated result.** `truncated` is `true` when `total` is more
+than the number of findings returned. Narrow the request with `PATH`
+arguments, `--include` and `--exclude`, or change `--limit`. `--limit 0`
+returns the counts only. When `excluded.truncated` or `incomplete.truncated`
+is `true`, a list was cut at 100 entries and its `counts` hold the totals.
+
+**Cancellation.** `analyze` installs no signal handler. SIGINT, SIGTERM and
+SIGHUP end the process with their default behavior, and the exit status is the
+signal's (a shell shows 130 for SIGINT). The result is written only after the
+analysis finishes, so an interrupted run prints nothing to stdout. An analysis
+writes no file, so nothing needs clean-up. A closed stdout exits 141.
+
 ## Analysis results
 
 Every analyzer returns one JSON object. These top-level keys are always
