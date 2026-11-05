@@ -1061,3 +1061,49 @@ fn a_clone_inside_a_replaced_literal_is_not_reported_again() {
     assert_eq!(out["findings"][0]["tokens"], 56);
     assert_eq!(out["findings"][0]["range"], "1:1-6:155");
 }
+
+/// A Kotlin function of more than 50 tokens that holds `label` once.
+fn kotlin_label(label: &str) -> String {
+    format!(
+        "fun report(x: Int, y: Int): String {{\n    val a = x + y * 2\n    val b = a - x / 3\n    val c = b * a + y\n    val label = \"{label}\"\n    if (c > a && b < y) {{\n        return label + a + b + c\n    }}\n    return label\n}}\n"
+    )
+}
+
+/// A Dart function of more than 50 tokens that holds `label` once.
+fn dart_label(label: &str) -> String {
+    format!(
+        "String report(int x, int y) {{\n  var a = x + y * 2;\n  var b = a - x * 3;\n  var c = b * a + y;\n  var label = '{label}';\n  if (c > a && b < y) {{\n    return label + c.toString();\n  }}\n  return label;\n}}\n"
+    )
+}
+
+#[test]
+fn string_text_the_grammar_keeps_out_of_the_tree_is_part_of_the_form() {
+    // Kotlin `$x` is an identifier: the literal is not replaced, so its
+    // text stays in the renamed form as well.
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.kt", &kotlin_label("paid $x"));
+    write(dir.path(), "b.kt", &kotlin_label("paid $x"));
+    let out = analyze(dir.path());
+    assert_eq!(out["total"], 1, "{}", out["findings"]);
+    assert_eq!(out["findings"][0]["kind"], "exact");
+    write(dir.path(), "b.kt", &kotlin_label("failed $x"));
+    let out = analyze(dir.path());
+    assert_eq!(out["status"], "no_findings", "{}", out["findings"]);
+
+    // Dart `$x` is not an identifier token, so the literal is replaced in
+    // the renamed form; the exact forms differ.
+    for (one, other) in [("paid $x", "failed $x"), ("paid", "failed")] {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.dart", &dart_label(one));
+        write(dir.path(), "b.dart", &dart_label(one));
+        let out = analyze(dir.path());
+        assert_eq!(out["total"], 1, "{}", out["findings"]);
+        assert_eq!(out["findings"][0]["kind"], "exact");
+        write(dir.path(), "b.dart", &dart_label(other));
+        let out = analyze(dir.path());
+        assert_eq!(out["total"], 1, "{}", out["findings"]);
+        let finding = &out["findings"][0];
+        assert_eq!(finding["kind"], "renamed", "{one} {other}");
+        assert_eq!(finding["variants"], 2);
+    }
+}

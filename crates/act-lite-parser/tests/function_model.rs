@@ -1272,6 +1272,19 @@ fn multi_line_strings_count_every_line_they_span() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+// The lines of a function nested in a template substitution count only for
+// the nested function, not for the function that holds the string.
+#[test]
+fn a_function_inside_a_template_substitution_keeps_its_lines() {
+    let source = "function f() {\n    const s = `a${ (a) => {\n        const b = a + 1;\n        const c = b * 2;\n        return c;\n    } }b`;\n    return s;\n}\n";
+    for grammar in [Grammar::JavaScript, Grammar::TypeScript] {
+        let fs = functions(grammar, source);
+        let lines: Vec<u32> = fs.iter().map(|f| f.metrics.lines).collect();
+        // f: lines 1, 2, 6, 7 and 8; the arrow function: lines 2 to 6.
+        assert_eq!(lines, [5, 5], "{grammar:?}");
+    }
+}
+
 #[test]
 fn php_keyword_operators_are_case_insensitive() {
     let fs = functions(

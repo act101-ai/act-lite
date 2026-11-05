@@ -454,13 +454,21 @@ fn walk<'t>(
     let text = parsed.source.content();
     let literals = literal_kinds(grammar);
     let lit = literal();
-    let open = |node: Node<'t>| Open {
-        node,
-        exact: start(b'(', node),
-        blind: start(b'(', node),
-        tokens: 0,
-        nodes: 1,
-        identifier: false,
+    let open = |node: Node<'t>| {
+        let mut exact = start(b'(', node);
+        let mut blind = start(b'(', node);
+        if is_literal(node, literals) {
+            hidden_text(node, literals, text, &mut exact);
+            hidden_text(node, literals, text, &mut blind);
+        }
+        Open {
+            node,
+            exact,
+            blind,
+            tokens: 0,
+            nodes: 1,
+            identifier: false,
+        }
     };
     let root = parsed.source.tree().root_node();
     let mut cursor = root.walk();
@@ -586,6 +594,9 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
             h.write_u8(b'(');
             h.write_u8(n.is_named() as u8);
             put(&mut h, n.kind().as_bytes());
+            if is_literal(n, literals) {
+                hidden_text(n, literals, text, &mut h);
+            }
             descend = cursor.goto_first_child();
         }
         if descend {
@@ -596,6 +607,35 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
                 return h.finish128().as_u128();
             }
             h.write_u8(b')');
+        }
+    }
+}
+
+/// Writes the text of literal `node` that none of its children covers, with
+/// the number of children before it: string content that some grammars keep
+/// out of the tree (Kotlin, Dart, Scala). Whitespace between two quoted parts
+/// of one literal (`"a" "b"`) is formatting and is left out.
+fn hidden_text(node: Node, literals: &[&str], text: &str, h: &mut SipHasher13) {
+    let quote = |c: &Node| !c.is_named() && (c.kind().ends_with('\'') || c.kind().ends_with('"'));
+    let mut cursor = node.walk();
+    let children: Vec<Node> = node.children(&mut cursor).collect();
+    let mut end = node.start_byte();
+    let mut quotes = 0;
+    for i in 0..=children.len() {
+        let next = children.get(i);
+        let start = next.map_or(node.end_byte(), |c| c.start_byte());
+        let gap = &text[end..start];
+        let part = |c: Option<&Node>| c.is_some_and(|c| is_literal(*c, literals));
+        let outside = quotes % 2 == 0
+            && (quotes > 0 || part(i.checked_sub(1).and_then(|p| children.get(p))) || part(next));
+        if !gap.is_empty() && !(outside && gap.trim().is_empty()) {
+            h.write_u8(b'"');
+            h.write_u32(i as u32);
+            put(h, gap.as_bytes());
+        }
+        if let Some(c) = next {
+            quotes += quote(c) as u32;
+            end = c.end_byte();
         }
     }
 }
