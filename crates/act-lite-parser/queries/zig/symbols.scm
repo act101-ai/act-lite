@@ -29,40 +29,40 @@
 (source_file
   (variable_declaration
     "const" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.constant)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.constant)
 (struct_declaration
   (variable_declaration
     "const" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.constant)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.constant)
 (enum_declaration
   (variable_declaration
     "const" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.constant)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.constant)
 (union_declaration
   (variable_declaration
     "const" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.constant)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.constant)
 (opaque_declaration
   (variable_declaration
     "const" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.constant)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.constant)
 (source_file
   (variable_declaration
     "var" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.variable)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
 (struct_declaration
   (variable_declaration
     "var" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.variable)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
 (enum_declaration
   (variable_declaration
     "var" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.variable)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
 (union_declaration
   (variable_declaration
     "var" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.variable)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
 (opaque_declaration
   (variable_declaration
     "var" . (identifier) @name (_) @value . ";"
-    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import\\s*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*)*\\)$")) @definition.variable)
+    (#not-match? @value "(?s)^((packed|extern)\\s+)?(struct|enum|union|error)\\b.*\\}$|^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"[^\"]*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)

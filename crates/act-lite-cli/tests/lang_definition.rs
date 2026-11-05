@@ -218,10 +218,12 @@ fn imports_and_includes_are_never_candidates() {
 fn a_typed_or_commented_zig_import_is_never_a_candidate() {
     let ws = workspace(&[(
         "t.zig",
-        "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nfn f() void {\n    _ = a;\n    _ = b;\n}\n",
+        "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nfn f() void {\n    _ = a;\n    _ = b;\n    _ = d;\n    _ = e;\n}\n",
     )]);
-    assert_not_found(ws.path(), "t.zig", "a", 5, 9);
-    assert_not_found(ws.path(), "t.zig", "b", 6, 9);
+    assert_not_found(ws.path(), "t.zig", "a", 8, 9);
+    assert_not_found(ws.path(), "t.zig", "b", 9, 9);
+    assert_not_found(ws.path(), "t.zig", "d", 10, 9);
+    assert_not_found(ws.path(), "t.zig", "e", 11, 9);
 }
 
 #[test]
