@@ -1,7 +1,10 @@
 //! CLI argument parsing with clap.
 
+use crate::analyze::discovery::Includes;
+use crate::analyze::envelope::AnalyzeError;
+use crate::analyze::run::Request;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// act-lite — navigation-only code queries and sequestered secrets for AI agents.
 #[derive(Parser, Debug)]
@@ -50,6 +53,72 @@ pub enum Command {
     Mcp(McpArgs),
     /// Sequestered secrets: import/add/rm/run/get/list/mv (values never enter logs)
     Env(EnvArgs),
+    /// Analyze a repository: findings with their evidence, as one JSON object
+    Analyze(AnalyzeArgs),
+}
+
+/// Arguments for the analyze command.
+#[derive(clap::Args, Debug)]
+pub struct AnalyzeArgs {
+    #[command(subcommand)]
+    pub command: AnalyzeCommand,
+}
+
+/// One subcommand per analyzer.
+#[derive(Subcommand, Debug)]
+pub enum AnalyzeCommand {
+    /// The test analyzer: reports each Rust function of 5 or more lines
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    Fixture(SharedArgs),
+}
+
+/// The arguments every analyzer takes.
+#[derive(clap::Args, Debug)]
+pub struct SharedArgs {
+    /// Files or directories to analyze, relative to the workspace root (default: the root)
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+    /// Analyze only files that match at least one glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    pub include: Vec<String>,
+    /// Leave out files that match any glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    pub exclude: Vec<String>,
+    /// Analyze test files and embedded test code
+    #[arg(long)]
+    pub include_tests: bool,
+    /// Analyze generated files and directories
+    #[arg(long)]
+    pub include_generated: bool,
+    /// Analyze vendored directories
+    #[arg(long)]
+    pub include_vendored: bool,
+    /// Analyze ignored paths
+    #[arg(long)]
+    pub include_ignored: bool,
+    /// The most findings to return, 0 to 1000
+    #[arg(long, default_value_t = 100)]
+    pub limit: u32,
+}
+
+impl SharedArgs {
+    /// The checked request for the workspace `root`.
+    pub fn request(&self, root: &Path) -> Result<Request, AnalyzeError> {
+        Request::new(
+            root,
+            &self.paths,
+            &self.include,
+            &self.exclude,
+            Includes {
+                tests: self.include_tests,
+                generated: self.include_generated,
+                vendored: self.include_vendored,
+                ignored: self.include_ignored,
+            },
+            self.limit,
+        )
+    }
 }
 
 #[derive(clap::Args, Debug)]

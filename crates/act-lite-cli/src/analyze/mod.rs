@@ -2,6 +2,7 @@
 //! repository discovery and the classification of excluded files.
 
 pub mod classify;
+pub mod command;
 pub mod discovery;
 pub mod embedded;
 pub mod envelope;
