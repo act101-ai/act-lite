@@ -349,7 +349,21 @@ enum Found {
     File(String),
     /// A namespace package directory.
     Namespace(String),
+    /// A symlink on the way leads out of the workspace.
+    Outside,
+    /// Below a directory that the workspace walk could not read, `<dir>/`.
+    Blocked(String),
     Missing,
+}
+
+/// The outcome of a name found outside the workspace or below an unreadable
+/// directory.
+fn settled(found: &Found) -> Option<Outcome> {
+    match found {
+        Found::Outside => Some(Outcome::External),
+        Found::Blocked(dir) => Some(Outcome::Unresolved(format!("{dir} could not be read"))),
+        _ => None,
+    }
 }
 
 /// `import a.b.c`.
@@ -362,6 +376,7 @@ fn import(cx: &mut ResolveCx<'_>, file: &str, dotted: &str) -> Outcome {
         Ok((root, Found::Missing)) => {
             Outcome::Unresolved(format!("{dotted} not found under {}", shown(&root)))
         }
+        Ok((_, found)) => settled(&found).expect("an outside or blocked name"),
     }
 }
 
@@ -382,6 +397,9 @@ fn from_import(cx: &mut ResolveCx<'_>, file: &str, module: &str, name: &str) -> 
             Ok((_, found)) => found,
         }
     };
+    if let Some(outcome) = settled(&found) {
+        return outcome;
+    }
     imported_from(cx, module, found, name)
 }
 
@@ -395,7 +413,7 @@ fn imported_from(cx: &mut ResolveCx<'_>, module: &str, found: Found, name: &str)
             (Some(path), dir)
         }
         Found::Namespace(dir) => (None, Some(dir)),
-        Found::Missing => (None, None),
+        _ => (None, None),
     };
     if name == "*" {
         return Outcome::Resolved(own_file.into_iter().collect());
@@ -417,6 +435,9 @@ fn imported_from(cx: &mut ResolveCx<'_>, module: &str, found: Found, name: &str)
         Some(dir) => find(cx, dir, &[name]),
         None => Found::Missing,
     };
+    if let Some(outcome) = settled(&submodule) {
+        return outcome;
+    }
     let mut targets = Vec::new();
     match submodule {
         Found::File(path) => targets.push(path),
@@ -431,7 +452,7 @@ fn imported_from(cx: &mut ResolveCx<'_>, module: &str, found: Found, name: &str)
                 "{name} is neither bound in {file} nor a submodule of {module}"
             ));
         }
-        Found::Missing => {}
+        _ => {}
     }
     if glob {
         targets.extend(own_file);
@@ -488,7 +509,7 @@ fn locate(
     let first = &segments[..1];
     let mut chosen = None;
     for root in &roots {
-        if let Found::File(_) = find(cx, root, first) {
+        if let Found::File(_) | Found::Outside | Found::Blocked(_) = find(cx, root, first) {
             chosen = Some(root.clone());
             break;
         }
@@ -518,10 +539,11 @@ fn outside_the_roots(cx: &mut ResolveCx<'_>, file: &str, name: &str) -> Outcome 
     if let Some(skip) = cx.workspace_skipped().first() {
         return Outcome::Unresolved(format!("{} could not be read", skip.file.file));
     }
+    let declared = declared(cx, file, name);
     if STDLIB_MODULES.binary_search(&name).is_ok() {
         return Outcome::External;
     }
-    match declared(cx, file, name) {
+    match declared {
         Declared::Yes => Outcome::External,
         Declared::Failed(reason) => Outcome::Unresolved(reason),
         Declared::No => Outcome::Unresolved(format!(
@@ -595,7 +617,7 @@ fn declared_in(
     let result = match cx.input(path, kind) {
         Err(reason) => Err(reason),
         Ok(text) => {
-            let text = text.to_string();
+            let text = text.strip_prefix('\u{feff}').unwrap_or(text).to_string();
             let names = match kind {
                 InputKind::PyprojectToml => pyproject_names(&text),
                 InputKind::SetupCfg => Ok(setup_cfg_names(&text)),
@@ -672,19 +694,37 @@ fn names_of(cx: &mut ResolveCx<'_>, path: &str) -> Result<ModuleNames, String> {
 }
 
 /// Where `segments` exists under `base`: the package first, then the
-/// module, then a namespace package.
+/// module, then a namespace package. A probe that leaves the workspace is
+/// `Outside`; a namespace package or a miss at or below a directory that
+/// the workspace walk could not read is `Blocked`.
 fn find(cx: &mut ResolveCx<'_>, base: &str, segments: &[&str]) -> Found {
     let path = join(base, &segments.join("/"));
-    if let Probe::File(target) = cx.probe_file(&join(&path, "__init__.py")) {
-        return Found::File(target);
+    for file in [join(&path, "__init__.py"), format!("{path}.py")] {
+        match cx.probe_file(&file) {
+            Probe::File(target) => return Found::File(target),
+            Probe::Outside => return Found::Outside,
+            _ => {}
+        }
     }
-    if let Probe::File(target) = cx.probe_file(&format!("{path}.py")) {
-        return Found::File(target);
+    let (found, at) = match cx.probe_file(&path) {
+        Probe::Dir(dir) => (Found::Namespace(dir.clone()), dir),
+        Probe::Outside => return Found::Outside,
+        _ => (Found::Missing, path),
+    };
+    match blocked(cx, &at) {
+        Some(dir) => Found::Blocked(dir),
+        None => found,
     }
-    if let Probe::Dir(dir) = cx.probe_file(&path) {
-        return Found::Namespace(dir);
-    }
-    Found::Missing
+}
+
+/// The directory that the workspace walk could not read at or above `path`.
+fn blocked(cx: &ResolveCx<'_>, path: &str) -> Option<String> {
+    cx.workspace_skipped()
+        .iter()
+        .map(|skip| skip.file.file.as_str())
+        .filter(|entry| entry.ends_with('/'))
+        .find(|dir| path == dir.trim_end_matches('/') || path.starts_with(dir))
+        .map(str::to_string)
 }
 
 /// The own root of `file`, then the workspace root, then `src`, without
@@ -756,19 +796,37 @@ fn requirement_name(requirement: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-/// The requirements of a `requirements*.txt` file: options (`-r`, `-e`,
-/// `--index-url`) and bare URLs or paths are not names.
+/// The distribution a requirement line names: comments, options (`-r`,
+/// `-e`, `--index-url`), `file:` and `attr:` directives, and bare URLs or
+/// paths name none; `name@url` names `name`.
+fn requirement_line(line: &str) -> Option<&str> {
+    let line = line.split(" #").next().unwrap_or_default().trim();
+    if line.is_empty()
+        || line.starts_with(['#', ';', '-'])
+        || line.starts_with("file:")
+        || line.starts_with("attr:")
+    {
+        return None;
+    }
+    if let Some((scheme, _)) = line.split_once("://")
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    {
+        return None;
+    }
+    requirement_name(line)
+}
+
+/// The requirements of a `requirements*.txt` file.
 fn requirements_names(text: &str) -> Vec<String> {
     text.lines()
-        .map(|line| line.split(" #").next().unwrap_or_default().trim())
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('-'))
-        .filter(|line| !(line.contains("://") && !line.contains(" @ ")))
-        .filter_map(|line| requirement_name(line).map(str::to_string))
+        .filter_map(|line| requirement_line(line).map(str::to_string))
         .collect()
 }
 
 /// The requirements of `setup.cfg`'s `[options] install_requires`, one per
-/// line of its value.
+/// line of its value; a blank line does not end the value.
 fn setup_cfg_names(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut section = "";
@@ -776,10 +834,8 @@ fn setup_cfg_names(text: &str) -> Vec<String> {
     for line in text.lines() {
         let trimmed = line.trim();
         let continued = line.starts_with([' ', '\t']);
-        if in_value && continued {
-            if !trimmed.starts_with(['#', ';'])
-                && let Some(name) = requirement_name(trimmed)
-            {
+        if in_value && (continued || trimmed.is_empty()) {
+            if let Some(name) = requirement_line(trimmed) {
                 out.push(name.to_string());
             }
             continue;
@@ -797,7 +853,7 @@ fn setup_cfg_names(text: &str) -> Vec<String> {
         };
         if key.trim() == "install_requires" {
             in_value = true;
-            if let Some(name) = requirement_name(value) {
+            if let Some(name) = requirement_line(value) {
                 out.push(name.to_string());
             }
         }
