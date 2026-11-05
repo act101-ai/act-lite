@@ -4,6 +4,8 @@ use act_lite_lsp::{LspPool, config::ServerConfig};
 use act_lite_parser::Grammar;
 use tempfile::TempDir;
 
+include!("common/helper.rs");
+
 #[tokio::test]
 async fn gopls_server_config_is_valid() {
     let config = ServerConfig::go(std::path::PathBuf::from("/workspace"));
@@ -13,8 +15,7 @@ async fn gopls_server_config_is_valid() {
 }
 
 #[tokio::test]
-async fn go_pool_returns_some_or_none() {
-    // This test verifies graceful behavior when gopls may or may not be installed
+async fn go_pool_starts_gopls() {
     let dir = TempDir::new().unwrap();
 
     std::fs::write(dir.path().join("go.mod"), "module test\n\ngo 1.21\n").unwrap();
@@ -31,19 +32,12 @@ func greet(name string) string {
     )
     .unwrap();
 
-    let pool = LspPool::new(dir.path().to_path_buf());
-    let client = pool.get_client(Grammar::Go).await;
-
-    // Result depends on whether gopls is installed
-    // We just verify it doesn't panic
-    match client {
-        Some(_) => {
-            // gopls is available - this is fine
-        }
-        None => {
-            // gopls not installed - this is expected in some CI environments
-        }
+    if !require_server("gopls") {
+        return;
     }
+    let pool = LspPool::new(dir.path().to_path_buf());
+    let client = pool.get_installed_client(Grammar::Go).await;
+    assert!(client.is_some(), "gopls did not start");
 }
 
 #[tokio::test]
@@ -51,7 +45,7 @@ async fn go_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
 
     // Should return None for disabled pool
-    let client = pool.get_client(Grammar::Go).await;
+    let client = pool.get_installed_client(Grammar::Go).await;
     assert!(client.is_none());
 }
 
@@ -74,9 +68,11 @@ func Add(a, b int) int {
     )
     .unwrap();
 
+    if !require_server("gopls") {
+        return;
+    }
     let pool = LspPool::new(dir.path().to_path_buf());
 
-    // Getting client should succeed (may return Some if gopls is available)
-    let _client = pool.get_client(Grammar::Go).await;
-    // We just verify it doesn't crash
+    let client = pool.get_installed_client(Grammar::Go).await;
+    assert!(client.is_some(), "gopls did not start");
 }

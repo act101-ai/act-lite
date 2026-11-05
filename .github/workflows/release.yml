@@ -12,6 +12,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo fmt --check
+      - run: cargo test --workspace --locked --no-fail-fast
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo deny check
+
   build:
     name: build (${{ matrix.target }})
     strategy:
@@ -61,11 +77,36 @@ jobs:
           fi
           name="act-lite-${version}-${TARGET}"
           mkdir -p "dist/$name"
-          cp "target/$TARGET/release/act-lite" LICENSE NOTICE README.md "dist/$name/"
+          cp "target/$TARGET/release/act-lite" LICENSE NOTICE THIRD-PARTY-LICENSES README.md "dist/$name/"
           cd dist
           tar -czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: smoke
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ steps.package.outputs.name }}
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match version v$version"
+            exit 1
+          fi
+          dir=$(mktemp -d)
+          tar -xzf "dist/$NAME.tar.gz" -C "$dir"
+          bin="$dir/$NAME/act-lite"
+          if [ "$TARGET" = x86_64-apple-darwin ] && ! arch -x86_64 true 2>/dev/null; then
+            echo "Rosetta is not available on this runner; checking the binary type only"
+            file "$bin"
+            file "$bin" | grep -q x86_64
+          elif [ "$TARGET" = aarch64-unknown-linux-gnu ]; then
+            file "$bin"
+            file "$bin" | grep -q aarch64
+          else
+            out=$("$bin" --version)
+            echo "$out"
+            [ "$out" = "act-lite $version" ]
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.name }}
@@ -75,7 +116,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, floor]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:

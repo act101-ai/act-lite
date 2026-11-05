@@ -64,7 +64,7 @@ Windows is not supported.
 
 ### From source
 
-Rust 1.89 or later:
+Rust 1.90 or later:
 
 ```bash
 cargo build --release -p act-lite-cli
@@ -93,12 +93,50 @@ Global flags:
   The `references` fallback searches every same-language file under it.
 - `--disable-lsp` (or `ACT_LITE_DISABLE_LSP=1`) — never start a language server.
 
+`ACT_LITE_DISABLE_LSP` and `ACT_LITE_INSTALL_LSP` take `1`, `true`, `yes`,
+`on`, `y` or `t` (any case) as on, and `0`, `false`, `no`, `off`, `n` or `f`
+as off.
+
 `references` uses a language server when one is available. Without one it
 falls back to a name-level tree-sitter search over files of the same
 language, and the output says so with `"source": "tree-sitter"`. `callers`,
 `callees` and `implementations` need a language server; when it is missing,
-the error names the server binary and how to install it. act-lite never
-installs a language server itself: install it and put it on your `PATH`.
+the error names the server binary, its install command and its homepage.
+
+act-lite installs a language server only when `ACT_LITE_INSTALL_LSP=1` is
+set. Then a query that would use a missing server runs the server's install
+command (below) through `sh -c`; after 10 minutes it kills the shell and
+every process the shell started. When the install fails, the hint says that
+the command ran and why the server is still unavailable; the next `act-lite`
+command or MCP server process runs the install again. Without
+`ACT_LITE_INSTALL_LSP=1`, act-lite runs nothing: install the server yourself
+and put it on your `PATH`.
+
+Once per session — one `act-lite` command, or one `act-lite mcp serve`
+process — the first `references` answer that falls back because its server
+is not installed carries a hint with the server binary, its install command
+and its homepage. The CLI prints it as one `hint:` line on stderr and leaves
+the JSON unchanged; the MCP server adds it to the tool result, after the
+name-level note that every fallback result carries. With
+`--disable-lsp` or `ACT_LITE_DISABLE_LSP=1` there is no install hint.
+
+| Server | Languages | Install command | Homepage |
+| --- | --- | --- | --- |
+| `typescript-language-server` | TypeScript, TSX, JavaScript, JSX | `npm install -g typescript-language-server typescript` | [typescript-language-server](https://github.com/typescript-language-server/typescript-language-server) |
+| `OmniSharp` | C# | `brew install omnisharp-roslyn` | [omnisharp-roslyn](https://github.com/OmniSharp/omnisharp-roslyn) |
+| `pyright-langserver` | Python | `pip install pyright` | [pyright](https://github.com/microsoft/pyright) |
+| `rust-analyzer` | Rust | `rustup component add rust-analyzer` | [rust-analyzer](https://rust-analyzer.github.io) |
+| `gopls` | Go | `go install golang.org/x/tools/gopls@latest` | [gopls](https://pkg.go.dev/golang.org/x/tools/gopls) |
+| `elixir-ls` | Elixir | `brew install elixir-ls` | [elixir-ls](https://github.com/elixir-lsp/elixir-ls) |
+| `jdtls` | Java | `brew install jdtls` | [eclipse.jdt.ls](https://github.com/eclipse-jdtls/eclipse.jdt.ls) |
+| `kotlin-language-server` | Kotlin | `brew install kotlin-language-server` | [kotlin-language-server](https://github.com/fwcd/kotlin-language-server) |
+| `clangd` | C, C++ | `brew install llvm` | [clangd](https://clangd.llvm.org) |
+| `ruby-lsp` | Ruby | `gem install ruby-lsp` | [ruby-lsp](https://github.com/Shopify/ruby-lsp) |
+| `sqls` | SQL | `go install github.com/sqls-server/sqls@latest` | [sqls](https://github.com/sqls-server/sqls) |
+| `intelephense` | PHP | `npm install -g intelephense` | [intelephense](https://intelephense.com) |
+| `metals` | Scala | `cs install metals` | [metals](https://scalameta.org/metals) |
+| `sourcekit-lsp` | Swift | `xcode-select --install` | [sourcekit-lsp](https://github.com/swiftlang/sourcekit-lsp) |
+| `dart` | Dart | `brew install dart` | [dart](https://dart.dev/get-dart) |
 
 Without a language server, queries match a symbol by name, not by scope: they
 use the nearest declaration with that name, and YAML and JSON keys with the

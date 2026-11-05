@@ -1,53 +1,95 @@
-//! LSP binary detection and auto-installation.
+//! LSP binary detection and opt-in installation.
 
 use crate::config::ServerConfig;
 use crate::error::{LspError, Result};
+use std::ffi::OsString;
+use std::time::Duration;
 use tracing::{debug, info};
+
+/// Longest an install command may run before it is killed.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The environment variable that permits installation when set to `1`.
+pub const INSTALL_ENV: &str = "ACT_LITE_INSTALL_LSP";
 
 /// Checks if the LSP server command is available on PATH.
 pub fn is_installed(config: &ServerConfig) -> bool {
     which::which(&config.command).is_ok()
 }
 
-/// Ensures the LSP server binary is available, attempting auto-install if missing.
+/// True when `ACT_LITE_INSTALL_LSP` is on: a missing server may be installed.
+pub fn install_opted_in() -> bool {
+    opted_in(std::env::var_os(INSTALL_ENV))
+}
+
+/// The values `ACT_LITE_DISABLE_LSP` also accepts as on (clap's boolish
+/// values), in any case. Every other value is off.
+fn opted_in(value: Option<OsString>) -> bool {
+    value.and_then(|v| v.into_string().ok()).is_some_and(|v| {
+        ["y", "yes", "t", "true", "on", "1"].contains(&v.to_ascii_lowercase().as_str())
+    })
+}
+
+/// How to install the server: its install command, when one is known, and
+/// its homepage.
+pub fn install_hint(config: &ServerConfig) -> String {
+    hint(config.install_command().as_deref(), config.homepage())
+}
+
+fn hint(install_cmd: Option<&str>, homepage: &str) -> String {
+    match install_cmd {
+        Some(cmd) => format!("`{cmd}` (see {homepage})"),
+        None => format!("the instructions at {homepage}"),
+    }
+}
+
+/// Ensures the LSP server binary is available.
 ///
-/// Returns `Ok(())` if the binary is available (either already installed or
-/// successfully auto-installed). Returns `Err` with actionable install instructions
-/// if auto-install fails or is not available for this server.
-pub async fn ensure_installed(config: &ServerConfig, language: &str) -> Result<()> {
+/// Returns `Ok(())` if the binary is on PATH. When it is missing and
+/// `allow_install` is true, runs the server's install command through `sh -c`.
+/// Otherwise returns `NotInstalled` with the install command and homepage,
+/// and runs nothing.
+pub async fn ensure_installed(
+    config: &ServerConfig,
+    language: &str,
+    allow_install: bool,
+) -> Result<()> {
+    ensure_installed_with(config, language, config.install_command(), allow_install).await
+}
+
+async fn ensure_installed_with(
+    config: &ServerConfig,
+    language: &str,
+    install_cmd: Option<String>,
+    allow_install: bool,
+) -> Result<()> {
     if is_installed(config) {
         debug!("LSP binary '{}' found on PATH", config.command);
         return Ok(());
     }
 
-    info!(
-        "LSP binary '{}' for {} not found, attempting auto-install",
-        config.command, language
-    );
-
-    let install_cmd = match config.install_command() {
-        Some(cmd) => cmd,
-        None => {
+    let install_cmd = match install_cmd {
+        Some(cmd) if allow_install => cmd,
+        install_cmd => {
             return Err(LspError::NotInstalled {
                 language: language.to_string(),
                 command: config.command.clone(),
-                install_hint: format!(
-                    "No auto-install available for '{}'. Install it manually.",
-                    config.command
-                ),
+                install_hint: hint(install_cmd.as_deref(), config.homepage()),
             });
         }
     };
 
+    info!(
+        "LSP binary '{}' for {} not found, installing with `{}`",
+        config.command, language, install_cmd
+    );
+
     // Execute the install command
-    match run_install_command(&install_cmd).await {
+    match run_install_command("sh", &install_cmd, INSTALL_TIMEOUT).await {
         Ok(()) => {
             // Verify the binary is now available
             if is_installed(config) {
-                info!(
-                    "Successfully auto-installed '{}' for {}",
-                    config.command, language
-                );
+                info!("Installed '{}' for {}", config.command, language);
                 Ok(())
             } else {
                 Err(LspError::InstallFailed {
@@ -66,16 +108,41 @@ pub async fn ensure_installed(config: &ServerConfig, language: &str) -> Result<(
     }
 }
 
-/// Runs a shell install command and returns Ok(()) on success or an error string.
-async fn run_install_command(cmd: &str) -> std::result::Result<(), String> {
+/// Runs an install command through `shell -c` and returns Ok(()) on success or an error string.
+/// If it runs longer than `limit`, the shell and every process it started are
+/// killed and an error returned.
+async fn run_install_command(
+    shell: &str,
+    cmd: &str,
+    limit: Duration,
+) -> std::result::Result<(), String> {
     debug!("Running install command: {}", cmd);
 
-    let output = tokio::process::Command::new("sh")
+    let failed = |e: std::io::Error| format!("failed to execute shell: {e}");
+    let mut command = tokio::process::Command::new(shell);
+    command
         .arg("-c")
         .arg(cmd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to execute shell: {}", e))?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    // Its own process group, so a timeout can kill what the shell started.
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command.spawn().map_err(failed)?;
+    let group = child.id();
+    let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
+        Ok(output) => output.map_err(failed)?,
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(group) = group {
+                // SAFETY: kill(2) on the group the shell leads; no memory is touched.
+                unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+            }
+            return Err(format!("timed out after {} s", limit.as_secs()));
+        }
+    };
 
     if output.status.success() {
         Ok(())
@@ -99,8 +166,164 @@ async fn run_install_command(cmd: &str) -> std::result::Result<(), String> {
 mod tests {
     use super::*;
 
+    /// A config for a binary that is not on PATH.
+    fn missing() -> ServerConfig {
+        ServerConfig::new("definitely-not-a-real-binary-xyzzy".to_string(), vec![])
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_does_not_install_without_opt_in() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!("touch {}", marker.display());
+        let config = missing();
+        let err = ensure_installed_with(&config, "test", Some(cmd.clone()), false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, LspError::NotInstalled { install_hint, .. }
+                if install_hint.contains(&cmd) && install_hint.contains(config.homepage())),
+            "the hint names the install command and the homepage: {err}"
+        );
+        assert!(!marker.exists(), "nothing runs without the opt-in");
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_installs_on_opt_in() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!("touch {}", marker.display());
+        let err = ensure_installed_with(&missing(), "test", Some(cmd), true)
+            .await
+            .unwrap_err();
+        assert!(marker.exists(), "the install command ran");
+        assert!(
+            matches!(err, LspError::InstallFailed { ref reason, .. } if reason.contains("not found on PATH")),
+            "the binary is still missing: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_on_opt_in_succeeds_when_the_binary_appears() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("server");
+        let config = ServerConfig::new(binary.display().to_string(), vec![]);
+        let cmd = format!("touch {0} && chmod +x {0}", binary.display());
+        ensure_installed_with(&config, "test", Some(cmd), true)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_reports_a_failing_install_command() {
+        let _path = crate::test_path::lock_path();
+        for (cmd, stdout) in [("echo out; echo err >&2; exit 3", true), ("exit 4", false)] {
+            let err = ensure_installed_with(&missing(), "test", Some(cmd.to_string()), true)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, LspError::InstallFailed { reason, .. }
+                    if reason.starts_with("exit code ") && reason.contains("stdout: out") == stdout),
+                "{err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_installed_without_install_command_names_the_homepage() {
+        let _path = crate::test_path::lock_path();
+        let config = missing();
+        for allow_install in [false, true] {
+            let err = ensure_installed(&config, "test", allow_install)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, LspError::NotInstalled { install_hint, .. }
+                    if install_hint.contains(config.homepage())),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn install_hint_names_the_command_and_the_homepage() {
+        let config = ServerConfig::new("rust-analyzer".to_string(), vec![]);
+        let hint = install_hint(&config);
+        assert!(
+            hint.contains("rustup component add rust-analyzer"),
+            "{hint}"
+        );
+        assert!(hint.contains(config.homepage()), "{hint}");
+    }
+
+    #[test]
+    fn opt_in_accepts_the_boolish_values() {
+        for value in ["1", "true", "TRUE", "yes", "On", "y", "t"] {
+            assert!(opted_in(Some(value.into())), "{value}");
+        }
+        for value in ["0", "false", "no", "off", "n", "f", "", "2"] {
+            assert!(!opted_in(Some(value.into())), "{value}");
+        }
+        assert!(!opted_in(None));
+        assert_eq!(install_opted_in(), opted_in(std::env::var_os(INSTALL_ENV)));
+    }
+
+    #[tokio::test]
+    async fn install_command_reports_a_shell_that_does_not_start() {
+        let _path = crate::test_path::lock_path();
+        let err = run_install_command("/nonexistent/sh", "true", Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(err.contains("failed to execute shell"), "{err}");
+    }
+
+    /// A timeout kills what the install command started, not only the shell.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_the_commands_children() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let cmd = format!("sleep 60 & echo $! > {}; wait", pid_file.display());
+        let err = run_install_command("sh", &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // The killed `sleep` is gone once its new parent reaps it.
+        let survived = (0..40).all(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: signal 0 only checks that the process exists.
+            unsafe { libc::kill(pid, 0) == 0 }
+        });
+        assert!(!survived, "`sleep 60` (pid {pid}) outlived the timeout");
+    }
+
+    #[tokio::test]
+    async fn install_command_times_out() {
+        let _path = crate::test_path::lock_path();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_install_command("sh", "sleep 60", Duration::from_secs(1)),
+        )
+        .await;
+        let err = result
+            .expect("run_install_command did not return within 2 s")
+            .unwrap_err();
+        assert!(err.contains("timed out"), "unexpected error: {err}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
     #[test]
     fn test_is_installed_known_binary() {
+        let _path = crate::test_path::lock_path();
         // `sh` should always be available on Unix
         let _config = ServerConfig::new("sh".to_string(), vec![]);
         // We can't use is_installed here because `sh` isn't in ALLOWED_COMMANDS,
@@ -110,6 +333,7 @@ mod tests {
 
     #[test]
     fn test_is_installed_missing_binary() {
+        let _path = crate::test_path::lock_path();
         let config = ServerConfig {
             command: "definitely-not-a-real-binary-xyzzy".to_string(),
             args: vec![],
@@ -123,6 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_already_present() {
+        let _path = crate::test_path::lock_path();
         // rust-analyzer is likely installed in the dev environment
         // If not, this test will exercise the install path — both are valid.
         // We test with a binary we KNOW exists: "sh"
@@ -134,27 +359,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             timeout_ms: 5000,
         };
-        let result = ensure_installed(&config, "test").await;
+        let result = ensure_installed(&config, "test", false).await;
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_ensure_installed_unknown_binary_no_install_cmd() {
-        let config = ServerConfig {
-            command: "definitely-not-a-real-binary-xyzzy".to_string(),
-            args: vec![],
-            working_directory: None,
-            env: std::collections::HashMap::new(),
-            initialization_options: serde_json::Value::Null,
-            timeout_ms: 5000,
-        };
-        let result = ensure_installed(&config, "test").await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("not installed"),
-            "Expected NotInstalled error, got: {}",
-            err
-        );
     }
 }

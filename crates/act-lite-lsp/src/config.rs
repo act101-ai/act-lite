@@ -524,6 +524,43 @@ impl ServerConfig {
             _ => None,
         }
     }
+
+    /// Returns the project page of this LSP server.
+    ///
+    /// For a server with no known page, returns the list of language server
+    /// implementations.
+    pub fn homepage(&self) -> &'static str {
+        let command_name = std::path::Path::new(&self.command)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&self.command);
+
+        match command_name {
+            "typescript-language-server" => {
+                "https://github.com/typescript-language-server/typescript-language-server"
+            }
+            "pyright-langserver" => "https://github.com/microsoft/pyright",
+            "rust-analyzer" => "https://rust-analyzer.github.io",
+            "gopls" => "https://pkg.go.dev/golang.org/x/tools/gopls",
+            "clangd" => "https://clangd.llvm.org",
+            "ruby-lsp" => "https://github.com/Shopify/ruby-lsp",
+            "intelephense" => "https://intelephense.com",
+            "phpactor" => "https://github.com/phpactor/phpactor",
+            "kotlin-language-server" => "https://github.com/fwcd/kotlin-language-server",
+            "OmniSharp" | "omnisharp" => "https://github.com/OmniSharp/omnisharp-roslyn",
+            "metals" => "https://scalameta.org/metals",
+            "jdtls" => "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
+            "elixir-ls" => "https://github.com/elixir-lsp/elixir-ls",
+            "sourcekit-lsp" => "https://github.com/swiftlang/sourcekit-lsp",
+            "dart" => "https://dart.dev/get-dart",
+            "sqls" => "https://github.com/sqls-server/sqls",
+            "lua-language-server" => "https://github.com/LuaLS/lua-language-server",
+            "bash-language-server" => "https://github.com/bash-lsp/bash-language-server",
+            "yaml-language-server" => "https://github.com/redhat-developer/yaml-language-server",
+            "taplo" => "https://taplo.tamasfe.dev",
+            _ => "https://microsoft.github.io/language-server-protocol/implementors/servers/",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -919,5 +956,16 @@ mod tests {
         let config = ServerConfig::new("some-unknown-lsp".to_string(), vec![]);
         // validate() would reject this, but install_command() doesn't care about validation
         assert_eq!(config.install_command(), None);
+    }
+
+    /// Every server has its own project page, not the generic fallback.
+    #[test]
+    fn every_server_has_a_homepage() {
+        let fallback = ServerConfig::new("some-unknown-lsp".to_string(), vec![]).homepage();
+        for server in LspServer::ALL {
+            let homepage = server.config(PathBuf::from("/ws")).homepage();
+            assert!(homepage.starts_with("https://"), "{server:?}: {homepage}");
+            assert_ne!(homepage, fallback, "{server:?} has no homepage of its own");
+        }
     }
 }

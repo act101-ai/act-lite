@@ -9,6 +9,9 @@ LICENSE file beside it. Where the grammar's LICENSE file carries no copyright
 line, the line below is taken from the crate's Cargo.toml `authors` field, or
 names the upstream contributors when that field is empty too.
 
+The full license texts of these grammars and of every other crate in the
+release binaries are in THIRD-PARTY-LICENSES.
+
 Runtime
 -------
 tree-sitter 0.25.10 — registry — MIT
