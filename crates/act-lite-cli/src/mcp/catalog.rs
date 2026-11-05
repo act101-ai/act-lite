@@ -43,4 +43,9 @@ pub const TOOLS: &[ToolEntry] = &[
         name: "definition",
         description: "Jump to definition — find where a symbol is defined given a usage location. Uses AST-based parsing, no language server required. Params: symbol (string), file (string), line (u32), column (u32)",
     },
+    #[cfg(debug_assertions)]
+    ToolEntry {
+        name: "analyze_fixture",
+        description: "Test analyzer: report each Rust function of 5 or more lines, as one JSON result with its evidence. Served by builds with debug assertions only. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+    },
 ];
