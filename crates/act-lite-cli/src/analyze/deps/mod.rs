@@ -16,9 +16,11 @@ pub mod js;
 pub mod python;
 pub mod rust;
 
-use super::discovery::{Includes, walk_workspace};
+use super::discovery::{Skip, walk_workspace};
 use super::envelope::{AnalyzeError, Unresolved};
-use super::read::{DirEntry, EntryKind, FileSource, Parsed, RemovedRegion, SymlinkTarget};
+use super::read::{
+    DirEntry, EntryKind, FileSource, Parsed, RemovedRegion, SupportError, SymlinkTarget,
+};
 use super::run::RunContext;
 use act_lite_core::CompactRange;
 use act_lite_parser::Grammar;
@@ -159,14 +161,23 @@ struct Input {
     error: Option<String>,
 }
 
+/// The workspace files and the entries the walk could not read.
+type Walked = (Vec<String>, Vec<Skip>);
+
 /// What resolution keeps for the whole build.
 #[derive(Default)]
 struct State {
     /// Listings by the directory's own path; `None` when it cannot be listed.
     dirs: HashMap<String, Option<Vec<DirEntry>>>,
     inputs: BTreeMap<String, Input>,
-    sources: HashMap<String, Result<Parsed, String>>,
-    workspace: OnceCell<Vec<String>>,
+    /// The support reads of the file being resolved; cleared before the
+    /// next file, so no tree outlives one file's resolution.
+    sources: HashMap<String, Parsed>,
+    /// Each support read of the build: its removed test regions, or the
+    /// reason it could not be read.
+    reads: HashMap<String, Result<Vec<RemovedRegion>, String>>,
+    /// The workspace walk under the request's includes, on first use.
+    workspace: OnceCell<Result<Walked, AnalyzeError>>,
     cache: HashMap<TypeId, Box<dyn Any + Send>>,
 }
 
@@ -196,11 +207,12 @@ impl ResolveCx<'_> {
             if !is_dir {
                 return Probe::None;
             }
-            let Some(entry) = self
-                .listing(&at)
-                .and_then(|entries| entries.iter().find(|e| e.name == name))
-                .cloned()
-            else {
+            let Some(entry) = self.listing(&at).and_then(|entries| {
+                entries
+                    .binary_search_by(|e| e.name.as_bytes().cmp(name.as_bytes()))
+                    .ok()
+                    .map(|i| entries[i].clone())
+            }) else {
                 return Probe::None;
             };
             match entry.kind {
@@ -247,21 +259,26 @@ impl ResolveCx<'_> {
 
     /// The listing of a directory given by its own path, read once.
     fn listing(&mut self, dir: &str) -> Option<&[DirEntry]> {
-        let support = &self.ctx.support;
+        if !self.state.dirs.contains_key(dir) {
+            let listed = self.ctx.support.list_dir(dir).ok();
+            self.state.dirs.insert(dir.to_string(), listed);
+        }
         self.state
             .dirs
-            .entry(dir.to_string())
-            .or_insert_with(|| support.list_dir(dir).ok())
-            .as_deref()
+            .get(dir)
+            .and_then(|listed| listed.as_deref())
     }
 
     /// The text of the resolution input `rel`, read once and listed in
     /// `details.resolution_inputs`. A read failure is listed with its
-    /// `error`; the `Err` is the reason `<rel> could not be read`.
+    /// `error`; the `Err` is the reason `<rel> could not be read`. A file
+    /// that does not exist is not listed and is no failed input; the `Err`
+    /// is then the reason `<rel> does not exist`.
     pub fn input(&mut self, rel: &str, kind: InputKind) -> Result<&str, String> {
         if !self.state.inputs.contains_key(rel) {
             let (text, error) = match self.ctx.support.text(rel) {
                 Ok(text) => (Some(text), None),
+                Err(SupportError::NotFound(_)) => return Err(format!("{rel} does not exist")),
                 Err(err) => (None, Some(err.to_string())),
             };
             self.state
@@ -291,14 +308,28 @@ impl ResolveCx<'_> {
     }
 
     /// Every regular file of the workspace, workspace-relative, in byte
-    /// order: `.git` pruned, ignored paths and vendored and generated
-    /// directories left out. Walked once per build, on the first call.
+    /// order: `.git` pruned, and ignored paths and vendored and generated
+    /// directories left out unless the request includes them. Walked once
+    /// per build, on the first call. When the walk fails, this is empty and
+    /// `build` fails with the walk's error after the current resolution.
     pub fn workspace_files(&self) -> &[String] {
-        self.state.workspace.get_or_init(|| {
-            walk_workspace(&self.ctx.root, &Includes::default(), self.cancel)
-                .map(|(files, _)| files)
-                .unwrap_or_default()
-        })
+        self.walk().map_or(&[], |(files, _)| files)
+    }
+
+    /// The entries the workspace walk could not read, as discovery reports
+    /// them: a target below one of them is missing evidence.
+    pub fn workspace_skipped(&self) -> &[Skip] {
+        self.walk().map_or(&[], |(_, skipped)| skipped)
+    }
+
+    fn walk(&self) -> Option<&Walked> {
+        self.state
+            .workspace
+            .get_or_init(|| {
+                walk_workspace(&self.ctx.root, self.ctx.support.includes(), self.cancel)
+            })
+            .as_ref()
+            .ok()
     }
 
     /// Whether `rel` is a file of the scope in a supported language, so that
@@ -308,36 +339,46 @@ impl ResolveCx<'_> {
     }
 
     /// `relative` joined to `base_dir` with `.` and `..` removed; `None`
-    /// when the path leaves the workspace root.
+    /// when the path leaves the workspace root or `relative` is absolute.
     pub fn normalize(&self, base_dir: &str, relative: &str) -> Option<String> {
         lexical(base_dir, relative)
     }
 
-    /// The source file `rel`, read and parsed once, with its test regions
-    /// blanked as an analyzed read does; the `Err` is the reason
-    /// `<rel> could not be read`.
+    /// The source file `rel`, read and parsed with its test regions blanked
+    /// as an analyzed read does. The parse lasts while the current file's
+    /// relationships are resolved; a later file reads it again. A failure
+    /// lasts the build; the `Err` is the reason `<rel> could not be read`.
     pub fn source(&mut self, rel: &str) -> Result<&Parsed, String> {
-        let support = &self.ctx.support;
-        self.state
-            .sources
-            .entry(rel.to_string())
-            .or_insert_with(|| {
-                support
-                    .source(rel)
-                    .map_err(|_| format!("{rel} could not be read"))
-            })
-            .as_ref()
-            .map_err(Clone::clone)
+        if !self.state.sources.contains_key(rel) {
+            if let Some(Err(reason)) = self.state.reads.get(rel) {
+                return Err(reason.clone());
+            }
+            match self.ctx.support.source(rel) {
+                Ok(parsed) => {
+                    let removed = Ok(parsed.removed.clone());
+                    self.state.reads.insert(rel.to_string(), removed);
+                    self.state.sources.insert(rel.to_string(), parsed);
+                }
+                Err(_) => {
+                    let reason = format!("{rel} could not be read");
+                    self.state
+                        .reads
+                        .insert(rel.to_string(), Err(reason.clone()));
+                    return Err(reason);
+                }
+            }
+        }
+        Ok(&self.state.sources[rel])
     }
 
     /// The removed test regions of `file`: the file being resolved, or a
-    /// file read with `source`; empty for any other.
+    /// file read with `source` during the build; empty for any other.
     pub fn removed(&self, file: &str) -> &[RemovedRegion] {
         if file == self.file {
             return self.removed;
         }
-        match self.state.sources.get(file) {
-            Some(Ok(parsed)) => &parsed.removed,
+        match self.state.reads.get(file) {
+            Some(Ok(removed)) => removed,
             _ => &[],
         }
     }
@@ -525,17 +566,25 @@ impl DepGraph {
                     }
                     None => Outcome::Unresolved("no resolver for the file's language".to_string()),
                 };
+                if let Some(err) = walk_failed(&mut state) {
+                    return Err(err);
+                }
                 resolved.push(ResolvedRel {
                     relationship,
                     outcome,
                 });
             }
+            state.sources.clear();
             graph.analyzed.insert(file.clone());
             graph.relationships.insert(file, resolved);
         }
+        let failed: HashMap<Family, &str> =
+            [Family::JsTs, Family::Python, Family::Go, Family::Rust]
+                .into_iter()
+                .filter_map(|f| first_failed(&state.inputs, f).map(|input| (f, input)))
+                .collect();
         for (file, rels) in &mut graph.relationships {
-            let failed = family_of(file).and_then(|f| first_failed(&state.inputs, f));
-            if let Some(input) = failed {
+            if let Some(input) = family_of(file).and_then(|f| failed.get(&f)) {
                 for rel in rels.iter_mut() {
                     if rel.outcome == Outcome::External {
                         rel.outcome = Outcome::Unresolved(format!("{input} could not be read"));
@@ -703,6 +752,14 @@ fn edges(
     out
 }
 
+/// The walk's error, once, when the workspace walk failed.
+fn walk_failed(state: &mut State) -> Option<AnalyzeError> {
+    match state.workspace.get() {
+        Some(Err(_)) => state.workspace.take().and_then(Result::err),
+        _ => None,
+    }
+}
+
 /// The first input of `family`, in path order, with an error.
 fn first_failed(inputs: &BTreeMap<String, Input>, family: Family) -> Option<&str> {
     inputs
@@ -720,8 +777,12 @@ fn range_key(r: &CompactRange) -> (u32, u32, u32, u32) {
 }
 
 /// `relative` joined to `base`, both `/`-separated, with empty segments and
-/// `.` removed and each `..` applied; `None` when a `..` leaves the root.
+/// `.` removed and each `..` applied; `None` when a `..` leaves the root or
+/// `relative` is absolute.
 fn lexical(base: &str, relative: &str) -> Option<String> {
+    if relative.starts_with('/') {
+        return None;
+    }
     let mut out: Vec<&str> = Vec::new();
     for part in base.split('/').chain(relative.split('/')) {
         match part {
