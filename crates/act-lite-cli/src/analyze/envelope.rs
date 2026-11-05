@@ -704,6 +704,17 @@ pub enum AnalyzeError {
 }
 
 impl AnalyzeError {
+    /// A failure with `name` as its analysis; any other error unchanged.
+    pub fn with_analysis(self, name: &'static str) -> AnalyzeError {
+        match self {
+            AnalyzeError::Failed { cause, .. } => AnalyzeError::Failed {
+                analysis: name,
+                cause,
+            },
+            other => other,
+        }
+    }
+
     /// True for an error in the request; false for a failure or a
     /// cancellation.
     pub fn is_invalid_params(&self) -> bool {
@@ -817,6 +828,22 @@ mod tests {
         "incomplete",
         "evidence",
     ];
+
+    #[test]
+    fn with_analysis_renames_only_a_failure() {
+        let failed = AnalyzeError::Failed {
+            analysis: "analyze",
+            cause: "x".to_string(),
+        };
+        assert_eq!(
+            failed.with_analysis("fixture").to_string(),
+            "fixture failed: x"
+        );
+        assert_eq!(
+            AnalyzeError::Cancelled.with_analysis("fixture"),
+            AnalyzeError::Cancelled
+        );
+    }
 
     #[test]
     fn empty_envelope_has_every_key_in_order() {
