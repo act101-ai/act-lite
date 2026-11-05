@@ -54,7 +54,7 @@ pub fn spawn_with_parent_death_guard(
     Ok(child)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::spawn_with_parent_death_guard;
     use std::time::{Duration, Instant};
