@@ -32,8 +32,26 @@ extension and lists these languages.
 
 ## Install
 
-Install a prebuilt binary from the GitHub releases and put `act-lite` on
-your `PATH`, or build it from source with `cargo build`.
+Install the latest release with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/act101-ai/act-lite/main/install.sh | sh
+```
+
+The script detects your platform, downloads the archive, checks its SHA-256
+checksum, and installs `act-lite` into `~/.local/bin`. It never uses `sudo`.
+
+- `ACT_LITE_VERSION` installs a given release instead of the latest, for
+  example `ACT_LITE_VERSION=v0.1.0`.
+- `ACT_LITE_INSTALL_DIR` sets the install directory (default `~/.local/bin`).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/act101-ai/act-lite/main/install.sh \
+  | ACT_LITE_VERSION=v0.1.0 ACT_LITE_INSTALL_DIR=/usr/local/bin sh
+```
+
+You can also install by hand from a release archive, or build from source
+with `cargo build`.
 
 ### From a release
 
