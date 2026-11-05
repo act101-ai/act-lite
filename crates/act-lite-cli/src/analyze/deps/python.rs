@@ -639,9 +639,12 @@ fn declared_in(
 /// The first top-level candidate named `name` in byte order: a module
 /// `name.py` or a regular package `name/` whose directory has no
 /// `__init__.py`, so the directory could be a `sys.path` entry.
+/// Files inside vendored directories are never candidates.
 fn candidate(cx: &mut ResolveCx<'_>, name: &str) -> Option<String> {
     if cx.cache::<PyCache>().candidates.is_none() {
-        let index = candidates(cx.workspace_files());
+        let files: Vec<String> = cx.workspace_files().to_vec();
+        let outside_vendored: Vec<String> = files.into_iter().filter(|f| !cx.vendored(f)).collect();
+        let index = candidates(&outside_vendored);
         cx.cache::<PyCache>().candidates = Some(index);
     }
     cx.cache::<PyCache>()
