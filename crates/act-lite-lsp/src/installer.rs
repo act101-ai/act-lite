@@ -17,13 +17,17 @@ pub fn is_installed(config: &ServerConfig) -> bool {
     which::which(&config.command).is_ok()
 }
 
-/// True when `ACT_LITE_INSTALL_LSP` is `1`: a missing server may be installed.
+/// True when `ACT_LITE_INSTALL_LSP` is on: a missing server may be installed.
 pub fn install_opted_in() -> bool {
     opted_in(std::env::var_os(INSTALL_ENV))
 }
 
+/// The values `ACT_LITE_DISABLE_LSP` also accepts as on (clap's boolish
+/// values), in any case. Every other value is off.
 fn opted_in(value: Option<OsString>) -> bool {
-    value.is_some_and(|v| v == "1")
+    value.and_then(|v| v.into_string().ok()).is_some_and(|v| {
+        ["y", "yes", "t", "true", "on", "1"].contains(&v.to_ascii_lowercase().as_str())
+    })
 }
 
 /// How to install the server: its install command, when one is known, and
@@ -105,7 +109,8 @@ async fn ensure_installed_with(
 }
 
 /// Runs an install command through `shell -c` and returns Ok(()) on success or an error string.
-/// The shell is killed and an error returned if it runs longer than `limit`.
+/// If it runs longer than `limit`, the shell and every process it started are
+/// killed and an error returned.
 async fn run_install_command(
     shell: &str,
     cmd: &str,
@@ -113,15 +118,31 @@ async fn run_install_command(
 ) -> std::result::Result<(), String> {
     debug!("Running install command: {}", cmd);
 
-    let child = tokio::process::Command::new(shell)
+    let failed = |e: std::io::Error| format!("failed to execute shell: {e}");
+    let mut command = tokio::process::Command::new(shell);
+    command
         .arg("-c")
         .arg(cmd)
-        .kill_on_drop(true)
-        .output();
-    let output = tokio::time::timeout(limit, child)
-        .await
-        .map_err(|_| format!("timed out after {} s", limit.as_secs()))?
-        .map_err(|e| format!("failed to execute shell: {}", e))?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    // Its own process group, so a timeout can kill what the shell started.
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command.spawn().map_err(failed)?;
+    let group = child.id();
+    let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
+        Ok(output) => output.map_err(failed)?,
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(group) = group {
+                // SAFETY: kill(2) on the group the shell leads; no memory is touched.
+                unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+            }
+            return Err(format!("timed out after {} s", limit.as_secs()));
+        }
+    };
 
     if output.status.success() {
         Ok(())
@@ -152,6 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_does_not_install_without_opt_in() {
+        let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker");
         let cmd = format!("touch {}", marker.display());
@@ -169,6 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_installs_on_opt_in() {
+        let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker");
         let cmd = format!("touch {}", marker.display());
@@ -184,6 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_on_opt_in_succeeds_when_the_binary_appears() {
+        let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("server");
         let config = ServerConfig::new(binary.display().to_string(), vec![]);
@@ -195,6 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_reports_a_failing_install_command() {
+        let _path = crate::test_path::lock_path();
         for (cmd, stdout) in [("echo out; echo err >&2; exit 3", true), ("exit 4", false)] {
             let err = ensure_installed_with(&missing(), "test", Some(cmd.to_string()), true)
                 .await
@@ -209,6 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_installed_without_install_command_names_the_homepage() {
+        let _path = crate::test_path::lock_path();
         let config = missing();
         for allow_install in [false, true] {
             let err = ensure_installed(&config, "test", allow_install)
@@ -234,27 +260,55 @@ mod tests {
     }
 
     #[test]
-    fn opt_in_is_exactly_one() {
-        assert!(opted_in(Some("1".into())));
-        for value in [None, Some("0".into()), Some("".into()), Some("yes".into())] {
-            assert!(!opted_in(value.clone()), "{value:?}");
+    fn opt_in_accepts_the_boolish_values() {
+        for value in ["1", "true", "TRUE", "yes", "On", "y", "t"] {
+            assert!(opted_in(Some(value.into())), "{value}");
         }
-        assert_eq!(
-            install_opted_in(),
-            std::env::var(INSTALL_ENV).as_deref() == Ok("1")
-        );
+        for value in ["0", "false", "no", "off", "n", "f", "", "2"] {
+            assert!(!opted_in(Some(value.into())), "{value}");
+        }
+        assert!(!opted_in(None));
+        assert_eq!(install_opted_in(), opted_in(std::env::var_os(INSTALL_ENV)));
     }
 
     #[tokio::test]
     async fn install_command_reports_a_shell_that_does_not_start() {
+        let _path = crate::test_path::lock_path();
         let err = run_install_command("/nonexistent/sh", "true", Duration::from_secs(5))
             .await
             .unwrap_err();
         assert!(err.contains("failed to execute shell"), "{err}");
     }
 
+    /// A timeout kills what the install command started, not only the shell.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_the_commands_children() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let cmd = format!("sleep 60 & echo $! > {}; wait", pid_file.display());
+        let err = run_install_command("sh", &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // The killed `sleep` is gone once its new parent reaps it.
+        let survived = (0..40).all(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: signal 0 only checks that the process exists.
+            unsafe { libc::kill(pid, 0) == 0 }
+        });
+        assert!(!survived, "`sleep 60` (pid {pid}) outlived the timeout");
+    }
+
     #[tokio::test]
     async fn install_command_times_out() {
+        let _path = crate::test_path::lock_path();
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(2),
@@ -269,6 +323,7 @@ mod tests {
     }
     #[test]
     fn test_is_installed_known_binary() {
+        let _path = crate::test_path::lock_path();
         // `sh` should always be available on Unix
         let _config = ServerConfig::new("sh".to_string(), vec![]);
         // We can't use is_installed here because `sh` isn't in ALLOWED_COMMANDS,
@@ -278,6 +333,7 @@ mod tests {
 
     #[test]
     fn test_is_installed_missing_binary() {
+        let _path = crate::test_path::lock_path();
         let config = ServerConfig {
             command: "definitely-not-a-real-binary-xyzzy".to_string(),
             args: vec![],
@@ -291,6 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_installed_already_present() {
+        let _path = crate::test_path::lock_path();
         // rust-analyzer is likely installed in the dev environment
         // If not, this test will exercise the install path — both are valid.
         // We test with a binary we KNOW exists: "sh"
