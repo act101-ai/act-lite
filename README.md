@@ -138,7 +138,9 @@ element name is a `class` and an attribute name a `field`. There are no
 build-system semantics: a Maven `<dependency>` or an MSBuild
 `<PackageReference>` is an element like any other, no dependency is reported,
 `${…}` properties are not expanded, parent POMs, imports and includes are not
-followed, and namespace prefixes are not resolved. act-lite reads UTF-8 only:
+followed, and namespace prefixes are not resolved. Text content, comments,
+processing instructions, the XML declaration, `DOCTYPE` and internal DTD
+declarations are not reported. act-lite reads UTF-8 only:
 a binary property list (`bplist00`) or a UTF-16 file named `.plist` or `.xml`
 is refused by `query` with the not-UTF-8 error, and `repo-outline --symbols`
 lists it without symbols.
@@ -156,9 +158,10 @@ variables and selections.
 **Protocol Buffers.** Messages, enums, services and `rpc` methods are
 declarations; fields and enum values are symbols; `import` and `package` are
 skeleton entries. Not reported: `syntax`, `option`, `reserved`, and `extend`
-blocks with the fields in them. A qualified type such as `shop.v1.Order` is
-matched one identifier at a time, so `Order` there is a reference to `Order`,
-and a `package` name has no references.
+blocks with the fields in them. A proto2 `group` is reported as a `struct`
+(its message) and a `field` (the group name as written). A qualified type such
+as `shop.v1.Order` is matched one identifier at a time, so `Order` there is a
+reference to `Order`, and a `package` name has no references.
 
 **Make.** Targets are functions and variable assignments are variables;
 GNU special targets (`.PHONY`) and target-specific assignments are not
@@ -179,8 +182,10 @@ case-sensitive: `ADD_TOOL(cli)` is not a reference to `function(add_tool …)`.
 navigation results carry `parse_error: true`, and an analyzer lists the file
 in `parse_failures` and says `complete: false`. `comptime` is not evaluated:
 a type built by a call (`const T = List(u8)`) is a `constant`, not a `struct`.
-`usingnamespace` is not modeled. Parameters are not declarations, and
-`test name { … }` (a doctest) is a use of `name`, not a declaration.
+`usingnamespace` is not modeled. Parameters are not declarations.
+`test "name" { … }` is a `function` in `skeleton` and `symbols`, named by the
+string content (`test "point len"` is named `point len`); `test name { … }` (a
+doctest) is a use of `name`, not a declaration.
 
 **R.** A function is an assignment whose value is a `function` or `\(…)`
 definition. Not modeled: `function(…) -> name`, assignments inside function

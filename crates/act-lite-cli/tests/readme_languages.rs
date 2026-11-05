@@ -852,7 +852,7 @@ fn proto2_groups_xml_prologs_and_zig_test_names_are_stated_and_hold() {
         ),
         (
             "a.xml",
-            "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ELEMENT r ANY>]>\n<!-- c -->\n<?pi x?>\n<r a=\"1\">text</r>\n",
+            "<?xml version=\"1.0\"?>\n<?pi x?>\n<!DOCTYPE r [ <!ELEMENT r ANY> ]>\n<!-- c -->\n<r a=\"1\">text<!-- d --></r>\n",
         ),
         (
             "t.zig",
