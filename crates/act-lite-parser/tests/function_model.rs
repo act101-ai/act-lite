@@ -48,7 +48,6 @@ fn supported() -> Vec<Grammar> {
         .collect()
 }
 
-// (1) Every named node kind the table names exists in its grammar.
 #[test]
 fn every_table_node_kind_exists_in_its_grammar() {
     let mut missing = Vec::new();
@@ -78,7 +77,7 @@ fn twenty_languages_are_supported() {
     }
 }
 
-// (2) The over and under fixtures of every supported language.
+// The over and under fixtures of every supported language.
 #[derive(Debug, Deserialize, PartialEq)]
 struct Expected {
     name: Option<String>,
@@ -164,9 +163,8 @@ fn over_and_under_fixtures_match_their_expected_values() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-// (3) Acceptance A2–A5 and A9.
 #[test]
-fn a2_else_if_chain_typescript() {
+fn else_if_chain_nests_once_and_counts_each_branch() {
     let fs = functions(
         Grammar::TypeScript,
         "function g(a, b, c, d, e, f) {\n    if (a) {} else if (b) {} else if (c) {} else if (d) {} else if (e) {} else if (f) {}\n}\n",
@@ -177,7 +175,7 @@ fn a2_else_if_chain_typescript() {
 }
 
 #[test]
-fn a3_nested_function_isolation_javascript() {
+fn nested_function_metrics_are_not_the_outer_functions() {
     let fs = functions(
         Grammar::JavaScript,
         "function outer() { const f = () => { if (a) { if (b) { if (c) { if (d) { if (e) {} } } } } }; return f; }",
@@ -190,7 +188,7 @@ fn a3_nested_function_isolation_javascript() {
 }
 
 #[test]
-fn a4_complexity_count_python() {
+fn python_complexity_counts_each_decision() {
     let source = r#"def classify(n, items):
     if n < 0 and n > -10:
         return "neg"
@@ -212,7 +210,7 @@ fn a4_complexity_count_python() {
 }
 
 #[test]
-fn a5_parameters_by_family() {
+fn parameters_exclude_receivers_and_count_grouped_names() {
     let go = functions(
         Grammar::Go,
         "package p\nfunc (r *R) f(a, b, c int, d string, e ...int) {}\nfunc g(a, b, c, d, e, f int) {}\n",
@@ -236,7 +234,7 @@ fn a5_parameters_by_family() {
 }
 
 #[test]
-fn a9_dart_top_level_getter() {
+fn dart_top_level_getter_spans_signature_and_body() {
     let fs = functions(Grammar::Dart, "int get top {\n  return 1;\n}\n");
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].name.as_deref(), Some("top"));
@@ -245,7 +243,7 @@ fn a9_dart_top_level_getter() {
 }
 
 #[test]
-fn a9_swift_shorthand_computed_property() {
+fn swift_shorthand_computed_property_is_unnamed() {
     let fs = functions(
         Grammar::Swift,
         "struct S {\n    var v: Int {\n        return 1\n    }\n}\n",
@@ -256,7 +254,7 @@ fn a9_swift_shorthand_computed_property() {
 }
 
 #[test]
-fn a9_csharp_expression_bodied_property_and_indexer() {
+fn csharp_expression_bodied_property_and_indexer_are_functions() {
     let fs = functions(
         Grammar::CSharp,
         "class C {\n    int P => 1;\n    int this[int i] => i;\n    int Q { get; set; }\n}\n",
@@ -269,7 +267,7 @@ fn a9_csharp_expression_bodied_property_and_indexer() {
 }
 
 #[test]
-fn a9_python_static_methods() {
+fn python_static_method_excludes_a_first_self() {
     let fs = functions(
         Grammar::Python,
         "class C:\n    @staticmethod\n    def s(self, a):\n        pass\n\n    @staticmethod\n    def t(x, a):\n        pass\n",
@@ -280,7 +278,7 @@ fn a9_python_static_methods() {
 }
 
 #[test]
-fn a9_ruby_stabby_lambda_is_one_function() {
+fn ruby_stabby_lambda_is_one_function() {
     let fs = functions(Grammar::Ruby, "l = ->(x) { x + 1 }\n");
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].name, None);
@@ -289,7 +287,7 @@ fn a9_ruby_stabby_lambda_is_one_function() {
 }
 
 #[test]
-fn a9_elixir_keyword_def() {
+fn elixir_keyword_def_is_named_by_its_head() {
     let fs = functions(Grammar::Elixir, "defmodule M do\n  def f(x), do: x\nend\n");
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].name.as_deref(), Some("f"));
@@ -298,7 +296,7 @@ fn a9_elixir_keyword_def() {
 }
 
 #[test]
-fn a9_rust_generic_function() {
+fn rust_generic_function_is_named() {
     let fs = functions(Grammar::Rust, "fn foo<T: Clone>(x: T) -> T {\n    x\n}\n");
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].name.as_deref(), Some("foo"));
@@ -306,7 +304,7 @@ fn a9_rust_generic_function() {
 }
 
 #[test]
-fn a9_go_generic_function() {
+fn go_generic_function_is_named() {
     let fs = functions(
         Grammar::Go,
         "package p\n\nfunc Map[T any](x T) T {\n\treturn x\n}\n",
@@ -318,7 +316,7 @@ fn a9_go_generic_function() {
 }
 
 #[test]
-fn a9_java_instance_initializer() {
+fn java_instance_initializer_is_unnamed() {
     let fs = functions(
         Grammar::Java,
         "class A {\n    int x;\n    {\n        x = 1;\n    }\n}\n",
@@ -329,7 +327,6 @@ fn a9_java_instance_initializer() {
     assert_eq!(fs[0].metrics, metrics(3, 0, 1, Some(0)));
 }
 
-// (4) An else-if adds one decision and no nesting level.
 #[test]
 fn else_if_adds_a_decision_and_no_nesting() {
     let cases: [(Grammar, &str); 25] = [
@@ -420,7 +417,6 @@ fn else_if_adds_a_decision_and_no_nesting() {
     }
 }
 
-// (5) The lines rules.
 #[test]
 fn lines_skip_docstrings_blank_and_comment_lines() {
     let source = "def f():\n    \"\"\"Doc\n    string.\"\"\"\n\n    # comment\n    x = \"\"\"a\nb\nc\"\"\"\n    return x\n";
@@ -449,7 +445,6 @@ fn lines_skip_comment_only_lines_in_c_like_code() {
     assert_eq!(fs[0].metrics.lines, 3);
 }
 
-// (6) Declarations without a body, and data-format "functions", are not functions.
 #[test]
 fn declarations_without_a_body_are_not_functions() {
     assert!(functions(Grammar::C, "int h(int a);\n").is_empty());
@@ -466,7 +461,6 @@ fn declarations_without_a_body_are_not_functions() {
     );
 }
 
-// (7) The 10 Data formats are not supported and have no functions.
 #[test]
 fn data_formats_are_not_supported() {
     let samples: [(Grammar, &str); 10] = [
@@ -488,7 +482,6 @@ fn data_formats_are_not_supported() {
     }
 }
 
-// (8) The comment and identifier-token rules.
 #[test]
 fn comment_kinds() {
     for kind in [
