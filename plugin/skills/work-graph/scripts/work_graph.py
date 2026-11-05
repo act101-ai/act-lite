@@ -34,9 +34,9 @@ from pathlib import Path
 ID_RE = re.compile(r"^[A-Z]+-?\d+$")
 LEDGER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STATE_RE = re.compile(r"^(TODO|PLANNED|IN-PROGRESS|DONE|BLOCKED\(.+\)|DROPPED\(.+\))$")
-MODELS = ("haiku", "sonnet", "opus")
+TIERS = ("light", "standard", "strong")
 NONE = "—"
-NODE_HEADER = ("ID", "Node", "Depends", "State", "Model", "Refs")
+NODE_HEADER = ("ID", "Node", "Depends", "State", "Tier", "Refs")
 LOG_HEADER = ("Date", "Event")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SETTING_RE = re.compile(r"^\*\*([A-Za-z ]+):\*\*\s*(.*)$")
@@ -422,8 +422,8 @@ def check(graph: Graph) -> list[str]:
         seen.add(r.id)
         if not STATE_RE.match(r.state):
             defects.append(f"{r.id}: state {r.state} is not TODO, PLANNED, IN-PROGRESS, DONE, BLOCKED(reason) or DROPPED(evidence)")
-        if r.model not in MODELS and not (r.model == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
-            defects.append(f"{r.id}: model {r.model} is not haiku, sonnet or opus")
+        if r.model not in TIERS and not (r.model == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
+            defects.append(f"{r.id}: tier {r.model} is not light, standard or strong")
         if len(r.line) > ROW_CAP and not graph.ledger:
             defects.append(f"{r.id}: row exceeds {ROW_CAP} characters ({len(r.line)}); move detail to nodes/{r.id}.md")
         for dep in r.depends:

@@ -118,8 +118,8 @@ Each stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session: `opus` for the graph stage and for a node whose Model is `opus`,
-   else `sonnet`. Tell it to find defects, not to approve. Give it the
+   session: a `strong` reviewer for the graph stage and for a `strong` node,
+   else `standard`. Tell it to find defects, not to approve. Give it the
    artifact, the spec section it answers, the contracts it touches, and the
    review focus. It reports each finding with its location, the failure it
    causes, and the evidence.
@@ -167,13 +167,13 @@ never edit it.
    - Acceptance passes and the stage passes: keep (§5.5).
    - Otherwise: start a new round on the same branch, driven by the failure
      output and the confirmed findings. From the second round, set the
-     node's Model to `opus`.
+     node's Tier to `strong`.
    - After three failed rounds: discard the node's branch and checkout, set
      `BLOCKED(<diagnosis>)`, and re-plan the node (split it, change its scope
      or its approach) before any further attempt. When the new plan is
      committed, set the node `PLANNED`; the round count starts again.
 
-### 5.3 Implementers, reviewers and models
+### 5.3 Implementers, reviewers and tiers
 
 When the session can delegate, each running node gets one fresh implementer
 in its checkout, and its verification stage gets one fresh reviewer. Each
@@ -181,15 +181,15 @@ handoff carries the node file, the graph header, the contracts the node
 touches, and an output contract: status, commits, the Acceptance output, and
 any finding. Otherwise the controller runs the nodes itself, one at a time.
 
-A node's Model was chosen at creation. A node this skill creates (§5.4) or
-re-plans gets its Model by the same criteria: the work's complexity, nuance
+A node's Tier was chosen at creation. A node this skill creates (§5.4) or
+re-plans gets its Tier by the same criteria: the work's complexity, nuance
 and technicality.
 
-| Model | Work |
+| Tier | Work |
 |---|---|
-| `haiku` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `sonnet` | Ordinary implementation from a complete plan; node reviews. |
-| `opus` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `light` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
+| `standard` | Ordinary implementation from a complete plan; node reviews. |
+| `strong` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
 
 ### 5.4 Found issues
 
