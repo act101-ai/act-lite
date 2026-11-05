@@ -200,7 +200,11 @@ in this order:
 
 1. `unsupported`: `total` is 0, `complete` is `true`, and
    `coverage.analyzed_files` is 0. Every recognized file in scope is in a
-   language the analyzer does not support.
+   language the analyzer does not support, and no file in a supported
+   language was removed by a file-level step (`--include` or `--exclude`, or
+   exclusion as a test file, a generated file name or a generated header).
+   When such a file was removed, the request is the empty-scope error, which
+   names the include options. Example: `analyze patterns Cargo.toml`.
 2. `findings`: `total` is 1 or more, whether `complete` is `true` or `false`.
    With `complete: false`, more findings can exist in the missing evidence.
 3. `incomplete`: `total` is 0 and `complete` is `false`.
@@ -258,8 +262,10 @@ result, give paths, `--include`, `--exclude` or a smaller `--limit`.
 **Evidence.** `evidence.sources` lists every instrument that produced part of
 the result: `"tree-sitter"`, or `"lsp:<binary>"` (for example
 `"lsp:rust-analyzer"`). It is sorted, has no duplicates, and is `[]` when no
-file was analyzed. When it has more than one value, every finding carries
-`"source"` with one of them. `evidence.language_servers` has one
+file was analyzed. When it has more than one value, every finding and every
+analyzer-specific relationship object (for example a dependency edge)
+carries `"source"` with one value from the list. With a single source, items
+omit `source`. `evidence.language_servers` has one
 `{ "language", "server", "state", "reason"? }` entry per language whose server
 the analyzer can use; `state` is `used`, `disabled`, `not_installed` or
 `failed` (with `reason`). An analyzer that uses no language server has `[]`.
