@@ -369,7 +369,9 @@ impl ResolveCx<'_> {
     /// The source file `rel`, read and parsed with its test regions blanked
     /// as an analyzed read does. The parse lasts while the current file's
     /// relationships are resolved; a later file reads it again. A failure
-    /// lasts the build; the `Err` is the reason `<rel> could not be read`.
+    /// lasts the build; the `Err` is the reason `<rel> could not be read`,
+    /// or `<rel>: excluded as tests` for a whole-file test read while tests
+    /// are excluded.
     pub fn source(&mut self, rel: &str) -> Result<&Parsed, String> {
         if !self.state.sources.contains_key(rel) {
             if let Some(Err(reason)) = self.state.reads.get(rel) {
@@ -381,8 +383,11 @@ impl ResolveCx<'_> {
                     self.state.reads.insert(rel.to_string(), removed);
                     self.state.sources.insert(rel.to_string(), parsed);
                 }
-                Err(_) => {
-                    let reason = format!("{rel} could not be read");
+                Err(err) => {
+                    let reason = match err {
+                        SupportError::TestFile(_) => err.to_string(),
+                        _ => format!("{rel} could not be read"),
+                    };
                     self.state
                         .reads
                         .insert(rel.to_string(), Err(reason.clone()));
