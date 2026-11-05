@@ -631,6 +631,30 @@ mod tests {
         assert_eq!(outcome.stdout, "***\n");
     }
 
+    fn rss_kib() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().parse().unwrap()
+    }
+
+    #[test]
+    fn run_retains_no_output() {
+        let before = rss_kib();
+        let mut m = Merged::new(ClosableSink::new(io::sink()), ClosableSink::new(io::sink()));
+        let chunk = [b'x'; 8192];
+        for _ in 0..(256 * 1024 * 1024 / chunk.len()) {
+            for stream in [Stream::Stdout, Stream::Stderr] {
+                m.arrive(stream, &chunk, &[]).unwrap();
+                m.release(stream, &chunk, &[]).unwrap();
+            }
+        }
+        let growth = rss_kib().saturating_sub(before);
+        assert!(growth < 32768, "resident size grew by {growth} KiB");
+        drop(m);
+    }
+
     fn both() -> Merged<Vec<u8>, Vec<u8>> {
         Merged::new(ClosableSink::new(Vec::new()), ClosableSink::new(Vec::new()))
     }
