@@ -998,6 +998,7 @@ mod tests {
             files: vec![Parsed {
                 rel: "a.py".to_string(),
                 source,
+                removed: Vec::new(),
             }],
             cancel: cancel.clone(),
         };

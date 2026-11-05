@@ -1,12 +1,12 @@
 //! The analysis runner: discovery, reading one file at a time, the analyzer
 //! and the result envelope.
 
-use super::discovery::{Includes, Scope, discover};
+use super::discovery::{Discovered, Includes, Scope, discover};
 use super::envelope::{
     AnalyzeError, Coverage, EmptyScope, Envelope, Evidence, Excluded, ExcludedKind, Exclusion,
     Finding, Incomplete, LanguageCoverage, Limit, LimitHit, Unresolved,
 };
-use super::read::{FileSource, Parsed, Reader};
+use super::read::{FileSource, Parsed, ReadOutcome, Reader, SupportReader};
 use act_lite_parser::Grammar;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,30 @@ pub trait Analyzer: Send + Sync {
         cancel: &CancellationToken,
     ) -> Result<Analysis<Self::Finding>, AnalyzeError>;
 
+    /// As [`Analyzer::analyze`], with the run's context: the workspace root,
+    /// what discovery found and a reader for files outside the analyzed set.
+    /// `run` calls this method; by default it calls `analyze`.
+    fn analyze_in(
+        &self,
+        files: &mut dyn FileSource,
+        _ctx: &RunContext,
+        cancel: &CancellationToken,
+    ) -> Result<Analysis<Self::Finding>, AnalyzeError> {
+        self.analyze(files, cancel)
+    }
+
+    /// Called once every file has been read, after the empty-scope check, so
+    /// an error it returns never hides the empty-scope error. It can change
+    /// the findings and `details`. By default it does nothing.
+    fn after_scope(
+        &self,
+        _ctx: &RunContext,
+        _read: &ReadOutcome,
+        _analysis: &mut Analysis<Self::Finding>,
+    ) -> Result<(), AnalyzeError> {
+        Ok(())
+    }
+
     /// Completes `details` with what only the whole scope shows, such as the
     /// languages of files the reader skipped. `languages` is the result's
     /// `coverage.languages`. Called once, when `details` is present.
@@ -48,6 +72,13 @@ pub struct Analysis<F> {
     pub unresolved: Vec<Unresolved>,
     pub limits_hit: Vec<LimitHit>,
     pub details: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// What an analyzer can read besides the files it is given.
+pub struct RunContext {
+    pub root: PathBuf,
+    pub discovered: Discovered,
+    pub support: SupportReader,
 }
 
 /// The shared parameters of an analysis, checked.
@@ -98,9 +129,13 @@ fn run_named<A: Analyzer>(
         return Err(AnalyzeError::Cancelled);
     }
     let supported = |g: Grammar| analyzer.supports(g);
-    let discovered = discover(&request.root, &request.scope, &supported, cancel)?;
+    let ctx = RunContext {
+        root: request.root.clone(),
+        discovered: discover(&request.root, &request.scope, &supported, cancel)?,
+        support: SupportReader::new(&request.root, request.scope.includes.tests, cancel),
+    };
     let mut reader = Reader::new(
-        &discovered.files,
+        &ctx.discovered.files,
         &supported,
         request.scope.includes.tests,
         cancel,
@@ -109,7 +144,7 @@ fn run_named<A: Analyzer>(
         inner: &mut reader,
         files: 0,
     };
-    let mut analysis = analyzer.analyze(&mut counted, cancel)?;
+    let mut analysis = analyzer.analyze_in(&mut counted, &ctx, cancel)?;
     let analyzed_files = counted.files;
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
@@ -133,6 +168,7 @@ fn run_named<A: Analyzer>(
         .map(|e| e.path.as_str())
         .collect();
     let mut files: HashMap<Grammar, u64> = HashMap::new();
+    let discovered = &ctx.discovered;
     let in_scope = discovered
         .files
         .iter()
@@ -157,12 +193,31 @@ fn run_named<A: Analyzer>(
         analyzer.finish_details(details, &coverage.languages);
     }
 
-    let tests = read.test_exclusions.into_iter().map(|entry| Exclusion {
+    let tests = read.test_exclusions.iter().map(|entry| Exclusion {
         kind: ExcludedKind::Tests,
-        entry,
+        entry: entry.clone(),
     });
-    let excluded = Excluded::new(discovered.excluded.into_iter().chain(tests).collect());
-    let skipped = discovered
+    let excluded = Excluded::new(discovered.excluded.iter().cloned().chain(tests).collect());
+    let complete = discovered.skipped.is_empty()
+        && read.skipped.is_empty()
+        && read.parse_failures.is_empty()
+        && analysis.unresolved.is_empty()
+        && analysis.limits_hit.is_empty();
+
+    if no_supported_file && complete && (no_recognized_file || removed_supported) {
+        let counts = &excluded.counts;
+        return Err(AnalyzeError::EmptyScope(EmptyScope {
+            tests: counts.tests,
+            generated: counts.generated,
+            vendored: counts.vendored,
+            ignored: counts.ignored,
+            filtered: discovered.filtered,
+            unrecognized: coverage.unrecognized_files,
+        }));
+    }
+    analyzer.after_scope(&ctx, &read, &mut analysis)?;
+    let skipped = ctx
+        .discovered
         .skipped
         .into_iter()
         .chain(read.skipped)
@@ -174,18 +229,6 @@ fn run_named<A: Analyzer>(
         analysis.unresolved,
         analysis.limits_hit,
     );
-
-    if no_supported_file && incomplete.is_complete() && (no_recognized_file || removed_supported) {
-        let counts = &excluded.counts;
-        return Err(AnalyzeError::EmptyScope(EmptyScope {
-            tests: counts.tests,
-            generated: counts.generated,
-            vendored: counts.vendored,
-            ignored: counts.ignored,
-            filtered: discovered.filtered,
-            unrecognized: coverage.unrecognized_files,
-        }));
-    }
     let sources = if analyzed_files >= 1 {
         vec!["tree-sitter".to_string()]
     } else {

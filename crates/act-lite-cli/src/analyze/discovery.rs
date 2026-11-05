@@ -157,6 +157,79 @@ pub fn discover(
     Ok(out)
 }
 
+/// Every regular file of the workspace outside the directories that the
+/// discovery steps before the globs prune with the default includes (`.git`,
+/// ignored, vendored and generated directories), and outside the ignored
+/// files: workspace-relative, in byte order. Symlinks are not followed.
+pub fn walk_workspace(
+    root: &Path,
+    cancel: &CancellationToken,
+) -> Result<Vec<String>, AnalyzeError> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        rules: &IgnoreRules,
+        cancel: &CancellationToken,
+        out: &mut Vec<String>,
+    ) -> Result<(), AnalyzeError> {
+        if cancel.is_cancelled() {
+            return Err(AnalyzeError::Cancelled);
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if !is_pruned_dir(&path, rules) {
+                    walk(root, &path, &rules.child(&path), cancel, out)?;
+                }
+            } else if file_type.is_file()
+                && path.file_name() != Some(OsStr::new(".git"))
+                && !rules.is_ignored(&path, false)
+            {
+                out.push(rel_path(root, &path, false)?);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(root, root, &IgnoreRules::for_root(root), cancel, &mut out)?;
+    out.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    Ok(out)
+}
+
+/// Whether `dir` is a directory that the steps before the globs prune with
+/// the default includes, under the ignore rules of its parent.
+fn is_pruned_dir(dir: &Path, rules: &IgnoreRules) -> bool {
+    dir.file_name() == Some(OsStr::new(".git"))
+        || rules.is_ignored(dir, true)
+        || is_vendored_dir(dir)
+        || is_generated_dir(dir)
+}
+
+/// Whether the workspace-relative `rel` lies below a directory that
+/// [`walk_workspace`] prunes.
+pub(crate) fn in_pruned_dir(root: &Path, rel: &Path) -> bool {
+    let mut rules = IgnoreRules::for_root(root);
+    let mut dir = root.to_path_buf();
+    let parts: Vec<_> = rel.components().collect();
+    let Some((_, ancestors)) = parts.split_last() else {
+        return false;
+    };
+    for part in ancestors {
+        dir.push(part);
+        if is_pruned_dir(&dir, &rules) {
+            return true;
+        }
+        rules = rules.child(&dir);
+    }
+    false
+}
+
 /// The path as it is on disk: two names that differ only in invalid UTF-8
 /// have the same written form and different bytes.
 fn bytes(path: &Path) -> &[u8] {

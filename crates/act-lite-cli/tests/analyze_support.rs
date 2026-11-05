@@ -6,8 +6,7 @@ use act_lite_cli::analyze::discovery::{Candidate, Includes, discover, walk_works
 use act_lite_cli::analyze::envelope::{AnalyzeError, Finding, Location};
 use act_lite_cli::analyze::focus::{FocusSet, check_focus, focus_files};
 use act_lite_cli::analyze::read::{
-    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader,
-    read_file,
+    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader, read_file,
 };
 use act_lite_cli::analyze::run::{Analysis, Analyzer, Request, RunContext, run};
 use act_lite_parser::Grammar;
@@ -85,24 +84,49 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
     let parsed = support.source("other/x.rs").unwrap();
     assert_eq!(parsed.rel, "other/x.rs");
     assert_eq!(parsed.removed.len(), 1, "blanked as an analyzed read is");
-    assert!(matches!(support.source("big.rs"), Err(SupportError::TooLarge(_))));
-    assert!(matches!(support.source("latin.rs"), Err(SupportError::NotUtf8(_))));
-    assert!(matches!(support.source("../outside.rs"), Err(SupportError::Refused(_))));
+    assert!(matches!(
+        support.source("big.rs"),
+        Err(SupportError::TooLarge(_))
+    ));
+    assert!(matches!(
+        support.source("latin.rs"),
+        Err(SupportError::NotUtf8(_))
+    ));
+    assert!(matches!(
+        support.source("../outside.rs"),
+        Err(SupportError::Refused(_))
+    ));
     #[cfg(unix)]
-    assert!(matches!(support.source("link.rs"), Err(SupportError::Refused(_))));
-    assert!(matches!(support.source("nope.rs"), Err(SupportError::NotFound(_))));
+    assert!(matches!(
+        support.source("link.rs"),
+        Err(SupportError::Refused(_))
+    ));
+    assert!(matches!(
+        support.source("nope.rs"),
+        Err(SupportError::NotFound(_))
+    ));
     assert_eq!(support.text("other/x.rs").unwrap(), WITH_TEST_MOD);
 
     let cancelled = token();
     cancelled.cancel();
     let support = SupportReader::new(&root, false, &cancelled);
-    assert!(matches!(support.source("other/x.rs"), Err(SupportError::Cancelled)));
-    assert!(matches!(support.text("other/x.rs"), Err(SupportError::Cancelled)));
-    assert!(matches!(support.list_dir("other"), Err(SupportError::Cancelled)));
+    assert!(matches!(
+        support.source("other/x.rs"),
+        Err(SupportError::Cancelled)
+    ));
+    assert!(matches!(
+        support.text("other/x.rs"),
+        Err(SupportError::Cancelled)
+    ));
+    assert!(matches!(
+        support.list_dir("other"),
+        Err(SupportError::Cancelled)
+    ));
 
     let error = SupportReader::new(&root, false, &token())
         .source("big.rs")
-        .unwrap_err()
+        .err()
+        .unwrap()
         .to_string();
     assert!(error.starts_with("big.rs: "), "{error}");
 }
@@ -154,7 +178,10 @@ fn list_dir_gives_names_byte_for_byte() {
     let pruned = support.list_dir("node_modules").unwrap();
     assert_eq!(pruned[0].name, "p");
     assert_eq!(pruned[0].kind, EntryKind::Dir);
-    assert!(matches!(support.list_dir(".."), Err(SupportError::Refused(_))));
+    assert!(matches!(
+        support.list_dir(".."),
+        Err(SupportError::Refused(_))
+    ));
 }
 
 #[test]
@@ -180,14 +207,25 @@ fn focus_paths_are_checked_with_the_clones_texts() {
     let missing = check_focus(&root, &req.scope, &["nope.py".to_string()])
         .unwrap_err()
         .to_string();
-    assert!(missing.starts_with("The path 'nope.py' does not exist."), "{missing}");
+    assert!(
+        missing.starts_with("The path 'nope.py' does not exist."),
+        "{missing}"
+    );
     assert_eq!(
         check_focus(&root, &req.scope, &["../x.py".to_string()])
             .unwrap_err()
             .to_string(),
         "path must be inside the workspace root: ../x.py"
     );
-    let sub = Request::new(&root, &["sub".to_string()], &[], &[], Includes::default(), 100).unwrap();
+    let sub = Request::new(
+        &root,
+        &["sub".to_string()],
+        &[],
+        &[],
+        Includes::default(),
+        100,
+    )
+    .unwrap();
     assert_eq!(
         check_focus(&root, &sub.scope, &["a.py".to_string()])
             .unwrap_err()
@@ -228,7 +266,10 @@ fn focus_files_follow_discovery_pruning() {
     assert_eq!(
         reasons(&set),
         BTreeMap::from([
-            ("src/a.test.ts".to_string(), Some("excluded as tests".to_string())),
+            (
+                "src/a.test.ts".to_string(),
+                Some("excluded as tests".to_string())
+            ),
             ("src/a.ts".to_string(), None),
             (
                 "src/style.css".to_string(),
@@ -236,7 +277,13 @@ fn focus_files_follow_discovery_pruning() {
             ),
         ])
     );
-    assert!(set.files.iter().find(|f| f.rel == "src/a.ts").unwrap().analyzed);
+    assert!(
+        set.files
+            .iter()
+            .find(|f| f.rel == "src/a.ts")
+            .unwrap()
+            .analyzed
+    );
     assert!(set.paths_not_analyzed.is_empty());
 
     let set = focus_of(ws.path(), &["node_modules/p/i.js"], &[]);
@@ -273,7 +320,10 @@ fn every_focus_reason_occurs() {
 
     let req = request(ws.path(), &["skip.ts"]);
     let discovered = discover(ws.path(), &req.scope, &is_js_or_ts, &token()).unwrap();
-    let paths = check_focus(ws.path(), &req.scope, &[".".to_string()]).unwrap();
+    // The pruned directories are not walked below `.`; their files are focus
+    // files only when named.
+    let named = [".", "vendor/v.js", "ign/i.js"].map(String::from);
+    let paths = check_focus(ws.path(), &req.scope, &named).unwrap();
     let mut set = focus_files(ws.path(), &paths, &discovered, &is_js_or_ts, &token()).unwrap();
     let mut reader = Reader::new(&discovered.files, &is_js_or_ts, false, &token());
     while reader.next_file().unwrap().is_some() {}
@@ -290,10 +340,7 @@ fn every_focus_reason_occurs() {
         "language not supported: CSS",
         "skipped: size_limit",
     ] {
-        assert!(
-            got.iter().any(|r| r.as_str() == want),
-            "{want} in {got:?}"
-        );
+        assert!(got.iter().any(|r| r.as_str() == want), "{want} in {got:?}");
     }
     assert!(set.files.iter().find(|f| f.rel == "a.ts").unwrap().analyzed);
 }
@@ -318,9 +365,15 @@ fn settle_marks_what_the_read_left_out() {
     assert_eq!(
         reasons(&set),
         BTreeMap::from([
-            ("src/big.rs".to_string(), Some("skipped: size_limit".to_string())),
+            (
+                "src/big.rs".to_string(),
+                Some("skipped: size_limit".to_string())
+            ),
             ("src/ok.rs".to_string(), None),
-            ("src/t.rs".to_string(), Some("excluded as tests".to_string())),
+            (
+                "src/t.rs".to_string(),
+                Some("excluded as tests".to_string())
+            ),
         ])
     );
 }
