@@ -46,8 +46,18 @@ impl Session {
     /// Starts the server and performs the `initialize` handshake; returns the
     /// session and the `initialize` reply.
     fn start(setup: &Setup, keep: Option<tempfile::TempDir>) -> (Session, Value) {
+        Self::start_with(setup, keep, &[])
+    }
+
+    /// Like [`start`](Self::start), with extra environment variables.
+    fn start_with(
+        setup: &Setup,
+        keep: Option<tempfile::TempDir>,
+        envs: &[(&str, &str)],
+    ) -> (Session, Value) {
         let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("act-lite"));
         cmd.current_dir(&setup.cwd).env("PATH", &setup.path);
+        cmd.envs(envs.iter().copied());
         if !setup.lsp {
             cmd.arg("--disable-lsp");
         }
@@ -1558,6 +1568,129 @@ fn callers_without_server_names_the_binary() {
     );
     assert!(message.contains("pyright-langserver"), "{message}");
     assert_eq!(std::fs::read_dir(empty.path()).unwrap().count(), 0);
+}
+
+/// The binary, install command and homepage of the Python server.
+const PYRIGHT_HINT: [&str; 3] = [
+    "pyright-langserver",
+    "pip install pyright",
+    "https://github.com/microsoft/pyright",
+];
+
+/// The note on every name-level `references` result.
+const NAME_LEVEL_NOTE: &str = "Name-level baseline";
+
+/// Asserts the hint carries the name-level note and none of the install items.
+fn assert_note_without_install(hint: &str) {
+    assert!(hint.contains(NAME_LEVEL_NOTE), "{hint}");
+    for item in PYRIGHT_HINT {
+        assert!(!hint.contains(item), "{item}: {hint}");
+    }
+}
+
+/// The text blocks of a tool result after the first (the JSON), joined.
+fn hint_of(reply: &Value) -> String {
+    reply["result"]["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no content in {reply}"))
+        .iter()
+        .skip(1)
+        .filter_map(|block| block["text"].as_str())
+        .collect()
+}
+
+#[test]
+fn lsp_hint_callers_error_names_binary_install_command_and_homepage() {
+    let empty = tempfile::tempdir().unwrap();
+    let message = serve_with_path(empty.path()).err(
+        "callers",
+        json!({"symbol": "add", "file": "python/fixture.py"}),
+    );
+    for item in PYRIGHT_HINT {
+        assert!(message.contains(item), "{item}: {message}");
+    }
+}
+
+/// The first `references` fallback in the server's lifetime carries the
+/// install hint; the second carries only the name-level note.
+#[test]
+fn lsp_hint_references_once_per_server_lifetime() {
+    let empty = tempfile::tempdir().unwrap();
+    let mut s = serve_with_path(empty.path());
+    let args = json!({"symbol": "add", "file": "python/fixture.py"});
+    let first = hint_of(&s.call("references", args.clone()));
+    for item in PYRIGHT_HINT {
+        assert!(first.contains(item), "{item}: {first}");
+    }
+    assert_note_without_install(&hint_of(&s.call("references", args)));
+}
+
+#[test]
+fn lsp_hint_none_when_servers_disabled() {
+    let empty = tempfile::tempdir().unwrap();
+    let setup = Setup {
+        cwd: langs(),
+        workspace: Some(langs()),
+        path: empty.path().to_path_buf(),
+        lsp: true,
+    };
+    let (mut s, _) = Session::start_with(&setup, None, &[("ACT_LITE_DISABLE_LSP", "1")]);
+    let args = json!({"symbol": "add", "file": "python/fixture.py"});
+    for _ in 0..2 {
+        assert_note_without_install(&hint_of(&s.call("references", args.clone())));
+    }
+}
+
+/// A server with `ACT_LITE_INSTALL_LSP=1` and, on `PATH`, only an `sh` that
+/// records the command it was given and installs nothing.
+#[cfg(unix)]
+fn serve_with_recording_sh(dir: &Path) -> Session {
+    use std::os::unix::fs::PermissionsExt;
+    let sh = dir.join("sh");
+    std::fs::write(&sh, "#!/bin/sh\necho \"$2\" > \"${0%/*}/ran\"\n").unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let setup = Setup {
+        cwd: langs(),
+        workspace: Some(langs()),
+        path: dir.to_path_buf(),
+        lsp: true,
+    };
+    Session::start_with(&setup, None, &[("ACT_LITE_INSTALL_LSP", "1")]).0
+}
+
+/// With `ACT_LITE_INSTALL_LSP=1`, a query for a missing server runs its
+/// install command through `sh`.
+#[cfg(unix)]
+#[test]
+fn install_opt_in_runs_the_install_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = serve_with_recording_sh(dir.path());
+    s.err(
+        "callers",
+        json!({"symbol": "add", "file": "python/fixture.py"}),
+    );
+    let ran = std::fs::read_to_string(dir.path().join("ran")).expect("the install command ran");
+    assert_eq!(ran.trim(), "pip install pyright");
+}
+
+/// After the install command ran and the server is still missing, the hint
+/// says the command ran and why, instead of asking for the same command.
+#[cfg(unix)]
+#[test]
+fn lsp_hint_after_a_failed_install_says_the_command_ran() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = serve_with_recording_sh(dir.path());
+    let hint = hint_of(&s.call(
+        "references",
+        json!({"symbol": "add", "file": "python/fixture.py"}),
+    ));
+    assert!(
+        hint.contains("act-lite ran `pip install pyright`")
+            && hint.contains("`pyright-langserver` is still not available")
+            && hint.contains("not found on PATH after install"),
+        "{hint}"
+    );
+    assert!(!hint.contains("Install `pyright-langserver`"), "{hint}");
 }
 
 #[test]

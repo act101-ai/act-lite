@@ -10,13 +10,11 @@ use crate::Secrets;
 use crate::error::SecretsError;
 use crate::redact::MIN_REDACT_LEN;
 
-/// Result of running a command with secrets injected: exit code plus the
-/// already-redacted stdout/stderr that were streamed to the caller.
+/// Result of running a command with secrets injected: its exit code. The
+/// redacted output is streamed to the caller and not kept.
 #[derive(Debug)]
 pub struct RunOutcome {
     pub code: i32,
-    pub stdout: String,
-    pub stderr: String,
     /// True when this process's stdout was closed by its reader mid-run.
     pub stdout_closed: bool,
 }
@@ -101,6 +99,22 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 /// value contiguous in that merged order is redacted too, so a value split
 /// across stdout and stderr is redacted when they are merged.
 pub fn run_command(secrets: &Secrets, argv: &[String]) -> Result<RunOutcome, SecretsError> {
+    run_with(
+        secrets,
+        argv,
+        ClosableSink::new(io::stdout()),
+        ClosableSink::strict(io::stderr()),
+    )
+}
+
+/// `run_command` with the child's redacted stdout and stderr written to `out`
+/// and `err`.
+fn run_with<O: Write + Send, E: Write + Send>(
+    secrets: &Secrets,
+    argv: &[String],
+    out: ClosableSink<O>,
+    err: ClosableSink<E>,
+) -> Result<RunOutcome, SecretsError> {
     let (program, rest) = argv.split_first().ok_or(SecretsError::NoCommand)?;
 
     let mut child = Command::new(program)
@@ -121,10 +135,7 @@ pub fn run_command(secrets: &Secrets, argv: &[String]) -> Result<RunOutcome, Sec
 
     // Drain both pipes concurrently to avoid a deadlock when the child fills one
     // while we block on the other. A scoped thread lets the pump borrow `values`.
-    let merged = Mutex::new(Merged::new(
-        ClosableSink::new(io::stdout()),
-        ClosableSink::strict(io::stderr()),
-    ));
+    let merged = Mutex::new(Merged::new(out, err));
     thread::scope(|scope| -> io::Result<()> {
         let out_pump = scope.spawn(|| pump(child_out, Stream::Stdout, &values, &merged));
         pump(child_err, Stream::Stderr, &values, &merged)?;
@@ -144,8 +155,6 @@ pub fn run_command(secrets: &Secrets, argv: &[String]) -> Result<RunOutcome, Sec
     let merged = merged.into_inner().expect("a pump thread panicked");
     Ok(RunOutcome {
         code: exit_code(status),
-        stdout: merged.stdout,
-        stderr: merged.stderr,
         stdout_closed: merged.out.closed,
     })
 }
@@ -198,9 +207,6 @@ struct Merged<O: Write, E: Write> {
     carry: [Vec<u8>; 2],
     /// Streams whose pump has not ended.
     open: usize,
-    /// Everything written to each stream, redacted.
-    stdout: String,
-    stderr: String,
 }
 
 impl<O: Write, E: Write> Merged<O, E> {
@@ -212,8 +218,6 @@ impl<O: Write, E: Write> Merged<O, E> {
             masking: [false; 2],
             carry: Default::default(),
             open: 2,
-            stdout: String::new(),
-            stderr: String::new(),
         }
     }
 
@@ -385,10 +389,9 @@ impl<O: Write, E: Write> Merged<O, E> {
         Ok(())
     }
 
-    /// Write `bytes` to `stream` and append them to its captured text. Bytes
-    /// are decoded lossily so non-UTF-8 output is tolerated; an incomplete
-    /// character at the end waits for the stream's next bytes while a stream
-    /// is open.
+    /// Write `bytes` to `stream`. Bytes are decoded lossily so non-UTF-8
+    /// output is tolerated; an incomplete character at the end waits for the
+    /// stream's next bytes while a stream is open.
     fn emit(&mut self, stream: Stream, bytes: &mut Vec<u8>) -> io::Result<()> {
         let carry = &mut self.carry[stream as usize];
         carry.append(bytes);
@@ -402,14 +405,12 @@ impl<O: Write, E: Write> Merged<O, E> {
             return Ok(());
         }
         let text = String::from_utf8_lossy(&done);
-        let (sink, captured): (&mut dyn Write, &mut String) = match stream {
-            Stream::Stdout => (&mut self.out, &mut self.stdout),
-            Stream::Stderr => (&mut self.err, &mut self.stderr),
+        let sink: &mut dyn Write = match stream {
+            Stream::Stdout => &mut self.out,
+            Stream::Stderr => &mut self.err,
         };
         sink.write_all(text.as_bytes())?;
-        sink.flush()?;
-        captured.push_str(&text);
-        Ok(())
+        sink.flush()
     }
 
     /// End `stream`: release `rest`, its last bytes. Once no stream is open,
@@ -521,6 +522,8 @@ fn pump<R: Read + Send + 'static, O: Write, E: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     /// One tempdir holding a git-rooted project (`proj/`) and a private
@@ -534,6 +537,15 @@ mod tests {
         (tmp, root, secrets)
     }
 
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn sh(script: &str) -> Vec<String> {
+        vec!["sh".into(), "-c".into(), script.into()]
+    }
+
     #[cfg(unix)]
     #[test]
     fn injects_secret_and_redacts_it_from_output() {
@@ -541,15 +553,18 @@ mod tests {
         secrets.add("MY_TOKEN", "supersecretvalue").unwrap();
 
         // The child echoes the secret; redaction must scrub it on the way back.
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "echo $MY_TOKEN".to_string(),
-        ];
-        let outcome = run_command(&secrets, &argv).unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let outcome = run_with(
+            &secrets,
+            &sh("echo $MY_TOKEN"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
         assert_eq!(outcome.code, 0);
-        assert!(outcome.stdout.contains("***"));
-        assert!(!outcome.stdout.contains("supersecretvalue"));
+        let stdout = text(&out);
+        assert!(stdout.contains("***"));
+        assert!(!stdout.contains("supersecretvalue"));
     }
 
     #[cfg(unix)]
@@ -559,15 +574,18 @@ mod tests {
         secrets.add("MY_TOKEN", "supersecretvalue").unwrap();
 
         // The child echoes the secret to stderr; redaction must scrub it there too.
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "echo $MY_TOKEN >&2".to_string(),
-        ];
-        let outcome = run_command(&secrets, &argv).unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let outcome = run_with(
+            &secrets,
+            &sh("echo $MY_TOKEN >&2"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
         assert_eq!(outcome.code, 0);
-        assert!(outcome.stderr.contains("***"));
-        assert!(!outcome.stderr.contains("supersecretvalue"));
+        let stderr = text(&err);
+        assert!(stderr.contains("***"));
+        assert!(!stderr.contains("supersecretvalue"));
     }
 
     #[cfg(unix)]
@@ -581,13 +599,14 @@ mod tests {
         use std::time::Instant;
 
         #[derive(Clone)]
-        struct Probe(Arc<Mutex<Option<Instant>>>);
+        struct Probe(Arc<Mutex<Option<Instant>>>, Arc<Mutex<Vec<u8>>>);
         impl std::io::Write for Probe {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 let mut first = self.0.lock().unwrap();
                 if first.is_none() && !buf.is_empty() {
                     *first = Some(Instant::now());
                 }
+                self.1.lock().unwrap().extend_from_slice(buf);
                 Ok(buf.len())
             }
             fn flush(&mut self) -> std::io::Result<()> {
@@ -602,13 +621,13 @@ mod tests {
             .spawn()
             .unwrap();
         let out = child.stdout.take().unwrap();
-        let probe = Probe(Arc::new(Mutex::new(None)));
+        let probe = Probe(Arc::new(Mutex::new(None)), Arc::default());
         let started = Instant::now();
         let merged = stdout_only(ClosableSink::new(probe.clone()));
         pump(out, Stream::Stdout, &secrets.values(), &merged).unwrap();
         child.wait().unwrap();
 
-        assert_eq!(merged.into_inner().unwrap().stdout, "Password: ");
+        assert_eq!(text(&probe.1.lock().unwrap()), "Password: ");
         let first = probe.0.lock().unwrap().expect("prompt was written");
         assert!(
             first.duration_since(started) < std::time::Duration::from_millis(700),
@@ -622,13 +641,45 @@ mod tests {
         let (_tmp, _root, mut secrets) = sandbox();
         secrets.add("T", "supersecretvalue").unwrap();
         // Two writes, no newline between them, well inside the idle window.
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            "printf 'super'; printf 'secretvalue\\n'".to_string(),
-        ];
-        let outcome = run_command(&secrets, &argv).unwrap();
-        assert_eq!(outcome.stdout, "***\n");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run_with(
+            &secrets,
+            &sh("printf 'super'; printf 'secretvalue\\n'"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
+        assert_eq!(text(&out), "***\n");
+    }
+
+    #[cfg(unix)]
+    fn rss_kib() -> u64 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_retains_no_output() {
+        let before = rss_kib();
+        let mut m = Merged::new(ClosableSink::new(io::sink()), ClosableSink::new(io::sink()));
+        let chunk = [b'x'; 8192];
+        for _ in 0..(32 * 1024 * 1024 / chunk.len()) {
+            for stream in [Stream::Stdout, Stream::Stderr] {
+                m.arrive(stream, &chunk, &[]).unwrap();
+                m.release(stream, &chunk, &[]).unwrap();
+            }
+        }
+        let growth = rss_kib().saturating_sub(before);
+        assert!(growth < 32768, "resident size grew by {growth} KiB");
+        drop(m);
     }
 
     fn both() -> Merged<Vec<u8>, Vec<u8>> {
@@ -641,17 +692,17 @@ mod tests {
         let mut m = both();
         m.arrive(Stream::Stdout, b"a super", &values).unwrap();
         m.release(Stream::Stdout, b"a ", &values).unwrap();
-        assert_eq!(m.stdout, "a ");
+        assert_eq!(text(&m.out.inner), "a ");
         m.arrive(Stream::Stderr, b"secretvalue\n", &values).unwrap();
         m.release(Stream::Stderr, b"secretvalue\n", &values)
             .unwrap();
         // `super` + `secretvalue\n` can no longer start a value: stderr passes
         // stdout's held `super`.
-        assert_eq!(m.stderr, "***\n");
+        assert_eq!(text(&m.err.inner), "***\n");
         m.finish(Stream::Stdout, b"super", &values).unwrap();
         m.finish(Stream::Stderr, b"", &values).unwrap();
-        assert_eq!(m.stdout, "a ***");
-        assert_eq!(m.stderr, "***\n");
+        assert_eq!(text(&m.out.inner), "a ***");
+        assert_eq!(text(&m.err.inner), "***\n");
     }
 
     #[test]
@@ -661,14 +712,14 @@ mod tests {
         m.arrive(Stream::Stdout, b"sups", &values).unwrap();
         m.release(Stream::Stdout, b"sup", &values).unwrap();
         // `sup` waits: stderr may pass the held `s` and continue it.
-        assert_eq!(m.stdout, "");
+        assert_eq!(text(&m.out.inner), "");
         m.arrive(Stream::Stderr, b"xyz\n", &values).unwrap();
         m.release(Stream::Stderr, b"xyz\n", &values).unwrap();
-        assert_eq!(m.stdout, "sup");
-        assert_eq!(m.stderr, "xyz\n");
+        assert_eq!(text(&m.out.inner), "sup");
+        assert_eq!(text(&m.err.inner), "xyz\n");
         m.finish(Stream::Stdout, b"s", &values).unwrap();
         m.finish(Stream::Stderr, b"", &values).unwrap();
-        assert_eq!(m.stdout, "sups");
+        assert_eq!(text(&m.out.inner), "sups");
     }
 
     #[test]
@@ -684,8 +735,8 @@ mod tests {
         // Written order is `sup`, `ersecretvalue\n`, `s`: the value is contiguous.
         m.finish(Stream::Stdout, b"s", &values).unwrap();
         m.finish(Stream::Stderr, b"", &values).unwrap();
-        assert_eq!(m.stdout, "***s");
-        assert_eq!(m.stderr, "***\n");
+        assert_eq!(text(&m.out.inner), "***s");
+        assert_eq!(text(&m.err.inner), "***\n");
     }
 
     #[test]
@@ -700,8 +751,8 @@ mod tests {
             m.release(Stream::Stderr, &chunk, &values).unwrap();
             assert!(m.queue.len() <= 1, "{} bytes queued", m.queue.len());
         }
-        assert_eq!(m.stdout, "progress ");
-        assert_eq!(m.stderr.len(), 128 * 8192);
+        assert_eq!(text(&m.out.inner), "progress ");
+        assert_eq!(m.err.inner.len(), 128 * 8192);
     }
 
     #[test]
@@ -714,8 +765,8 @@ mod tests {
         m.arrive(Stream::Stdout, b"secretvalue\n", &values).unwrap();
         m.release(Stream::Stdout, b"supersecretvalue\n", &values)
             .unwrap();
-        assert_eq!(m.stdout, "***\n");
-        assert_eq!(m.stderr, "warn\n");
+        assert_eq!(text(&m.out.inner), "***\n");
+        assert_eq!(text(&m.err.inner), "warn\n");
     }
 
     #[test]
@@ -726,17 +777,17 @@ mod tests {
         m.release(Stream::Stderr, b"x\n", &[]).unwrap();
         m.arrive(Stream::Stdout, b"\xa9\n", &[]).unwrap();
         m.release(Stream::Stdout, b"caf\xc3\xa9\n", &[]).unwrap();
-        assert_eq!(m.stdout, "caf\u{e9}\n");
+        assert_eq!(text(&m.out.inner), "caf\u{e9}\n");
     }
 
     #[test]
     fn adjacent_and_nested_values_are_masked() {
-        let masked = |values: &[&str], text: &[u8]| {
+        let masked = |values: &[&str], bytes: &[u8]| {
             let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
             let mut m = both();
-            m.arrive(Stream::Stdout, text, &values).unwrap();
-            m.release(Stream::Stdout, text, &values).unwrap();
-            m.stdout
+            m.arrive(Stream::Stdout, bytes, &values).unwrap();
+            m.release(Stream::Stdout, bytes, &values).unwrap();
+            text(&m.out.inner)
         };
         let nested = ["abcdef", "abcdefghijkl"];
         assert_eq!(
@@ -776,10 +827,12 @@ mod tests {
         Mutex::new(merged)
     }
 
-    /// Yields `xxxxxxxx\n` forever.
-    struct Endless;
+    /// Yields `xxxxxxxx\n` forever, one read per 20 ms, and counts its reads.
+    struct Endless(Arc<AtomicUsize>);
     impl Read for Endless {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            thread::sleep(Duration::from_millis(20));
+            self.0.fetch_add(1, Ordering::SeqCst);
             for (i, b) in buf.iter_mut().enumerate() {
                 *b = if i % 9 == 8 { b'\n' } else { b'x' };
             }
@@ -797,9 +850,10 @@ mod tests {
         }
     }
 
-    struct BrokenFlush;
+    struct BrokenFlush(Vec<u8>);
     impl Write for BrokenFlush {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.extend_from_slice(buf);
             Ok(buf.len())
         }
         fn flush(&mut self) -> io::Result<()> {
@@ -809,19 +863,24 @@ mod tests {
 
     #[test]
     fn pump_stops_when_the_sink_closes() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let endless = Endless(reads.clone());
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let merged = stdout_only(ClosableSink::new(BrokenWrite));
-            let result = pump(Endless, Stream::Stdout, &[], &merged);
+            let result = pump(endless, Stream::Stdout, &[], &merged);
             let merged = merged.into_inner().unwrap();
-            let _ = tx.send((result, merged.stdout, merged.out.closed));
+            let _ = tx.send((result, merged.out.closed));
         });
-        let (result, text, closed) = rx
+        let (result, closed) = rx
             .recv_timeout(Duration::from_secs(10))
             .expect("pump did not return after the sink closed");
         result.unwrap();
         assert!(closed, "sink did not record the close");
-        assert!(text.len() <= 8192, "captured {} bytes", text.len());
+        // The first chunk closes the sink; the reader stops at its next read.
+        thread::sleep(Duration::from_millis(200));
+        let reads = reads.load(Ordering::SeqCst);
+        assert!(reads <= 3, "{reads} reads after the sink closed");
     }
 
     #[cfg(unix)]
@@ -833,10 +892,10 @@ mod tests {
             .spawn()
             .unwrap();
         let out = child.stdout.take().unwrap();
-        let merged = stdout_only(ClosableSink::new(BrokenFlush));
+        let merged = stdout_only(ClosableSink::new(BrokenFlush(Vec::new())));
         pump(out, Stream::Stdout, &[], &merged).unwrap();
         let merged = merged.into_inner().unwrap();
-        assert_eq!(merged.stdout, "partial");
+        assert_eq!(text(&merged.out.inner.0), "partial");
         assert!(merged.out.closed);
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {

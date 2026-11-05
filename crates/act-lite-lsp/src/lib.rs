@@ -65,6 +65,8 @@ pub mod watchdog;
 #[cfg(test)]
 #[path = "../../../tests/support/executable_script.rs"]
 mod executable_script;
+#[cfg(test)]
+mod test_path;
 
 pub use capabilities::{
     CalleesResult, CallersResult, CodeAction, CodeActionsResult, Diagnostic, DiagnosticSeverity,
