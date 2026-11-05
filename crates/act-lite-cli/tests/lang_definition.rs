@@ -5,7 +5,7 @@
 
 mod langs_added;
 
-use langs_added::{Mcp, cli, fixture};
+use langs_added::{Mcp, cli, cli_json, fixture};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -201,7 +201,7 @@ fn imports_and_includes_are_never_candidates() {
 /// `query references` at `line:column`: each reference as `line:column`.
 fn reference_sites(ws: &Path, file: &str, name: &str, line: u32, column: u32) -> Vec<String> {
     let (line, column) = (line.to_string(), column.to_string());
-    let output = cli(
+    let result = cli_json(
         ws,
         &[
             "query",
@@ -215,8 +215,6 @@ fn reference_sites(ws: &Path, file: &str, name: &str, line: u32, column: u32) ->
             &column,
         ],
     );
-    assert!(output.status.success(), "{output:?}");
-    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     result["references"]
         .as_array()
         .unwrap()
