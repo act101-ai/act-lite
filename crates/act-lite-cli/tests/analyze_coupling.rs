@@ -179,8 +179,8 @@ fn repeated_relationships_to_one_file_count_once() {
     assert_eq!(
         out["findings"],
         json!([
-            row("src/x.ts", [0, 1, 1], json!(1), [0, 0]),
             row("src/y.ts", [1, 0, 1], json!(0), [0, 0]),
+            row("src/x.ts", [0, 1, 1], json!(1), [0, 0]),
         ])
     );
     assert_eq!(out["details"]["edges"], 1);
