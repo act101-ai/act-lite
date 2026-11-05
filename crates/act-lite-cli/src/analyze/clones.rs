@@ -847,15 +847,31 @@ mod tests {
     #[test]
     fn only_files_with_a_shared_blind_hash_are_read_again() {
         let dir = tempfile::tempdir().unwrap();
+        // The C2 workspace: the base, a reformatted copy with comments, and
+        // a consistently renamed copy.
         write(dir.path(), "a.py", BASE);
-        write(dir.path(), "b.py", &format!("# copy\n{BASE}"));
-        write(
-            dir.path(),
-            "c.py",
-            &BASE
-                .replace("total", "acc")
-                .replace("\"paid\"", "\"settled\""),
-        );
+        let reformatted = BASE
+            .replace("    total = 0\n", "    # running sum\n    total = 0\n\n")
+            .replace(
+                "        elif",
+                "        # refunds reduce the sum\n        elif",
+            )
+            .replace(
+                "{\"total\": total, \"count\": count}",
+                "{\"total\": total,\n            \"count\": count}",
+            );
+        write(dir.path(), "b.py", &reformatted);
+        let renamed = BASE
+            .replace("summarize", "tally")
+            .replace("orders", "rows")
+            .replace("rate", "factor")
+            .replace("count = 0", "n = 1")
+            .replace("total", "acc")
+            .replace("count", "n")
+            .replace("order", "row")
+            .replace("paid", "settled")
+            .replace("refunded", "returned");
+        write(dir.path(), "c.py", &renamed);
         write(
             dir.path(),
             "d.py",
@@ -979,7 +995,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         for n in 0..3 {
-            let text = "x".repeat(1 << 20);
+            let text = "x".repeat(3 << 20);
             write(
                 dir.path(),
                 &format!("src/f{n}.rs"),
