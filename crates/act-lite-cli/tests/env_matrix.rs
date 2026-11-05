@@ -2,7 +2,6 @@
 //! Expected values come from the README, not from observed output.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -601,10 +600,14 @@ fn store_defaults_to_home_config_act_secrets_with_mode_0600() {
     let files = store_files(&tmp.path().join("home/.config/act"));
     assert_eq!(files.len(), 1, "files: {files:?}");
     assert_eq!(files[0].extension().unwrap(), "env");
-    assert_eq!(
-        fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }
 
 #[test]

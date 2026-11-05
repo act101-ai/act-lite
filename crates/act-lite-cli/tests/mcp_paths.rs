@@ -2,6 +2,8 @@
 //! that leaves it through `..`, an absolute path or a symlink is refused, as
 //! `repo_outline` refuses it.
 
+#![cfg(unix)]
+
 use act_lite_cli::mcp::ActLiteServer;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
