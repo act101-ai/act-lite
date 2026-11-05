@@ -349,6 +349,16 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 }
 
 #[test]
+fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\n";
+    assert_eq!(
+        skeleton_pairs(source),
+        pair_set(&[("import", "a"), ("import", "b"), ("import", "c")])
+    );
+    assert!(symbol_pairs(source).is_empty());
+}
+
+#[test]
 fn nameless_tests_and_usingnamespace_are_not_reported() {
     let source = "test { }\nusingnamespace @import(\"x.zig\");\n";
     assert!(skeleton_pairs(source).is_empty());

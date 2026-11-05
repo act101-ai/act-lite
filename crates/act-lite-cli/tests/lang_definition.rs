@@ -215,6 +215,16 @@ fn imports_and_includes_are_never_candidates() {
 }
 
 #[test]
+fn a_typed_or_commented_zig_import_is_never_a_candidate() {
+    let ws = workspace(&[(
+        "t.zig",
+        "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nfn f() void {\n    _ = a;\n    _ = b;\n}\n",
+    )]);
+    assert_not_found(ws.path(), "t.zig", "a", 5, 9);
+    assert_not_found(ws.path(), "t.zig", "b", 6, 9);
+}
+
+#[test]
 fn cmake_variable_use_resolves_to_the_variable_not_the_enclosing_argument() {
     let ws = workspace(&[(
         "CMakeLists.txt",
