@@ -1232,3 +1232,44 @@ fn server_queries_without_a_server_name_the_binary_and_install_command() {
         assert!(stderr.contains("npm install"), "{op}: {stderr}");
     }
 }
+
+/// Runs `act-lite query references` on the Python fixture with no language
+/// server on `PATH`; returns the stdout JSON and the stderr text.
+fn references_without_server(extra: &[&str]) -> (Value, String) {
+    let s = spec_for("python");
+    let path = empty_path_dir();
+    let pos = position_args(s, s.def_line);
+    let mut args = vec!["query", "references", s.target];
+    args.extend(pos.iter().map(String::as_str));
+    args.extend_from_slice(extra);
+    let output = act_lite_in(&langs().join(s.dir), path.path())
+        .args(&args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json = serde_json::from_slice(&output.stdout).unwrap();
+    (json, String::from_utf8_lossy(&output.stderr).to_string())
+}
+
+#[test]
+fn lsp_hint_references_prints_one_hint_line() {
+    let (json, stderr) = references_without_server(&[]);
+    let hints: Vec<&str> = stderr.lines().filter(|l| l.starts_with("hint:")).collect();
+    assert_eq!(hints.len(), 1, "exactly one hint line: {stderr}");
+    for item in [
+        "pyright-langserver",
+        "pip install pyright",
+        "https://github.com/microsoft/pyright",
+    ] {
+        assert!(hints[0].contains(item), "{item}: {stderr}");
+    }
+    assert_eq!(json["source"], "tree-sitter", "{json}");
+    let (disabled, _) = references_without_server(&["--disable-lsp"]);
+    assert_eq!(json, disabled, "the JSON does not change");
+}
+
+#[test]
+fn lsp_hint_none_with_disable_lsp() {
+    let (_, stderr) = references_without_server(&["--disable-lsp"]);
+    assert!(!stderr.contains("hint:"), "{stderr}");
+}
