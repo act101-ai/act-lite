@@ -181,6 +181,9 @@ impl FileSource for Reader {
     }
 
     fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        if self.cancel.is_cancelled() {
+            return Err(AnalyzeError::Cancelled);
+        }
         let failed = |cause: String| AnalyzeError::Failed {
             analysis: "analyze",
             cause,
@@ -692,6 +695,20 @@ mod tests {
         );
         assert!(!has_mod_tests(&again));
         drop(first);
+    }
+
+    #[test]
+    fn reread_after_cancel_is_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let cancel = CancellationToken::new();
+        let mut reader = Reader::new(&files, &rust_only, false, &cancel);
+        reader.next_file().unwrap().unwrap();
+        cancel.cancel();
+        assert!(matches!(
+            reader.reread("src/broken.rs"),
+            Err(AnalyzeError::Cancelled)
+        ));
     }
 
     #[test]
