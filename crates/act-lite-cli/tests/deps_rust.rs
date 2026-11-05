@@ -24,7 +24,7 @@ fn build(root: &Path, includes: Includes) -> DepGraph {
         discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
         support: SupportReader::new(root, &includes, &cancel),
     };
-    let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
+    let mut reader = Reader::new(&ctx.discovered.files, &supports, includes.tests, &cancel);
     DepGraph::build(&mut reader, &ctx, &cancel).unwrap()
 }
 
