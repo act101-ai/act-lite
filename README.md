@@ -270,6 +270,132 @@ omit `source`. `evidence.language_servers` has one
 the analyzer can use; `state` is `used`, `disabled`, `not_installed` or
 `failed` (with `reason`). An analyzer that uses no language server has `[]`.
 
+## Repository discovery
+
+An analyzer walks each requested path below the workspace root: a directory
+recursively, a file as itself. With no path, it walks the root. A relative
+path resolves against the workspace root. A path that does not exist, or
+that is outside the root after symlinks and `..` are resolved, is an error
+(`path must be inside the workspace root: <path>`). A file that two paths
+reach is analyzed once. No analyzer stops or refuses because the scope holds
+many files.
+
+Discovery applies these steps in order. The first step that matches decides
+what happens to an entry, and in which `excluded` list it is reported:
+
+| Step | Matches | Result | Bypassed by |
+|---|---|---|---|
+| 0 | An entry named `.git` | left out, not reported | — |
+| 1 | An ignored path | `excluded.ignored` | `--include-ignored` |
+| 2 | A vendored directory | `excluded.vendored` | `--include-vendored` |
+| 3 | A generated directory | `excluded.generated` | `--include-generated` |
+| 4 | Fails `--include` or matches `--exclude` | left out, not reported | — |
+| 5 | Not recognized by any grammar | counted in `coverage.unrecognized_files` | — |
+| 6 | A test file, by name | `excluded.tests` | `--include-tests` |
+| 7 | A generated file, by name | `excluded.generated` | `--include-generated` |
+| 8 | A symlink | not followed (below) | — |
+| 9 | A generated file, by header | `excluded.generated` | `--include-generated` |
+| — | Otherwise | in scope: counted in `coverage.languages`, then read and parsed | — |
+
+Steps 1–3 prune directories before the globs apply, so an excluded directory
+is reported even when `--include` matches nothing in it. Steps 2–3 apply to
+real directories only. Steps 1 and 4 apply to a symlink by its name; steps
+5–7 and 9 do not apply to a symlink. Tests are excluded by default for every
+analyzer. Every name and pattern below is case-sensitive unless stated.
+
+**Named paths.** A named path follows the same steps. Steps 0–3 also apply to
+each directory between the workspace root and the path: a named
+`vendor/dep/lib.rs` is excluded by its `vendor` directory and reported as
+`excluded.vendored` `[{"path":"vendor/dep/lib.rs"}]`. A named test file is
+excluded unless `--include-tests` is given. When nothing is left to analyze,
+the request is the empty-scope error, which names the include options. A
+named file that no grammar recognizes is counted in
+`coverage.unrecognized_files`, not refused.
+
+**Ignored paths.** A path is ignored when git's `gitignore` pattern rules
+match it. The patterns come from the `.gitignore` files in the workspace and
+in its ancestors up to the work-tree top, and from `.git/info/exclude` at the
+work-tree top. The user's global excludes file is not read, and `git` is not
+run. The rules apply only when the workspace root or an ancestor contains a
+`.git` entry; the work-tree top is the nearest such directory. A directory
+below the root that contains a `.git` entry (a nested repository or a
+submodule) is walked; its own patterns apply to its contents, and the outer
+patterns do not. The root and its ancestors are never ignored. An ignored
+directory is reported once, as `"<dir>/"`. An ignored file is reported only
+when a grammar recognizes it.
+
+**Vendored directories.** A directory, at any depth, named `vendor`,
+`third_party`, `third-party`, `node_modules`, `bower_components`, `Pods` or
+`Carthage`, or a directory that contains a `pyvenv.cfg` file (a Python
+virtual environment). It is reported once, as `"<dir>/"`, and is not walked.
+
+**Test files.** A file is a test file when a directory component of its
+relative path is `test`, `tests`, `__tests__`, `spec` or `testdata`, or when
+its name matches a pattern of its language:
+
+| Language | Test file-name patterns |
+|---|---|
+| Go | `*_test.go` |
+| Python | `test_*.py`, `*_test.py`, `conftest.py` |
+| JavaScript, JSX, TypeScript, TSX | `*.test.<ext>`, `*.spec.<ext>` for `js`, `mjs`, `cjs`, `jsx`, `ts`, `tsx` |
+| Java, Kotlin, Scala, C#, Swift, PHP | `*Test.<ext>`, `*Tests.<ext>`, `*Spec.<ext>` for `java`, `kt`, `kts`, `scala`, `cs`, `swift`, `php` |
+| Dart | `*_test.dart` |
+| Ruby | `*_spec.rb`, `*_test.rb`, `test_*.rb` |
+| Elixir | `*_test.exs` |
+| C, C++ | `*_test.<ext>`, `*_unittest.<ext>`, `test_*.<ext>` for `c`, `cc`, `cpp`, `cxx` |
+| Lua | `*_spec.lua`, `*_test.lua` |
+| Bash | `*_test.sh`, `test_*.sh` |
+| HCL/Terraform | `*.tftest.hcl` |
+| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile | the directory rule only |
+
+**Generated files and directories.**
+
+- Directory: a directory that contains a `CACHEDIR.TAG` file whose first 43
+  bytes are `Signature: 8a477f597d28d172789f06886806bc55` (the Cache Directory
+  Tagging Specification; Cargo writes one into `target/`). It is reported
+  once, as `"<dir>/"`.
+- File name: `*.min.js`, `*.min.css`, `*.pb.go`, `*_pb2.py`,
+  `*_pb2_grpc.py`, `*.pb.cc`, `*.pb.h`, `*.g.dart`, `*.freezed.dart`,
+  `*.designer.cs` (case-insensitive), `*.g.cs`, `*.generated.*`,
+  `package-lock.json`, `pnpm-lock.yaml`.
+- Header: a line among the first 20 lines (and the first 4,096 bytes) that
+  starts with a comment opener (`//`, `/*`, `*`, `#`, `--`, `<!--` or `;`,
+  after leading whitespace) and, on the same line, contains `Code generated`
+  followed later by `DO NOT EDIT`, or `@generated`. A string literal
+  `"@generated"` does not match. Only regular files in a language the
+  analyzer supports are read for the header, also when they are larger than
+  the size bound. When the header cannot be read, the file is in
+  `skipped_files` with kind `unreadable`.
+
+**Tests embedded in source files.**
+
+| Language | Embedded test code | Treatment without `--include-tests` |
+|---|---|---|
+| Rust | An item with the attribute `#[cfg(test)]` (usually `mod tests { … }`), and a function with an attribute whose last path segment is `test` (`#[test]`, `#[tokio::test]`) outside such an item | The item's range, from its first attribute to its end, is removed from the analysis input and reported as `excluded.tests` `{ "path", "range" }`. |
+| Go | None: Go test code lives only in `*_test.go` files | — |
+| Python | Doctests in docstrings are string content, not code | Not detected. Not removed. |
+| Rust, other `cfg` forms | `#![cfg(test)]` as an inner attribute of a file; `#[cfg(all(test, …))]`; `#[cfg(any(test, …))]`; `#[cfg_attr(test, …)]` | A file with `#![cfg(test)]` is a test file (whole file). An item with `cfg(all(test, …))` is a test item, like `cfg(test)`. `cfg(any(test, …))` and `cfg_attr(test, …)` are not test items: the code is also compiled outside tests. |
+| Rust, out-of-line | `#[cfg(test)] mod tests;` loads `tests.rs` (or `tests/mod.rs`) beside the module | The declaration's range is removed and reported. The loaded file is excluded only by the directory rule (`tests/mod.rs`); a `src/tests.rs` is analyzed as source. |
+| JavaScript/TypeScript | In-source tests (for example `if (import.meta.vitest)`) | Not detected. Not removed. |
+| All other languages | No embedded-test convention is detected | — |
+
+A parse error inside a removed region is not reported in `parse_failures`.
+
+**Symlinks.** Discovery never follows a symlink. A symlink whose target is
+inside the workspace is not reported; its target is analyzed at its own path
+when it is in scope. A symlink named in a supported language whose target is
+outside the workspace is in `skipped_files` with kind
+`symlink_outside_workspace`; a broken one has kind `unreadable`. Both count
+in `coverage.languages` for the language of the link's own name. A symlink
+to a directory outside the workspace is in `skipped_files` as `"<link>/"`
+with kind `symlink_outside_workspace`, and makes the result incomplete. Every
+other symlink is neither counted nor reported.
+
+**Walk errors and file names.** A directory that cannot be listed is in
+`skipped_files` as `"<dir>/"` with kind `walk_error`. A file name that is not
+valid UTF-8 gives kind `not_utf8`, with each invalid sequence written as
+U+FFFD. A FIFO, socket or device file is not opened by discovery.
+
 ## `act-lite env`
 
 `act-lite env` keeps a project's secrets out of the working tree and out of
