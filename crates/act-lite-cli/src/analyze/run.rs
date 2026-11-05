@@ -68,8 +68,18 @@ impl Request {
 }
 
 /// Discovers the scope, hands its files to `analyzer` one at a time and
-/// builds the envelope.
+/// builds the envelope. Files the analyzer did not pull are read for their
+/// evidence only; leaving any is a failure unless the analyzer reports a
+/// limit hit. A failure carries the analyzer's name.
 pub fn run<A: Analyzer>(
+    analyzer: &A,
+    request: &Request,
+    cancel: &CancellationToken,
+) -> Result<Envelope<A::Finding>, AnalyzeError> {
+    run_named(analyzer, request, cancel).map_err(|err| err.with_analysis(A::NAME))
+}
+
+fn run_named<A: Analyzer>(
     analyzer: &A,
     request: &Request,
     cancel: &CancellationToken,
@@ -93,6 +103,16 @@ pub fn run<A: Analyzer>(
     let analyzed_files = counted.files;
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
+    }
+    let mut unpulled = None;
+    while let Some(file) = reader.next_file()? {
+        unpulled.get_or_insert(file.rel);
+    }
+    if let Some(rel) = unpulled.filter(|_| analysis.limits_hit.is_empty()) {
+        return Err(AnalyzeError::Failed {
+            analysis: A::NAME,
+            cause: format!("stopped before {rel} without reporting a limit"),
+        });
     }
     let read = reader.finish();
 
@@ -194,6 +214,7 @@ mod tests {
     use crate::analyze::fixture::{FixtureAnalyzer, FixtureFinding};
     use serde_json::{Value, json};
     use std::fs;
+    #[cfg(unix)]
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -485,6 +506,8 @@ mod tests {
         called: AtomicBool,
         cancel_inside: bool,
         limit_hit: bool,
+        /// The most files the probe pulls.
+        pull: usize,
     }
 
     impl Probe {
@@ -493,6 +516,14 @@ mod tests {
                 called: AtomicBool::new(false),
                 cancel_inside,
                 limit_hit,
+                pull: usize::MAX,
+            }
+        }
+
+        fn stopping_after(pull: usize, limit_hit: bool) -> Probe {
+            Probe {
+                pull,
+                ..Probe::new(false, limit_hit)
             }
         }
     }
@@ -512,7 +543,10 @@ mod tests {
             cancel: &CancellationToken,
         ) -> Result<Analysis<FixtureFinding>, AnalyzeError> {
             self.called.store(true, Ordering::SeqCst);
-            while files.next_file()?.is_some() {}
+            let mut pulled = 0;
+            while pulled < self.pull && files.next_file()?.is_some() {
+                pulled += 1;
+            }
             if self.cancel_inside {
                 cancel.cancel();
             }
@@ -573,6 +607,112 @@ mod tests {
             out["incomplete"]["limits_hit"],
             json!([{"limit": "max_depth", "value": 3, "detail": "stopped at depth 3"}])
         );
+    }
+
+    /// `src/a.rs` analyzed, `src/b.rs` over the size cap, `src/c.rs` with a
+    /// parse failure and `src/d.rs` a test file.
+    fn four_files() -> tempfile::TempDir {
+        let dir = ok_workspace();
+        write(dir.path(), "src/a.rs", function("a", false).as_bytes());
+        write(dir.path(), "src/b.rs", &rust_of_len(8_388_609));
+        write(dir.path(), "src/c.rs", b"fn c() {\n    let x = ;\n}\n");
+        write(dir.path(), "src/d.rs", b"#![cfg(test)]\nfn t() {}\n");
+        fs::remove_file(dir.path().join("src/ok.rs")).unwrap();
+        dir
+    }
+
+    fn failed(result: Result<Envelope<FixtureFinding>, AnalyzeError>) -> String {
+        match result {
+            Err(err @ AnalyzeError::Failed { .. }) => err.to_string(),
+            Err(other) => panic!("expected a failure, got {other}"),
+            Ok(_) => panic!("expected a failure, got a result"),
+        }
+    }
+
+    #[test]
+    fn analyzer_that_pulls_no_file_without_a_limit_fails() {
+        let dir = ok_workspace();
+        let probe = Probe::stopping_after(0, false);
+        let request = request(dir.path(), &[], &[], 100);
+        assert_eq!(
+            failed(run(&probe, &request, &CancellationToken::new())),
+            "probe failed: stopped before src/ok.rs without reporting a limit"
+        );
+    }
+
+    #[test]
+    fn analyzer_that_pulls_no_file_with_a_limit_is_incomplete() {
+        let dir = ok_workspace();
+        let probe = Probe::stopping_after(0, true);
+        let request = request(dir.path(), &[], &[], 100);
+        let out = value(run(&probe, &request, &CancellationToken::new()));
+        assert_eq!(out["status"], "incomplete");
+        assert_eq!(out["coverage"]["analyzed_files"], 0);
+        assert_eq!(
+            out["coverage"]["languages"],
+            json!([{"language": "Rust", "files": 1, "supported": true}])
+        );
+    }
+
+    #[test]
+    fn analyzer_that_stops_early_without_a_limit_fails() {
+        let dir = four_files();
+        let probe = Probe::stopping_after(1, false);
+        let request = request(dir.path(), &[], &[], 100);
+        assert_eq!(
+            failed(run(&probe, &request, &CancellationToken::new())),
+            "probe failed: stopped before src/c.rs without reporting a limit"
+        );
+    }
+
+    #[test]
+    fn analyzer_that_stops_early_with_a_limit_keeps_all_evidence() {
+        let dir = four_files();
+        let probe = Probe::stopping_after(1, true);
+        let request = request(dir.path(), &[], &[], 100);
+        let out = value(run(&probe, &request, &CancellationToken::new()));
+        assert_eq!(out["status"], "incomplete");
+        assert_eq!(out["complete"], false);
+        assert_eq!(out["coverage"]["analyzed_files"], 1);
+        assert_eq!(
+            out["coverage"]["languages"],
+            json!([{"language": "Rust", "files": 3, "supported": true}])
+        );
+        assert_eq!(out["incomplete"]["skipped_files"][0]["file"], "src/b.rs");
+        assert_eq!(out["incomplete"]["skipped_files"][0]["kind"], "size_limit");
+        assert_eq!(out["incomplete"]["parse_failures"][0]["file"], "src/c.rs");
+        assert_eq!(out["excluded"]["tests"], json!([{"path": "src/d.rs"}]));
+        assert_eq!(out["incomplete"]["counts"]["limits_hit"], 1);
+    }
+
+    /// Asks the reader for a file it never returned.
+    struct Rereading;
+
+    impl Analyzer for Rereading {
+        const NAME: &'static str = "fixture";
+        const HINT: &'static str = "";
+        type Finding = FixtureFinding;
+
+        fn supports(&self, grammar: Grammar) -> bool {
+            grammar == Grammar::Rust
+        }
+
+        fn analyze(
+            &self,
+            files: &mut dyn FileSource,
+            _cancel: &CancellationToken,
+        ) -> Result<Analysis<FixtureFinding>, AnalyzeError> {
+            files.reread("nope.rs")?;
+            unreachable!("the reread fails")
+        }
+    }
+
+    #[test]
+    fn failure_inside_the_run_names_the_analyzer() {
+        let dir = ok_workspace();
+        let request = request(dir.path(), &[], &[], 100);
+        let message = failed(run(&Rereading, &request, &CancellationToken::new()));
+        assert!(message.starts_with("fixture failed: "), "{message}");
     }
 
     #[cfg(unix)]
