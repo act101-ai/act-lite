@@ -3,10 +3,12 @@
 //! dependents, depths and chains come from the fixture sources and the
 //! traversal rules, not from the analyzer's output.
 
-use act_lite_cli::analyze::discovery::Includes;
+use act_lite_cli::analyze::deps::supports;
+use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::envelope::AnalyzeError;
 use act_lite_cli::analyze::impact::ImpactAnalyzer;
-use act_lite_cli::analyze::run::{Request, run};
+use act_lite_cli::analyze::read::{FileSource, Parsed, Reader, SupportReader};
+use act_lite_cli::analyze::run::{Analyzer, Request, RunContext, run};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -235,8 +237,12 @@ fn a_long_chain_is_cut_at_twenty_steps_and_the_depth_bound_is_disclosed() {
     let last = &v["findings"][98];
     assert_eq!(last["chain_total"], 99);
     assert_eq!(last["chain"].as_array().unwrap().len(), 20);
-    assert_eq!(last["chain"][0]["file"], "src/f000.ts");
-    assert_eq!(last["chain"][0]["to"], "src/f001.ts");
+    for i in 0..20 {
+        let step = &last["chain"][i];
+        assert_eq!(step["file"], format!("src/f{i:03}.ts"), "step {i}");
+        assert_eq!(step["to"], format!("src/f{:03}.ts", i + 1), "step {i}");
+    }
+    assert_eq!(last["chain"][19]["to"], "src/f020.ts");
     assert_eq!(last["reaches"], "src/f099.ts");
     assert_eq!(v["complete"], true);
     assert_eq!(v["status"], "findings");
@@ -420,6 +426,86 @@ fn a_cancelled_token_stops_the_analysis() {
     cancel.cancel();
     let result = run(&analyzer, &request, &cancel);
     assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+}
+
+/// A file source that cancels the token when it has no file left to give.
+struct CancelAtEnd {
+    inner: Reader,
+    cancel: CancellationToken,
+}
+
+impl FileSource for CancelAtEnd {
+    fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError> {
+        let next = self.inner.next_file()?;
+        if next.is_none() {
+            self.cancel.cancel();
+        }
+        Ok(next)
+    }
+
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        self.inner.reread(rel)
+    }
+}
+
+#[test]
+fn a_token_cancelled_after_the_last_read_stops_the_analysis() {
+    let ws = tempfile::tempdir().unwrap();
+    ts(ws.path());
+    let root = ws.path();
+    let cancel = CancellationToken::new();
+    let request = Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap();
+    let analyzer = ImpactAnalyzer::new(&request, &["src/c.ts".to_string()], None).unwrap();
+    let ctx = RunContext {
+        root: root.to_path_buf(),
+        discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
+        support: SupportReader::new(root, &Includes::default(), &cancel),
+    };
+    let mut files = CancelAtEnd {
+        inner: Reader::new(&ctx.discovered.files, &supports, false, &cancel),
+        cancel: cancel.clone(),
+    };
+    let result = analyzer.analyze_in(&mut files, &ctx, &cancel);
+    assert!(cancel.is_cancelled());
+    assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+}
+
+/// Two focus files, `x` and `y`: `p` imports `x`; `s` imports `p` and `y`;
+/// `t` imports `s`.
+fn shared(root: &Path) {
+    fs::create_dir_all(root.join(".git")).unwrap();
+    write(root, "src/x.ts", "export const x = 1;\n");
+    write(root, "src/y.ts", "export const y = 1;\n");
+    write(root, "src/p.ts", "import './x';\n");
+    write(root, "src/s.ts", "import './p';\nimport './y';\n");
+    write(root, "src/t.ts", "import './s';\n");
+}
+
+#[test]
+fn a_dependent_of_two_focus_files_has_the_smaller_depth() {
+    let ws = tempfile::tempdir().unwrap();
+    shared(ws.path());
+    let v = ok(impact(ws.path(), &["src/x.ts", "src/y.ts"]));
+    assert_eq!(
+        listed(&v),
+        pairs(&[("src/p.ts", 1), ("src/s.ts", 1), ("src/t.ts", 2)])
+    );
+    assert_eq!(v["details"]["direct"], 2);
+    assert_eq!(v["details"]["transitive"], 1);
+}
+
+#[test]
+fn the_limit_cuts_findings_but_not_the_dependent_counts() {
+    let ws = tempfile::tempdir().unwrap();
+    shared(ws.path());
+    let mut c = call(&["src/x.ts", "src/y.ts"]);
+    c.limit = 1;
+    let v = ok(impact_with(ws.path(), &c));
+    assert_eq!(listed(&v), pairs(&[("src/p.ts", 1)]));
+    assert_eq!(v["total"], 3);
+    assert_eq!(v["truncated"], true);
+    assert_eq!(v["details"]["direct"], 2);
+    assert_eq!(v["details"]["transitive"], 1);
 }
 
 #[test]
