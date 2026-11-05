@@ -1,24 +1,45 @@
-//! The `patterns` analyzer on synthetic workspaces. Every expected value is
+//! The `patterns` analyzer on synthetic workspaces, run through the built
+//! binary. Every expected value is
 //! derived by hand from the fixture source and the fixed thresholds
 //! (lines 50, nesting 4, complexity 10, parameters 5, each exceeded when
 //! strictly greater).
 
-use act_lite_cli::analyze::discovery::Includes;
-use act_lite_cli::analyze::patterns::PatternsAnalyzer;
-use act_lite_cli::analyze::run::{Request, run};
+use assert_cmd::Command;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio_util::sync::CancellationToken;
+
+/// Runs `act-lite --workspace <root> analyze patterns <args>` with an empty
+/// configuration directory: the parsed stdout, or the message of the error
+/// frame on stderr.
+fn binary(root: &Path, args: &[&str]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = Command::cargo_bin("act-lite")
+        .expect("the act-lite binary must be built")
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", "patterns"])
+        .args(args)
+        .output()
+        .unwrap();
+    if out.status.success() {
+        return Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value"));
+    }
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let frame: Value = serde_json::from_slice(&out.stderr).expect("stderr is one JSON value");
+    Err(frame["error"]["message"].as_str().unwrap().to_string())
+}
 
 /// Runs `patterns` on the whole workspace at `root`: the envelope as JSON, or
 /// the error message.
 fn analyze(root: &Path) -> Result<Value, String> {
-    let request =
-        Request::new(root, &[], &[], &[], Includes::default(), 1000).map_err(|e| e.to_string())?;
-    let envelope =
-        run(&PatternsAnalyzer, &request, &CancellationToken::new()).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(envelope).unwrap())
+    binary(root, &["--limit", "1000"])
 }
 
 fn write(root: &Path, rel: &str, content: &[u8]) {

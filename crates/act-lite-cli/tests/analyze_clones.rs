@@ -1,16 +1,13 @@
-//! Acceptance tests of the `clones` analyzer. Every workspace is synthetic and
-//! built in a temporary directory; expected values come from the fixture
-//! sources and the documented normalization rule, not from the analyzer's
-//! output.
+//! Acceptance tests of the `clones` analyzer, run through the built binary.
+//! Every workspace is synthetic and built in a temporary directory; expected
+//! values come from the fixture sources and the documented normalization
+//! rule, not from the analyzer's output.
 
-use act_lite_cli::analyze::clones::ClonesAnalyzer;
-use act_lite_cli::analyze::discovery::Includes;
-use act_lite_cli::analyze::run::{Request, run};
+use assert_cmd::Command;
 use regex::Regex;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
-use tokio_util::sync::CancellationToken;
 
 fn write(root: &Path, rel: &str, content: &str) {
     let path = root.join(rel);
@@ -18,28 +15,44 @@ fn write(root: &Path, rel: &str, content: &str) {
     fs::write(path, content).unwrap();
 }
 
-/// Runs the analysis and returns the envelope, or the error message. Every
-/// result is checked for words that claim safety (no key or string value
-/// other than `file`, `range` and `function` values holds `safe`, `extract`
-/// or `refactor`).
+/// Runs `act-lite --workspace <root> analyze clones` with an empty
+/// configuration directory and returns the parsed envelope, or the message of
+/// the error frame. Every result is checked for words that claim safety (no
+/// key or string value other than `file`, `range` and `function` values holds
+/// `safe`, `extract` or `refactor`).
 fn clones(
     root: &Path,
     paths: &[&str],
     focus: &[&str],
     include_tests: bool,
 ) -> Result<Value, String> {
-    let strings = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let includes = Includes {
-        tests: include_tests,
-        ..Includes::default()
+    let config = tempfile::tempdir().unwrap();
+    let mut command = Command::cargo_bin("act-lite").expect("the act-lite binary must be built");
+    command
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", "clones", "--limit", "100"])
+        .args(paths);
+    for path in focus {
+        command.args(["--focus", path]);
+    }
+    if include_tests {
+        command.arg("--include-tests");
+    }
+    let out = command.output().unwrap();
+    let result = if out.status.success() {
+        Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value"))
+    } else {
+        assert!(
+            out.stdout.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        let frame: Value = serde_json::from_slice(&out.stderr).expect("stderr is one JSON value");
+        Err(frame["error"]["message"].as_str().unwrap().to_string())
     };
-    let result = Request::new(root, &strings(paths), &[], &[], includes, 100)
-        .and_then(|request| {
-            let analyzer = ClonesAnalyzer::new(&request, &strings(focus))?;
-            run(&analyzer, &request, &CancellationToken::new())
-        })
-        .map(|envelope| serde_json::to_value(envelope).unwrap())
-        .map_err(|err| err.to_string());
     if let Ok(value) = &result {
         assert_no_claim(value);
     }

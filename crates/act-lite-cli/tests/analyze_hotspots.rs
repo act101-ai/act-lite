@@ -1,22 +1,43 @@
 //! `analyze_hotspots`: files ranked by the sum of complexity × lines over
-//! their functions, each with its top functions and their metrics.
+//! their functions, each with its top functions and their metrics. Every case
+//! runs the built binary.
 
-use act_lite_cli::analyze::discovery::Includes;
-use act_lite_cli::analyze::hotspots::HotspotsAnalyzer;
-use act_lite_cli::analyze::run::{Request, run};
+use assert_cmd::Command;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio_util::sync::CancellationToken;
+
+/// Runs `act-lite --workspace <root> analyze hotspots <args>` with an empty
+/// configuration directory: the parsed stdout, or the message of the error
+/// frame on stderr.
+fn binary(root: &Path, args: &[&str]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = Command::cargo_bin("act-lite")
+        .expect("the act-lite binary must be built")
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", "hotspots"])
+        .args(args)
+        .output()
+        .unwrap();
+    if out.status.success() {
+        return Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value"));
+    }
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let frame: Value = serde_json::from_slice(&out.stderr).expect("stderr is one JSON value");
+    Err(frame["error"]["message"].as_str().unwrap().to_string())
+}
 
 /// Runs the analyzer on `workspace` and returns the envelope as JSON, or the
 /// request error's message.
 fn hotspots(workspace: &Path, limit: u32) -> Result<Value, String> {
-    let request = Request::new(workspace, &[], &[], &[], Includes::default(), limit)
-        .map_err(|err| err.to_string())?;
-    let envelope = run(&HotspotsAnalyzer, &request, &CancellationToken::new())
-        .map_err(|err| err.to_string())?;
-    Ok(serde_json::to_value(&envelope).expect("the envelope serializes"))
+    binary(workspace, &["--limit", &limit.to_string()])
 }
 
 /// A temporary workspace holding `files` (path, content).
