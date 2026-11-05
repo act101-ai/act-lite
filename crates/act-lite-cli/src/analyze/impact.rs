@@ -114,12 +114,19 @@ impl Finding for ImpactFinding {
 }
 
 /// The dependents a traversal reached: every file at distance 1 or more.
-fn dependents(traversal: &Traversal) -> Vec<ImpactFinding> {
+/// The token is checked before each dependent's chain.
+fn dependents(
+    traversal: &Traversal,
+    cancel: &CancellationToken,
+) -> Result<Vec<ImpactFinding>, AnalyzeError> {
     traversal
         .distance
         .iter()
         .filter(|(_, depth)| **depth >= 1)
         .map(|(file, depth)| {
+            if cancel.is_cancelled() {
+                return Err(AnalyzeError::Cancelled);
+            }
             let mut chain = Vec::new();
             let mut at = file;
             while let Some(edge) = traversal.first_edge.get(at) {
@@ -128,7 +135,7 @@ fn dependents(traversal: &Traversal) -> Vec<ImpactFinding> {
                 }
                 at = &edge.to;
             }
-            ImpactFinding {
+            Ok(ImpactFinding {
                 file: file.clone(),
                 depth: *depth,
                 reaches: at.clone(),
@@ -137,7 +144,7 @@ fn dependents(traversal: &Traversal) -> Vec<ImpactFinding> {
                     file: file.clone(),
                     range: None,
                 },
-            }
+            })
         })
         .collect()
 }
@@ -201,7 +208,7 @@ impl Analyzer for ImpactAnalyzer {
             })
             .into_iter()
             .collect();
-        let findings = dependents(&traversal);
+        let findings = dependents(&traversal, cancel)?;
         let direct = findings.iter().filter(|f| f.depth == 1).count();
         let mut details = graph.common_details();
         details.insert("max_depth".to_string(), json!(self.max_depth));
@@ -283,7 +290,7 @@ mod tests {
         )
         .unwrap();
         let found = traverse(&graph, &set, Direction::In, 5, &live).unwrap();
-        assert_eq!(dependents(&found).len(), 2);
+        assert_eq!(dependents(&found, &live).unwrap().len(), 2);
         let cancel = CancellationToken::new();
         cancel.cancel();
         let result = traverse(&graph, &set, Direction::In, 5, &cancel);
