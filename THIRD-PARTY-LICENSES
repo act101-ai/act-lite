@@ -148,6 +148,7 @@ tree-sitter-toml-ng 0.7.0 MIT
 tree-sitter-typescript 0.23.2 MIT
 tree-sitter-xml 0.7.0 MIT
 tree-sitter-yaml 0.7.2 MIT
+tree-sitter-zig 1.1.2 MIT
 typenum 1.20.1 MIT OR Apache-2.0
 unicode-ident 1.0.27 (MIT OR Apache-2.0) AND Unicode-3.0
 utf8parse 0.2.2 Apache-2.0 OR MIT
@@ -1795,6 +1796,7 @@ Used by:
   tree-sitter-toml-ng 0.7.0
   tree-sitter-typescript 0.23.2
   tree-sitter-xml 0.7.0
+  tree-sitter-zig 1.1.2
   tree-sitter 0.25.10
 MIT License
 
