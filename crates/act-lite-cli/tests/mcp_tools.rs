@@ -46,8 +46,18 @@ impl Session {
     /// Starts the server and performs the `initialize` handshake; returns the
     /// session and the `initialize` reply.
     fn start(setup: &Setup, keep: Option<tempfile::TempDir>) -> (Session, Value) {
+        Self::start_with(setup, keep, &[])
+    }
+
+    /// Like [`start`](Self::start), with extra environment variables.
+    fn start_with(
+        setup: &Setup,
+        keep: Option<tempfile::TempDir>,
+        envs: &[(&str, &str)],
+    ) -> (Session, Value) {
         let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("act-lite"));
         cmd.current_dir(&setup.cwd).env("PATH", &setup.path);
+        cmd.envs(envs.iter().copied());
         if !setup.lsp {
             cmd.arg("--disable-lsp");
         }
@@ -1558,6 +1568,94 @@ fn callers_without_server_names_the_binary() {
     );
     assert!(message.contains("pyright-langserver"), "{message}");
     assert_eq!(std::fs::read_dir(empty.path()).unwrap().count(), 0);
+}
+
+/// The binary, install command and homepage of the Python server.
+const PYRIGHT_HINT: [&str; 3] = [
+    "pyright-langserver",
+    "pip install pyright",
+    "https://github.com/microsoft/pyright",
+];
+
+/// The text blocks of a tool result after the first (the JSON), joined.
+fn hint_of(reply: &Value) -> String {
+    reply["result"]["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no content in {reply}"))
+        .iter()
+        .skip(1)
+        .filter_map(|block| block["text"].as_str())
+        .collect()
+}
+
+#[test]
+fn lsp_hint_callers_error_names_binary_install_command_and_homepage() {
+    let empty = tempfile::tempdir().unwrap();
+    let message = serve_with_path(empty.path()).err(
+        "callers",
+        json!({"symbol": "add", "file": "python/fixture.py"}),
+    );
+    for item in PYRIGHT_HINT {
+        assert!(message.contains(item), "{item}: {message}");
+    }
+}
+
+/// The first `references` fallback in the server's lifetime carries the
+/// install hint; the second carries no hint.
+#[test]
+fn lsp_hint_references_once_per_server_lifetime() {
+    let empty = tempfile::tempdir().unwrap();
+    let mut s = serve_with_path(empty.path());
+    let args = json!({"symbol": "add", "file": "python/fixture.py"});
+    let first = hint_of(&s.call("references", args.clone()));
+    for item in PYRIGHT_HINT {
+        assert!(first.contains(item), "{item}: {first}");
+    }
+    let second = hint_of(&s.call("references", args));
+    assert_eq!(second, "", "the second result carries no hint");
+}
+
+#[test]
+fn lsp_hint_none_when_servers_disabled() {
+    let empty = tempfile::tempdir().unwrap();
+    let setup = Setup {
+        cwd: langs(),
+        workspace: Some(langs()),
+        path: empty.path().to_path_buf(),
+        lsp: true,
+    };
+    let (mut s, _) = Session::start_with(&setup, None, &[("ACT_LITE_DISABLE_LSP", "1")]);
+    let args = json!({"symbol": "add", "file": "python/fixture.py"});
+    for _ in 0..2 {
+        let hint = hint_of(&s.call("references", args.clone()));
+        assert_eq!(hint, "", "no hint when servers are disabled");
+    }
+}
+
+/// With `ACT_LITE_INSTALL_LSP=1`, a query for a missing server runs its
+/// install command through `sh`. The `sh` on `PATH` here only records that
+/// it ran.
+#[cfg(unix)]
+#[test]
+fn install_opt_in_runs_the_install_command() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let sh = dir.path().join("sh");
+    std::fs::write(&sh, "#!/bin/sh\necho \"$2\" > \"${0%/*}/ran\"\n").unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let setup = Setup {
+        cwd: langs(),
+        workspace: Some(langs()),
+        path: dir.path().to_path_buf(),
+        lsp: true,
+    };
+    let (mut s, _) = Session::start_with(&setup, None, &[("ACT_LITE_INSTALL_LSP", "1")]);
+    s.err(
+        "callers",
+        json!({"symbol": "add", "file": "python/fixture.py"}),
+    );
+    let ran = std::fs::read_to_string(dir.path().join("ran")).expect("the install command ran");
+    assert_eq!(ran.trim(), "pip install pyright");
 }
 
 #[test]
