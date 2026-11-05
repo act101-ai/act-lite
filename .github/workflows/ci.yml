@@ -54,6 +54,7 @@ jobs:
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml)' && echo "deny=true" >> "$GITHUB_OUTPUT" || echo "deny=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml)$' && echo "msrv=true" >> "$GITHUB_OUTPUT" || echo "msrv=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^install\.sh$' && echo "installer=true" >> "$GITHUB_OUTPUT" || echo "installer=false" >> "$GITHUB_OUTPUT"
           echo "rust: ${pkgs:-none}"
       - name: cargo fmt --check
         if: steps.scope.outputs.pkgs != ''
@@ -89,3 +90,6 @@ jobs:
       - name: work graph script tests
         if: steps.scope.outputs.python == 'true'
         run: python3 -m unittest discover -s tests/scripts -v
+      - name: shellcheck install.sh
+        if: steps.scope.outputs.installer == 'true' && runner.os == 'Linux'
+        run: shellcheck install.sh
