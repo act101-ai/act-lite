@@ -5,7 +5,7 @@
 
 mod langs_added;
 
-use langs_added::{Mcp, cli_json};
+use langs_added::{Mcp, cli_json, fixture};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -182,4 +182,119 @@ fn julia_testset_in_a_source_file_is_not_a_test() {
             _ => assert_eq!(out["findings"], json!([]), "{out}"),
         }
     }
+}
+
+/// The formats that no analyzer supports, each with its fixture.
+const UNSUPPORTED_FORMATS: [(&str, &str); 7] = [
+    ("JSONC", "jsonc/settings.jsonc"),
+    ("XML", "xml/pom.xml"),
+    ("GraphQL", "graphql/schema.graphql"),
+    ("Protocol Buffers", "protobuf/shop.proto"),
+    ("Make", "make/Makefile"),
+    ("CMake", "cmake/CMakeLists.txt"),
+    ("Nix", "nix/default.nix"),
+];
+
+fn with_fixture(rel: &str) -> tempfile::TempDir {
+    let source = fixture(rel);
+    let name = source.file_name().unwrap().to_str().unwrap().to_string();
+    let content = std::fs::read_to_string(&source).unwrap();
+    workspace(&[(&name, &content)])
+}
+
+#[test]
+fn a_format_alone_is_unsupported_for_every_analyzer() {
+    for (language, rel) in UNSUPPORTED_FORMATS {
+        let ws = with_fixture(rel);
+        let mut mcp = Mcp::start(ws.path());
+        for analyzer in ANALYZERS {
+            let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+            assert_eq!(out["status"], "unsupported", "{language} {analyzer}: {out}");
+            assert_eq!(
+                out["coverage"]["languages"],
+                json!([{"language": language, "files": 1, "supported": false}]),
+                "{language} {analyzer}: {out}"
+            );
+            assert_eq!(out["findings"], json!([]), "{language} {analyzer}: {out}");
+        }
+    }
+}
+
+#[test]
+fn a_format_beside_a_zig_file_is_listed_unsupported_in_a_mixed_scope() {
+    for (language, rel) in UNSUPPORTED_FORMATS {
+        let source = fixture(rel);
+        let name = source.file_name().unwrap().to_str().unwrap().to_string();
+        let content = std::fs::read_to_string(&source).unwrap();
+        let ws = workspace(&[(&name, &content), ("ok.zig", "const x: u8 = 1;\n")]);
+        let mut mcp = Mcp::start(ws.path());
+        for analyzer in ANALYZERS {
+            let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+            assert_eq!(out["status"], "no_findings", "{language} {analyzer}: {out}");
+            assert_eq!(
+                out["coverage"]["languages"],
+                json!([
+                    {"language": language, "files": 1, "supported": false},
+                    {"language": "Zig", "files": 1, "supported": true}
+                ]),
+                "{language} {analyzer}: {out}"
+            );
+        }
+    }
+}
+
+/// The functions `hotspots` measures in one file, as `(name, range)` sorted
+/// by range, with the file's complexity sum.
+fn functions_of(file: &str, source: &str) -> (Vec<(Option<String>, String)>, u64) {
+    let ws = workspace(&[(file, source)]);
+    let out = cli_json(ws.path(), &["analyze", "hotspots"]);
+    let item = &out["findings"][0];
+    let mut functions: Vec<(Option<String>, String)> = item["top_functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["function"].as_str().map(str::to_string),
+                f["range"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    functions.sort_by(|a, b| a.1.cmp(&b.1));
+    (functions, item["complexity"].as_u64().unwrap())
+}
+
+#[test]
+fn zig_try_and_orelse_are_not_decision_points_and_catch_is() {
+    let source = "fn f(a: ?u8, b: anyerror!u8) u8 {\n    const x = a orelse 1;\n    const y = try b;\n    const z = b catch 0;\n    return x + y + z;\n}\n";
+    let (functions, complexity) = functions_of("z.zig", source);
+    assert_eq!(functions, [(Some("f".to_string()), "1:1-6:2".to_string())]);
+    assert_eq!(complexity, 2);
+}
+
+#[test]
+fn r_calls_are_not_decision_points_and_anonymous_functions_are_functions() {
+    let source = "f <- function(x) {\n  y <- ifelse(x > 0, 1, 2)\n  z <- switch(x, a = 1, b = 2)\n  tryCatch(stop(\"e\"), error = function(e) 1)\n}\n";
+    let (functions, complexity) = functions_of("r.R", source);
+    assert_eq!(
+        functions,
+        [
+            (Some("f".to_string()), "1:6-5:2".to_string()),
+            (None, "4:31-4:44".to_string())
+        ]
+    );
+    assert_eq!(complexity, 2);
+}
+
+#[test]
+fn julia_function_forms_and_comprehensions() {
+    let source = "f(x)::Int = x\ng(x::T) where {T} = x\nmap([1]) do x\n    x\nend\nfunction k end\nh = x -> x + 1\nfunction m(xs)\n    [x for x in xs if x > 0]\nend\n";
+    let (functions, complexity) = functions_of("j.jl", source);
+    let names: Vec<Option<&str>> = functions.iter().map(|f| f.0.as_deref()).collect();
+    assert_eq!(
+        names,
+        [Some("f"), Some("g"), None, None, Some("m")],
+        "{functions:?}"
+    );
+    assert_eq!(complexity, 5);
 }
