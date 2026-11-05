@@ -305,7 +305,7 @@ fn right_assignments_name_the_right_side() {
 fn a_function_before_a_right_arrow_and_assign_are_not_reported() {
     let source = "function(x) x -> h\nassign(\"k\", 1)\n";
     assert!(skeleton_pairs(source).is_empty());
-    assert!(symbol_pairs(source).is_empty());
+    assert_eq!(symbol_pairs(source), pair_set(&[("parameter", "x")]));
 }
 
 #[test]
