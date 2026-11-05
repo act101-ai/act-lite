@@ -1,6 +1,6 @@
 //! Classification of vendored, generated and test files and directories.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -22,7 +22,13 @@ pub fn is_vendored_dir(dir: &Path) -> bool {
         .file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| VENDORED_DIRS.contains(&n));
-    named || dir.join("pyvenv.cfg").is_file()
+    named || is_regular_file(&dir.join("pyvenv.cfg"))
+}
+
+/// Whether `path` is a regular file itself: not a symlink, FIFO, socket or
+/// device. Marker and ignore files are read only when this is true.
+pub(crate) fn is_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
 }
 
 const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
@@ -30,8 +36,12 @@ const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55"
 /// Whether `dir` holds a `CACHEDIR.TAG` file that starts with the cache
 /// directory signature.
 pub fn is_generated_dir(dir: &Path) -> bool {
+    let tag = dir.join("CACHEDIR.TAG");
+    if !is_regular_file(&tag) {
+        return false;
+    }
     let mut head = Vec::new();
-    File::open(dir.join("CACHEDIR.TAG"))
+    File::open(tag)
         .and_then(|f| {
             f.take(CACHEDIR_SIGNATURE.len() as u64)
                 .read_to_end(&mut head)
@@ -114,8 +124,11 @@ fn is_generated_marker_line(line: &str) -> bool {
 }
 
 /// Whether the first lines of the file at `path` carry a generated-file
-/// marker in a comment.
+/// marker in a comment. Only a regular file is read.
 pub fn has_generated_header(path: &Path) -> io::Result<bool> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Ok(false);
+    }
     let mut head = Vec::new();
     File::open(path)?
         .take(HEADER_BYTES)
