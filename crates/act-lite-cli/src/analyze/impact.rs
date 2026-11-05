@@ -284,6 +284,7 @@ fn insert_focus(details: &mut Map<String, Value>, set: Option<&FocusSet>) {
 mod tests {
     use super::*;
     use crate::analyze::discovery::{Includes, discover};
+    use crate::analyze::graph::traverse_observed;
     use crate::analyze::read::{Reader, SupportReader};
     use std::fs;
     use std::path::Path;
@@ -328,5 +329,43 @@ mod tests {
         cancel.cancel();
         let result = traverse(&graph, &set, Direction::In, 5, &cancel);
         assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+    }
+
+    #[test]
+    fn a_token_cancelled_during_the_traversal_stops_it_before_the_next_visit() {
+        let ws = tempfile::tempdir().unwrap();
+        let request = workspace(ws.path());
+        fs::write(ws.path().join("src/d.ts"), "import './b';\n").unwrap();
+        fs::write(ws.path().join("src/e.ts"), "import './d';\n").unwrap();
+        let live = CancellationToken::new();
+        let supported = deps::supports;
+        let ctx = RunContext {
+            root: request.root.clone(),
+            discovered: discover(&request.root, &request.scope, &supported, &live).unwrap(),
+            support: SupportReader::new(&request.root, &Includes::default(), &live),
+        };
+        let mut reader = Reader::new(&ctx.discovered.files, &supported, false, &live);
+        let graph = DepGraph::build(&mut reader, &ctx, &live).unwrap();
+        let paths = check_focus(&request.root, &request.scope, &["src/a.ts".to_string()]).unwrap();
+        let set = focus_files(
+            &request.root,
+            &paths,
+            &ctx.discovered,
+            &Includes::default(),
+            &supported,
+            &live,
+        )
+        .unwrap();
+        let mut all = 0;
+        traverse_observed(&graph, &set, Direction::In, 5, &live, &mut |_| all += 1).unwrap();
+        assert!(all >= 4, "the traversal visits at least 4 files, got {all}");
+        let cancel = CancellationToken::new();
+        let mut visits = 0;
+        let result = traverse_observed(&graph, &set, Direction::In, 5, &cancel, &mut |_| {
+            visits += 1;
+            cancel.cancel();
+        });
+        assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+        assert_eq!(visits, 1);
     }
 }
