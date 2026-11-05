@@ -64,7 +64,7 @@ Windows is not supported.
 
 ### From source
 
-Rust 1.89 or later:
+Rust 1.90 or later:
 
 ```bash
 cargo build --release -p act-lite-cli

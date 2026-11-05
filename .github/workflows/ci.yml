@@ -48,9 +48,11 @@ jobs:
           case "$crates" in *act-lite-core*) crates="$crates act-lite-parser" ;; esac
           case "$crates" in *act-lite-parser*) crates="$crates act-lite-lsp" ;; esac
           case "$crates" in *act-lite-lsp*|*act-lite-secrets*) crates="$crates act-lite-cli" ;; esac
-          pkgs=""; [ "$crates" = all ] && pkgs="--workspace" || for c in $(printf '%s\n' $crates | sort -u); do pkgs="$pkgs -p $c"; done
+          pkgs=""
+          if [ "$crates" = all ]; then pkgs="--workspace"; else for c in $(printf '%s' "$crates" | tr ' ' '\n' | sort -u); do pkgs="$pkgs -p $c"; done; fi
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml)' && echo "deny=true" >> "$GITHUB_OUTPUT" || echo "deny=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml)$' && echo "msrv=true" >> "$GITHUB_OUTPUT" || echo "msrv=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
           echo "rust: ${pkgs:-none}"
       - name: cargo fmt --check
@@ -72,6 +74,18 @@ jobs:
       - name: cargo deny check
         if: steps.scope.outputs.deny == 'true'
         run: cargo deny check
+      - name: read minimum rust version
+        id: msrv
+        if: steps.scope.outputs.msrv == 'true'
+        shell: bash
+        run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        if: steps.scope.outputs.msrv == 'true'
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - name: cargo check on the minimum rust version
+        if: steps.scope.outputs.msrv == 'true'
+        run: cargo check --workspace --locked
       - name: work graph script tests
         if: steps.scope.outputs.python == 'true'
         run: python3 -m unittest discover -s tests/scripts -v
