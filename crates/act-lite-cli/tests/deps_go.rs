@@ -461,3 +461,160 @@ fn a_package_directory_that_leads_outside_is_external() {
         Outcome::External
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_directory_makes_an_import_under_no_module_path_unresolved() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/f\n");
+    write(root, "locked/go.mod", "module example.com/hid\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\t\"example.com/hid\"\n)\n",
+    );
+    let locked = root.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = std::panic::catch_unwind(|| graph(root));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    let graph = result.unwrap();
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/hid"),
+        Outcome::Unresolved("locked/ could not be read".to_string())
+    );
+    assert_eq!(outcome(&graph, "main.go", "fmt"), Outcome::External);
+}
+
+#[test]
+fn a_vendored_go_mod_is_not_read_when_vendored_files_are_included() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/f\n");
+    write(
+        root,
+        "vendor/example.com/v/go.mod",
+        "module example.com/v\n",
+    );
+    write(root, "vendor/example.com/v/v.go", "package v\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/v\"\n",
+    );
+    let graph = build(
+        root,
+        Includes {
+            vendored: true,
+            ..Includes::default()
+        },
+    );
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/v"),
+        Outcome::External
+    );
+    assert_eq!(
+        inputs(&graph),
+        json!([{"file": "go.mod", "kind": "go.mod"}])
+    );
+}
+
+#[test]
+fn an_import_path_with_an_empty_or_dot_segment_is_invalid() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/m\n");
+    write(root, "p/p.go", "package p\n");
+    write(root, "u/u.go", "package u\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"example.com/m/p/\"\n\t\"example.com/m/p/../u\"\n)\n",
+    );
+    let graph = graph(root);
+    assert!(graph.edges().is_empty());
+    for path in ["example.com/m/p/", "example.com/m/p/../u"] {
+        assert_eq!(
+            outcome(&graph, "main.go", path),
+            Outcome::Unresolved(format!("invalid import path: {path}"))
+        );
+    }
+}
+
+#[test]
+fn files_that_the_go_command_ignores_make_no_package() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/f\n");
+    write(root, "p/_a.go", "package p\n");
+    write(root, "p/.b.go", "package p\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/f/p\"\n",
+    );
+    let graph = graph(root);
+    assert!(graph.edges().is_empty());
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/f/p"),
+        Outcome::Unresolved("no Go package files for example.com/f/p in the workspace".to_string())
+    );
+}
+
+#[test]
+fn an_ambiguous_import_names_each_module_path_once() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/f\n");
+    for dir in ["a", "b"] {
+        write(root, &format!("{dir}/go.mod"), "module example.com/d\n");
+        write(root, &format!("{dir}/d.go"), "package d\n");
+    }
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/d\"\n",
+    );
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/d"),
+        Outcome::Unresolved("ambiguous import: example.com/d".to_string())
+    );
+}
+
+#[test]
+fn a_single_line_replace_with_a_version() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "go.mod",
+        "module example.com/f\n\nreplace example.com/a v1.2.3 => ./b\n",
+    );
+    write(root, "b/go.mod", "module example.com/other\n");
+    write(root, "b/b.go", "package a\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/a\"\n",
+    );
+    let graph = graph(root);
+    assert_eq!(pairs(&graph), [edge("main.go", "b/b.go")]);
+}
+
+#[test]
+fn a_major_version_module_path() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/m/v2\n");
+    write(root, "p/p.go", "package p\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/m/v2/p\"\n",
+    );
+    let graph = graph(root);
+    assert_eq!(pairs(&graph), [edge("main.go", "p/p.go")]);
+    assert!(reasons(&graph).is_empty());
+}
