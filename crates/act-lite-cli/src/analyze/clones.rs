@@ -819,6 +819,13 @@ fn literal_kinds(grammar: Grammar) -> &'static [&'static str] {
             "bin_literal",
             "real_literal",
         ],
+        Grammar::Zig => &[
+            "string",
+            "multiline_string",
+            "character",
+            "integer",
+            "float",
+        ],
         _ => &[],
     }
 }
@@ -870,7 +877,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(covered, 20);
+        assert_eq!(covered, 21);
         assert!(missing.is_empty(), "{missing:#?}");
     }
 

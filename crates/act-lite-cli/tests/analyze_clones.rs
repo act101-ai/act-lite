@@ -558,7 +558,7 @@ const TS_LIKE: &str = "function r1(orders: number, rate: number): number {
 }
 ";
 
-const LANGS: [Lang; 20] = [
+const LANGS: [Lang; 21] = [
     Lang {
         ext: "sh",
         language: "Bash",
@@ -902,6 +902,27 @@ end
         language: "TypeScript",
         prefix: "",
         r1: TS_LIKE,
+        suffix: "",
+        line: 1,
+        names: &[],
+    },
+    Lang {
+        ext: "zig",
+        language: "Zig",
+        prefix: "",
+        r1: "fn r1(orders: u32, rate: u32) u32 {
+    var total: u32 = 0;
+    var count: u32 = 1;
+    var label: []const u8 = \"paid\";
+    total = @T@ + orders * rate;
+    count = count + total * 2;
+    label = \"done\";
+    rate = rate * 3 - count;
+    orders = orders - rate / 4;
+    total = total * rate + 5;
+    return total + count;
+}
+",
         suffix: "",
         line: 1,
         names: &[],

@@ -1,0 +1,104 @@
+//! The analyzers on the added programming languages, on the command line and
+//! over MCP with equal results. Every expected value is written by hand from
+//! the source and the fixed thresholds (complexity 10, exceeded when strictly
+//! greater).
+
+mod langs_added;
+
+use langs_added::{Mcp, cli_json};
+use serde_json::{Value, json};
+use std::path::Path;
+
+const ANALYZERS: [&str; 3] = ["patterns", "hotspots", "clones"];
+
+/// One `fn` and one `test "t"` block with ten `if`s: complexity 11.
+fn zig_with_a_test() -> String {
+    let mut source =
+        String::from("fn f(a: u8) u8 {\n    return a;\n}\ntest \"t\" {\n    const x: u8 = 1;\n");
+    for _ in 0..10 {
+        source.push_str("    if (x > 0) {}\n");
+    }
+    source.push_str("}\n");
+    source
+}
+
+fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (rel, content) in files {
+        std::fs::write(dir.path().join(rel), content).unwrap();
+    }
+    dir
+}
+
+/// `analyze <analyzer> <args>` on the command line and `analyze_<analyzer>`
+/// with `params` over MCP; asserts both give the same result and returns it.
+fn both(ws: &Path, mcp: &mut Mcp, analyzer: &str, args: &[&str], params: Value) -> Value {
+    let mut argv = vec!["analyze", analyzer];
+    argv.extend_from_slice(args);
+    let cli = cli_json(ws, &argv);
+    let result = mcp
+        .call(&format!("analyze_{analyzer}"), params)
+        .unwrap_or_else(|e| panic!("analyze_{analyzer}: {e}"));
+    let text = result["content"][0]["text"].as_str().unwrap();
+    let over_mcp: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(over_mcp, cli, "analyze {analyzer}: MCP and CLI differ");
+    cli
+}
+
+#[test]
+fn zig_test_blocks_are_excluded_by_default() {
+    let ws = workspace(&[("a.zig", &zig_with_a_test())]);
+    let mut mcp = Mcp::start(ws.path());
+    for analyzer in ANALYZERS {
+        let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+        assert_eq!(
+            out["excluded"]["tests"],
+            json!([{"path": "a.zig", "range": "4:1-16:2"}]),
+            "{analyzer}: {out}"
+        );
+        assert_eq!(out["complete"], true, "{analyzer}: {out}");
+        match analyzer {
+            "hotspots" => {
+                assert_eq!(out["findings"][0]["functions"], 1, "{out}");
+                assert_eq!(out["findings"][0]["top_functions"][0]["function"], "f");
+            }
+            _ => assert_eq!(out["findings"], json!([]), "{analyzer}: {out}"),
+        }
+    }
+}
+
+#[test]
+fn zig_test_block_is_an_unnamed_function_with_include_tests() {
+    let ws = workspace(&[("a.zig", &zig_with_a_test())]);
+    let mut mcp = Mcp::start(ws.path());
+    let out = both(
+        ws.path(),
+        &mut mcp,
+        "patterns",
+        &["--include-tests"],
+        json!({"include_tests": true}),
+    );
+    assert_eq!(out["excluded"]["tests"], json!([]), "{out}");
+    assert_eq!(
+        out["findings"],
+        json!([{"file": "a.zig", "range": "4:1-16:2", "rule": "excessive_branching",
+                "function": null, "metric": "complexity", "value": 11, "threshold": 10,
+                "metrics": {"lines": 13, "nesting": 1, "complexity": 11, "parameters": 0}}]),
+        "{out}"
+    );
+}
+
+#[test]
+fn empty_zig_container_is_a_parse_failure() {
+    let ws = workspace(&[("s.zig", "const S = struct {};\n")]);
+    let mut mcp = Mcp::start(ws.path());
+    for analyzer in ANALYZERS {
+        let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+        assert_eq!(
+            out["incomplete"]["parse_failures"],
+            json!([{"file": "s.zig", "range": "1:19-1:19"}]),
+            "{analyzer}: {out}"
+        );
+        assert_eq!(out["complete"], false, "{analyzer}: {out}");
+    }
+}

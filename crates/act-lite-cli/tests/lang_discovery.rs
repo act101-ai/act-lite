@@ -100,6 +100,11 @@ fn nix_extension() {
 }
 
 #[test]
+fn zig_extension() {
+    by_extension(&["zig"], "const a = 1;\n", "Zig");
+}
+
+#[test]
 fn jsonc_extensions() {
     by_extension(&["jsonc", "code-workspace"], "{\"a\": 1}\n", "JSONC");
 }
