@@ -45,7 +45,7 @@ impl Finding for CouplingFinding {
 
 impl Analyzer for CouplingAnalyzer {
     const NAME: &'static str = "coupling";
-    const HINT: &'static str = "Start with the first file: its edges are the files to change together; analyze_impact lists what depends on a file.";
+    const HINT: &'static str = "Start with the first file: its edges are the files it imports and the files that import it; analyze_impact lists what depends on a file.";
     type Finding = CouplingFinding;
 
     fn supports(&self, grammar: Grammar) -> bool {
