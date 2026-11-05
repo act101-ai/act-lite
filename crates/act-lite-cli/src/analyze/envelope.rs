@@ -694,6 +694,8 @@ pub enum AnalyzeError {
     NotFound(String),
     /// A named path is outside the workspace root; holds the path.
     OutsideRoot(String),
+    /// A `focus` path is not at or below a requested path; holds the path.
+    FocusOutsidePaths(String),
     LimitOutOfRange(u32),
     EmptyScope(EmptyScope),
     Failed {
@@ -728,6 +730,9 @@ impl std::fmt::Display for AnalyzeError {
             AnalyzeError::NotFound(message) => f.write_str(message),
             AnalyzeError::OutsideRoot(path) => {
                 write!(f, "path must be inside the workspace root: {path}")
+            }
+            AnalyzeError::FocusOutsidePaths(path) => {
+                write!(f, "focus path is not inside the requested paths: {path}")
             }
             AnalyzeError::LimitOutOfRange(n) => {
                 write!(f, "limit must be between 0 and {}, got {n}", Limit::MAX)
@@ -1722,6 +1727,13 @@ mod tests {
             "path must be inside the workspace root: ../x.rs"
         );
         assert!(outside.is_invalid_params());
+
+        let focus = AnalyzeError::FocusOutsidePaths("a.py".into());
+        assert_eq!(
+            focus.to_string(),
+            "focus path is not inside the requested paths: a.py"
+        );
+        assert!(focus.is_invalid_params());
 
         let limit = AnalyzeError::LimitOutOfRange(4294967295);
         assert_eq!(

@@ -16,8 +16,11 @@ use tokio_util::sync::CancellationToken;
 use super::catalog::TOOLS;
 use super::params::*;
 use super::path_error::enrich_not_found_error;
+use crate::analyze::clones::ClonesAnalyzer;
 use crate::analyze::envelope::AnalyzeError;
-use crate::analyze::run::{Analyzer, run};
+use crate::analyze::hotspots::HotspotsAnalyzer;
+use crate::analyze::patterns::PatternsAnalyzer;
+use crate::analyze::run::{Analyzer, Request, run};
 use crate::definition;
 
 /// MCP server exposing act-lite's navigation queries.
@@ -77,6 +80,7 @@ impl ActLiteServer {
     /// catalog entry fails construction here.
     fn tool_router() -> ToolRouter<Self> {
         let mut router = Self::uncatalogued_tool_router();
+        router += Self::analyzer_tool_router();
         #[cfg(debug_assertions)]
         {
             router += Self::fixture_tool_router();
@@ -101,16 +105,28 @@ impl ActLiteServer {
     /// cancellation token. A request error is `invalid_params`, a failure
     /// `internal_error`. The first content block is the result JSON, the
     /// second the hint.
-    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     async fn run_analyzer<A: Analyzer + 'static>(
         &self,
         analyzer: A,
         params: AnalyzeParams,
         ct: CancellationToken,
     ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer_with(move |_| Ok(analyzer), params, ct)
+            .await
+    }
+
+    /// As [`Self::run_analyzer`], with the analyzer built from the checked
+    /// request, so that its own parameters are checked after the shared ones.
+    async fn run_analyzer_with<A: Analyzer + 'static>(
+        &self,
+        make: impl FnOnce(&Request) -> Result<A, AnalyzeError> + Send + 'static,
+        params: AnalyzeParams,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
         let root = self.root.clone();
         let outcome = tokio::task::spawn_blocking(move || {
             let request = params.request(&root)?;
+            let analyzer = make(&request)?;
             let envelope = run(&analyzer, &request, &ct)?;
             let json = serde_json::to_string(&envelope).map_err(|e| AnalyzeError::Failed {
                 analysis: A::NAME,
@@ -698,6 +714,45 @@ impl ActLiteServer {
             json,
             "Use `references` to find all usages of this symbol. Use `callers` to inspect call sites.",
         ))
+    }
+}
+
+/// The code-health analyzers' tools.
+#[tool_router(router = analyzer_tool_router)]
+impl ActLiteServer {
+    #[tool]
+    async fn analyze_patterns(
+        &self,
+        params: Parameters<PatternsParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer(PatternsAnalyzer, params.0.shared, ct)
+            .await
+    }
+
+    #[tool]
+    async fn analyze_hotspots(
+        &self,
+        params: Parameters<HotspotsParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer(HotspotsAnalyzer, params.0.shared, ct)
+            .await
+    }
+
+    #[tool]
+    async fn analyze_clones(
+        &self,
+        params: Parameters<ClonesParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        let ClonesParams { shared, focus } = params.0;
+        self.run_analyzer_with(
+            move |request| ClonesAnalyzer::new(request, &focus),
+            shared,
+            ct,
+        )
+        .await
     }
 }
 

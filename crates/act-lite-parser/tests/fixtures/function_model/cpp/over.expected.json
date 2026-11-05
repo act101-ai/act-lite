@@ -1,0 +1,18 @@
+[
+  {
+    "name": "f",
+    "range": "1:1-51:2",
+    "lines": 51,
+    "nesting": 5,
+    "complexity": 11,
+    "parameters": 6
+  },
+  {
+    "name": "bar",
+    "range": "54:1-56:2",
+    "lines": 3,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  }
+]

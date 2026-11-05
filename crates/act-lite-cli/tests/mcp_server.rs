@@ -48,7 +48,7 @@ fn first_json(result: &rmcp::model::CallToolResult) -> Value {
 }
 
 #[tokio::test]
-async fn tools_list_is_exactly_the_eight() {
+async fn tools_list_is_exactly_the_eleven() {
     let client = connect(&fixtures()).await;
     let mut names: Vec<String> = client
         .list_all_tools()
@@ -60,6 +60,9 @@ async fn tools_list_is_exactly_the_eight() {
     names.sort();
     // Builds with debug assertions also serve the test analyzer.
     let mut want = vec![
+        "analyze_clones",
+        "analyze_hotspots",
+        "analyze_patterns",
         "callers",
         "definition",
         "references",

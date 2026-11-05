@@ -30,6 +30,16 @@ pub trait Analyzer: Send + Sync {
         files: &mut dyn FileSource,
         cancel: &CancellationToken,
     ) -> Result<Analysis<Self::Finding>, AnalyzeError>;
+
+    /// Completes `details` with what only the whole scope shows, such as the
+    /// languages of files the reader skipped. `languages` is the result's
+    /// `coverage.languages`. Called once, when `details` is present.
+    fn finish_details(
+        &self,
+        _details: &mut serde_json::Map<String, serde_json::Value>,
+        _languages: &[LanguageCoverage],
+    ) {
+    }
 }
 
 /// What an analyzer found.
@@ -99,7 +109,7 @@ fn run_named<A: Analyzer>(
         inner: &mut reader,
         files: 0,
     };
-    let analysis = analyzer.analyze(&mut counted, cancel)?;
+    let mut analysis = analyzer.analyze(&mut counted, cancel)?;
     let analyzed_files = counted.files;
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
@@ -143,6 +153,9 @@ fn run_named<A: Analyzer>(
     let no_supported_file = !languages.iter().any(|l| l.supported);
     let no_recognized_file = languages.is_empty();
     let coverage = Coverage::new(languages, analyzed_files, discovered.unrecognized);
+    if let Some(details) = analysis.details.as_mut() {
+        analyzer.finish_details(details, &coverage.languages);
+    }
 
     let tests = read.test_exclusions.into_iter().map(|entry| Exclusion {
         kind: ExcludedKind::Tests,

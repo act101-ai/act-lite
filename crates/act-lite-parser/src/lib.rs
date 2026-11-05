@@ -8,6 +8,7 @@ pub mod compact_declaration;
 #[cfg(test)]
 mod coverage;
 pub mod error;
+pub mod function_model;
 pub mod grammar;
 pub mod import_types;
 pub mod language;

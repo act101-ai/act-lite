@@ -6,11 +6,11 @@ use crate::analyze::run::Request;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 
-/// act-lite — navigation-only code queries and sequestered secrets for AI agents.
+/// act-lite — code queries, code-health analysis and sequestered secrets for AI agents.
 #[derive(Parser, Debug)]
 #[command(name = "act-lite")]
 #[command(version)]
-#[command(about = "Navigation-only code queries and sequestered secrets for AI agents")]
+#[command(about = "Code queries, code-health analysis and sequestered secrets for AI agents")]
 #[command(long_about = None)]
 pub struct Cli {
     /// Output format
@@ -67,10 +67,40 @@ pub struct AnalyzeArgs {
 /// One subcommand per analyzer.
 #[derive(Subcommand, Debug)]
 pub enum AnalyzeCommand {
+    /// Functions whose size, nesting, branching or parameter count exceeds a fixed threshold
+    Patterns(PatternsArgs),
+    /// Files ranked by the sum of complexity × lines over their functions
+    Hotspots(HotspotsArgs),
+    /// Exact and renamed duplicate syntax subtrees
+    Clones(ClonesArgs),
     /// The test analyzer: reports each Rust function of 5 or more lines
     #[cfg(debug_assertions)]
     #[command(hide = true)]
     Fixture(SharedArgs),
+}
+
+/// Arguments for `analyze patterns`.
+#[derive(clap::Args, Debug)]
+pub struct PatternsArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+}
+
+/// Arguments for `analyze hotspots`.
+#[derive(clap::Args, Debug)]
+pub struct HotspotsArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+}
+
+/// Arguments for `analyze clones`.
+#[derive(clap::Args, Debug)]
+pub struct ClonesArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+    /// Report only the clone classes with a member at or below this path (repeatable)
+    #[arg(long, value_name = "PATH")]
+    pub focus: Vec<String>,
 }
 
 /// The arguments every analyzer takes.

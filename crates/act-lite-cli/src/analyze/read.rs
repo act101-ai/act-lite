@@ -822,7 +822,7 @@ mod tests {
             let rel = format!("f{n}.rs");
             let mut text = String::new();
             let mut i = 0;
-            while text.len() < 1 << 20 {
+            while text.len() < 3 << 20 {
                 text.push_str(&format!("fn f{i}(a: u32) -> u32 {{ a + {i} }}\n"));
                 i += 1;
             }
@@ -842,7 +842,7 @@ mod tests {
         let after = rss_kib();
         assert_eq!(rels.len(), 3);
         assert!(
-            after < before + 2048,
+            after < before + 4096,
             "resident set grew from {before} KiB to {after} KiB"
         );
     }

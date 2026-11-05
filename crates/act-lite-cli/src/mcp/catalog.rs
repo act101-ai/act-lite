@@ -43,6 +43,18 @@ pub const TOOLS: &[ToolEntry] = &[
         name: "definition",
         description: "Jump to definition — find where a symbol is defined given a usage location. Uses AST-based parsing, no language server required. Params: symbol (string), file (string), line (u32), column (u32)",
     },
+    ToolEntry {
+        name: "analyze_patterns",
+        description: "Find functions with structural problems: more than 50 code lines, nesting deeper than 4, cyclomatic complexity above 10, or more than 5 parameters. Each finding gives the function, its location, the metric, its value and the threshold it exceeds, as one JSON result with its evidence. Covers 20 programming languages; data and markup formats report unsupported. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+    },
+    ToolEntry {
+        name: "analyze_hotspots",
+        description: "Rank files by where investigation should start: score = sum over a file's functions of complexity × lines. Each file comes with its top 5 functions, their locations and raw metrics; the formula is in `details`. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+    },
+    ToolEntry {
+        name: "analyze_clones",
+        description: "Find duplicated code: exact and renamed duplicate syntax subtrees of at least 50 tokens, with member ranges, normalized size and variants. Exact matching ignores formatting and comments; renamed matching abstracts identifiers and literals consistently. A clone class shows the same syntax tree, not that the members behave the same. Use `focus` to report only the classes that touch given files. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100), focus (string[])]",
+    },
     #[cfg(debug_assertions)]
     ToolEntry {
         name: "analyze_fixture",

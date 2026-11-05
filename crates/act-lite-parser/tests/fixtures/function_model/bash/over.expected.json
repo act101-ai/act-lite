@@ -1,0 +1,18 @@
+[
+  {
+    "name": "f",
+    "range": "1:1-51:2",
+    "lines": 51,
+    "nesting": 5,
+    "complexity": 11,
+    "parameters": null
+  },
+  {
+    "name": "g",
+    "range": "53:1-55:2",
+    "lines": 3,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": null
+  }
+]
