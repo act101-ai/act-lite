@@ -7,7 +7,6 @@ mod langs_added;
 use langs_added::{Mcp, cli, cli_json, fixture};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::path::Path;
 
 const DEFAULT_NIX: &str = "{ pkgs ? import <nixpkgs> {}, lib, ... }:
 let
@@ -339,7 +338,7 @@ fn an_imports_list_is_a_binding_and_is_not_followed() {
 
 #[test]
 fn import_reports_the_path_only_and_not_the_applied_arguments() {
-    let skeleton = skeleton_of("x = import ./c.nix { a = 1; };\n");
+    let skeleton = skeleton_of("{ x = import ./c.nix { a = 1; }; }\n");
     let imports: Vec<(String, String)> = items(&skeleton, "declarations")
         .iter()
         .filter(|d| d["kind"] == "import")
@@ -347,7 +346,7 @@ fn import_reports_the_path_only_and_not_the_applied_arguments() {
         .collect();
     assert_eq!(
         imports,
-        vec![("./c.nix".to_string(), "1:5-1:21".to_string())]
+        vec![("./c.nix".to_string(), "1:7-1:21".to_string())]
     );
 }
 
