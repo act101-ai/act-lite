@@ -18,7 +18,7 @@ tree-sitter 0.25.10 — registry — MIT
   https://github.com/tree-sitter/tree-sitter
   Copyright (c) 2018 Max Brunsfeld (Cargo.toml authors: Max Brunsfeld, Amaan Qureshi)
 
-Grammars (38 languages)
+Grammars (39 languages)
 -----------------------
 Bash — tree-sitter-bash 0.25.1 — registry — MIT
   https://github.com/tree-sitter/tree-sitter-bash
@@ -115,6 +115,10 @@ Protocol Buffers — tree-sitter-proto 0.6.0 — registry — MIT
 Python — tree-sitter-python 0.25.0 — registry — MIT
   https://github.com/tree-sitter/tree-sitter-python
   Copyright (c) 2016 Max Brunsfeld
+
+R — tree-sitter-r 1.3.0 — registry — MIT
+  https://github.com/r-lib/tree-sitter-r
+  Copyright (c) 2025 tree-sitter-r authors
 
 Ruby — tree-sitter-ruby 0.23.1 — registry — MIT
   https://github.com/tree-sitter/tree-sitter-ruby
