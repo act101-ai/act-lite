@@ -766,3 +766,106 @@ fn cancellation_by_sigint() {
 }
 
 const SLOW_FILES: usize = 30_000;
+
+// ---- the code-health analyzers: patterns, hotspots, clones ----
+
+/// `act-lite --workspace <ws> analyze <analyzer> <args>`.
+fn run_named(ws: &Path, analyzer: &str, args: &[&str]) -> Run {
+    let config = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("act-lite").expect("the act-lite binary must be built");
+    cmd.env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(ws)
+        .args(["analyze", analyzer])
+        .args(args);
+    finish(cmd)
+}
+
+/// The message of a request error, after checking its exit status and frame.
+fn request_error(run: Run) -> String {
+    assert_eq!(run.code, Some(1), "stdout: {}", run.stdout);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    let v: Value = serde_json::from_str(&run.stderr).expect("stderr is one JSON value");
+    assert_eq!(v["error"]["chain"], json!([]), "{v}");
+    let message = v["error"]["message"].as_str().unwrap().to_string();
+    assert_eq!(run.stderr, frame(&message));
+    message
+}
+
+const SIX_PARAMETERS: &str = "fn p(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) {}\n";
+
+#[test]
+fn analyzer_subcommands_have_help() {
+    let ws = TempDir::new().unwrap();
+    for analyzer in ["patterns", "hotspots", "clones"] {
+        let run = run_named(ws.path(), analyzer, &["--help"]);
+        assert_eq!(run.code, Some(0), "{analyzer}: {}", run.stderr);
+        if analyzer == "clones" {
+            assert!(run.stdout.contains("--focus"), "{}", run.stdout);
+        }
+    }
+}
+
+#[test]
+fn code_health_analyzers_run_through_the_cli() {
+    let ws = TempDir::new().unwrap();
+    write(ws.path(), "src/p.rs", SIX_PARAMETERS);
+    for (analyzer, status) in [
+        ("patterns", "findings"),
+        ("hotspots", "findings"),
+        ("clones", "no_findings"),
+    ] {
+        let v = run_named(ws.path(), analyzer, &[]).json();
+        assert_eq!(v["analysis"], analyzer, "{v}");
+        assert_eq!(v["status"], status, "{analyzer}: {v}");
+    }
+    let v = run_named(ws.path(), "patterns", &[]).json();
+    assert_eq!(v["findings"][0]["rule"], "long_parameter_list", "{v}");
+}
+
+/// A workspace `ws/` with `a.py` and `sub/s.py`, and `x.py` beside it.
+fn focus_workspace() -> (TempDir, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("ws");
+    write(&root, "a.py", "def f():\n    return 1\n");
+    write(&root, "sub/s.py", "def g():\n    return 2\n");
+    write(tmp.path(), "x.py", "def h():\n    return 3\n");
+    (tmp, root)
+}
+
+#[test]
+fn clones_focus_errors() {
+    let (_tmp, root) = focus_workspace();
+    let missing = request_error(run_named(&root, "clones", &["--focus", "nope.py"]));
+    assert!(
+        missing.starts_with("The path 'nope.py' does not exist."),
+        "{missing}"
+    );
+    assert_eq!(
+        request_error(run_named(&root, "clones", &["--focus", "../x.py"])),
+        "path must be inside the workspace root: ../x.py"
+    );
+    assert_eq!(
+        request_error(run_named(&root, "clones", &["sub", "--focus", "a.py"])),
+        "focus path is not inside the requested paths: a.py"
+    );
+}
+
+#[test]
+fn focus_is_checked_after_limit_and_paths() {
+    let (_tmp, root) = focus_workspace();
+    assert_eq!(
+        request_error(run_named(
+            &root,
+            "clones",
+            &["--limit", "1001", "--focus", "nope.py"]
+        )),
+        "limit must be between 0 and 1000, got 1001"
+    );
+    let missing_path = request_error(run_named(&root, "clones", &["nope", "--focus", "nope.py"]));
+    assert!(
+        missing_path.starts_with("The path 'nope' does not exist."),
+        "{missing_path}"
+    );
+}
