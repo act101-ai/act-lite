@@ -5,7 +5,7 @@
 
 mod langs_added;
 
-use langs_added::{Mcp, cli_json};
+use langs_added::{Mcp, cli_json, fixture};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -180,6 +180,65 @@ fn julia_testset_in_a_source_file_is_not_a_test() {
                 assert_eq!(out["findings"][0]["top_functions"][0]["function"], "f");
             }
             _ => assert_eq!(out["findings"], json!([]), "{out}"),
+        }
+    }
+}
+
+/// The formats that no analyzer supports, each with its fixture.
+const UNSUPPORTED_FORMATS: [(&str, &str); 7] = [
+    ("JSONC", "jsonc/settings.jsonc"),
+    ("XML", "xml/pom.xml"),
+    ("GraphQL", "graphql/schema.graphql"),
+    ("Protocol Buffers", "protobuf/shop.proto"),
+    ("Make", "make/Makefile"),
+    ("CMake", "cmake/CMakeLists.txt"),
+    ("Nix", "nix/default.nix"),
+];
+
+fn with_fixture(rel: &str) -> tempfile::TempDir {
+    let source = fixture(rel);
+    let name = source.file_name().unwrap().to_str().unwrap().to_string();
+    let content = std::fs::read_to_string(&source).unwrap();
+    workspace(&[(&name, &content)])
+}
+
+#[test]
+fn a_format_alone_is_unsupported_for_every_analyzer() {
+    for (language, rel) in UNSUPPORTED_FORMATS {
+        let ws = with_fixture(rel);
+        let mut mcp = Mcp::start(ws.path());
+        for analyzer in ANALYZERS {
+            let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+            assert_eq!(out["status"], "unsupported", "{language} {analyzer}: {out}");
+            assert_eq!(
+                out["coverage"]["languages"],
+                json!([{"language": language, "files": 1, "supported": false}]),
+                "{language} {analyzer}: {out}"
+            );
+            assert_eq!(out["findings"], json!([]), "{language} {analyzer}: {out}");
+        }
+    }
+}
+
+#[test]
+fn a_format_beside_a_zig_file_is_listed_unsupported_in_a_mixed_scope() {
+    for (language, rel) in UNSUPPORTED_FORMATS {
+        let source = fixture(rel);
+        let name = source.file_name().unwrap().to_str().unwrap().to_string();
+        let content = std::fs::read_to_string(&source).unwrap();
+        let ws = workspace(&[(&name, &content), ("ok.zig", "const x: u8 = 1;\n")]);
+        let mut mcp = Mcp::start(ws.path());
+        for analyzer in ANALYZERS {
+            let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+            assert_eq!(out["status"], "no_findings", "{language} {analyzer}: {out}");
+            assert_eq!(
+                out["coverage"]["languages"],
+                json!([
+                    {"language": language, "files": 1, "supported": false},
+                    {"language": "Zig", "files": 1, "supported": true}
+                ]),
+                "{language} {analyzer}: {out}"
+            );
         }
     }
 }
