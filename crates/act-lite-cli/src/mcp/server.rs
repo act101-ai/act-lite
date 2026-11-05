@@ -554,19 +554,15 @@ impl ActLiteServer {
         }
         let json = serde_json::to_string(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let note = "Name-level baseline — a same-name symbol in an unrelated scope can appear.";
         let install = if self.enable_lsp {
-            crate::query::lsp_install_hint_once(grammar, &self.root)
+            crate::query::lsp_install_hint_once(grammar, &self.lsp_pool)
         } else {
             None
         };
         Ok(match install {
-            Some(install) => success_with_hint(
-                json,
-                &format!(
-                    "Name-level baseline — a same-name symbol in an unrelated scope can appear. {install}"
-                ),
-            ),
-            None => CallToolResult::success(vec![ContentBlock::text(json)]),
+            Some(install) => success_with_hint(json, &format!("{note} {install}")),
+            None => success_with_hint(json, note),
         })
     }
 

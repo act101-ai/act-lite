@@ -134,7 +134,7 @@ pub async fn execute(
                         return Ok(());
                     }
                 }
-                if let Some(hint) = lsp_install_hint_once(source.grammar(), &workspace_root) {
+                if let Some(hint) = lsp_install_hint_once(source.grammar(), &pool) {
                     eprintln!("hint: {hint}");
                 }
             }
@@ -423,20 +423,24 @@ static LSP_HINT_GIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// The hint to install the language server for `grammar`, the first time in
 /// this process that the server is configured but not on PATH; `None`
 /// otherwise. It names the server binary, its install command and its
-/// homepage.
-pub(crate) fn lsp_install_hint_once(grammar: Grammar, workspace_root: &Path) -> Option<String> {
+/// homepage, or, when `pool` already ran the install command, why the server
+/// is still unavailable.
+pub(crate) fn lsp_install_hint_once(grammar: Grammar, pool: &LspPool) -> Option<String> {
     let server = LspServer::for_grammar(grammar)?;
-    let config = server.config(workspace_root.to_path_buf());
+    let config = server.config(pool.root().clone());
     if act_lite_lsp::installer::is_installed(&config)
         || LSP_HINT_GIVEN.swap(true, std::sync::atomic::Ordering::Relaxed)
     {
         return None;
     }
-    Some(format!(
-        "Install `{}` for binding-level answers with {}.",
-        server.binary_name(),
-        act_lite_lsp::installer::install_hint(&config)
-    ))
+    Some(match pool.install_failure(grammar) {
+        Some(failure) => format!("{failure}."),
+        None => format!(
+            "Install `{}` for binding-level answers with {}.",
+            server.binary_name(),
+            act_lite_lsp::installer::install_hint(&config)
+        ),
+    })
 }
 
 /// Find a symbol's position in a file by name using tree-sitter.
