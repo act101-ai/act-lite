@@ -8,8 +8,8 @@
 //!
 //! Metrics, each over the own body:
 //! - `lines`: the distinct lines on which a token starts, ends or spans. A
-//!   token is a leaf that is not inside a comment; a Python docstring does not
-//!   count.
+//!   token is a leaf that is not inside a comment; a string literal counts
+//!   every line it spans; a Python docstring does not count.
 //! - `nesting`: the deepest chain of nesting constructs (if, multi-way, loop,
 //!   try). An if that is the else branch of another if adds no level.
 //! - `complexity`: 1 + the decision points (each if and else-if, each arm that
@@ -155,8 +155,10 @@ impl Functions<'_> {
             nesting = nesting.max(depth);
             complexity += ctx.logical_operators(n);
 
-            if n.child_count() == 0 {
+            if n.child_count() == 0 || ctx.is_string(n) {
                 mark(n.start_position().row, n.end_position().row);
+            }
+            if n.child_count() == 0 {
                 continue;
             }
             // Text that no child covers (string contents in some grammars) is

@@ -21,8 +21,10 @@ pub(super) struct Row {
     pub logical: &'static [&'static str],
     /// The operator texts counted in `logical` nodes.
     pub operators: &'static [&'static str],
-    /// Other node kinds read to find bodies, parameters, names and arms.
-    pub other: &'static [&'static str],
+    /// The other node kinds the table names (parameter lists, default arms).
+    pub named: &'static [&'static str],
+    /// String literal kinds: each counts every line it spans.
+    pub strings: &'static [&'static str],
 }
 
 const NONE: &[&str] = &[];
@@ -39,7 +41,14 @@ const BASH: Row = Row {
     conditionals: &["ternary_expression"],
     logical: &["list", "binary_expression"],
     operators: &["&&", "||"],
-    other: &["else_clause", "word"],
+    named: NONE,
+    strings: &[
+        "string",
+        "raw_string",
+        "ansi_c_string",
+        "translated_string",
+        "heredoc_body",
+    ],
 };
 
 const C: Row = Row {
@@ -54,13 +63,12 @@ const C: Row = Row {
     conditionals: &["conditional_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||"],
-    other: &[
+    named: &[
         "parameter_list",
         "parameter_declaration",
         "variadic_parameter",
-        "compound_statement",
-        "else_clause",
     ],
+    strings: &["string_literal"],
 };
 
 const CPP: Row = Row {
@@ -80,19 +88,13 @@ const CPP: Row = Row {
     conditionals: &["conditional_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||", "and", "or"],
-    other: &[
+    named: &[
         "parameter_list",
         "parameter_declaration",
         "optional_parameter_declaration",
         "variadic_parameter_declaration",
-        "operator_name",
-        "destructor_name",
-        "operator_cast",
-        "template_argument_list",
-        "template_parameter_list",
-        "compound_statement",
-        "else_clause",
     ],
+    strings: &["string_literal", "raw_string_literal"],
 };
 
 const CSHARP: Row = Row {
@@ -124,13 +126,18 @@ const CSHARP: Row = Row {
     conditionals: &["conditional_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||", "??"],
-    other: &[
+    named: &[
         "parameter_list",
         "bracketed_parameter_list",
         "parameter",
         "implicit_parameter",
         "arrow_expression_clause",
-        "discard",
+    ],
+    strings: &[
+        "string_literal",
+        "verbatim_string_literal",
+        "raw_string_literal",
+        "interpolated_string_expression",
     ],
 };
 
@@ -156,15 +163,13 @@ const DART: Row = Row {
         "if_null_expression",
     ],
     operators: &["&&", "||", "??"],
-    other: &[
+    named: &[
         "function_body",
         "formal_parameter_list",
         "formal_parameter",
         "optional_formal_parameters",
-        "operator_signature",
-        "type_parameters",
-        "program",
     ],
+    strings: &["string_literal"],
 };
 
 const ELIXIR: Row = Row {
@@ -179,16 +184,8 @@ const ELIXIR: Row = Row {
     conditionals: NONE,
     logical: &["binary_operator"],
     operators: &["&&", "||", "and", "or"],
-    other: &[
-        "do_block",
-        "else_block",
-        "arguments",
-        "keywords",
-        "pair",
-        "keyword",
-        "identifier",
-        "boolean",
-    ],
+    named: &["do_block", "arguments"],
+    strings: &["string", "charlist", "sigil"],
 };
 
 const GO: Row = Row {
@@ -207,12 +204,13 @@ const GO: Row = Row {
     conditionals: NONE,
     logical: &["binary_expression"],
     operators: &["&&", "||"],
-    other: &[
+    named: &[
         "parameter_list",
         "parameter_declaration",
         "variadic_parameter_declaration",
         "default_case",
     ],
+    strings: &["interpreted_string_literal", "raw_string_literal"],
 };
 
 const JAVA: Row = Row {
@@ -239,7 +237,7 @@ const JAVA: Row = Row {
     conditionals: &["ternary_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||"],
-    other: &[
+    named: &[
         "class_body",
         "formal_parameters",
         "formal_parameter",
@@ -247,6 +245,7 @@ const JAVA: Row = Row {
         "receiver_parameter",
         "inferred_parameters",
     ],
+    strings: &["string_literal"],
 };
 
 const JAVASCRIPT: Row = Row {
@@ -274,18 +273,19 @@ const JAVASCRIPT: Row = Row {
     conditionals: &["ternary_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||", "??"],
-    other: &["formal_parameters", "switch_default", "else_clause"],
+    named: &["formal_parameters", "switch_default"],
+    strings: &["string", "template_string"],
 };
 
 const TYPESCRIPT: Row = Row {
-    other: &[
+    named: &[
         "formal_parameters",
         "required_parameter",
         "optional_parameter",
         "this",
         "switch_default",
-        "else_clause",
     ],
+    strings: &["string", "template_string"],
     ..JAVASCRIPT
 };
 
@@ -313,18 +313,16 @@ const KOTLIN: Row = Row {
         "elvis_expression",
     ],
     operators: &["&&", "||", "?:"],
-    other: &[
-        "function_body",
+    named: &[
         "function_value_parameters",
         "parameter",
         "parameter_with_optional_type",
         "lambda_parameters",
         "variable_declaration",
         "multi_variable_declaration",
-        "type_parameters",
         "when_condition",
-        "control_structure_body",
     ],
+    strings: &["string_literal"],
 };
 
 const LUA: Row = Row {
@@ -339,13 +337,8 @@ const LUA: Row = Row {
     conditionals: NONE,
     logical: &["binary_expression"],
     operators: &["and", "or"],
-    other: &[
-        "parameters",
-        "identifier",
-        "vararg_expression",
-        "dot_index_expression",
-        "method_index_expression",
-    ],
+    named: &["parameters", "identifier", "vararg_expression"],
+    strings: &["string"],
 };
 
 const PHP: Row = Row {
@@ -370,15 +363,15 @@ const PHP: Row = Row {
     conditionals: &["conditional_expression"],
     logical: &["binary_expression"],
     operators: &["&&", "||", "and", "or", "??"],
-    other: &[
+    named: &[
         "formal_parameters",
         "simple_parameter",
         "variadic_parameter",
         "property_promotion_parameter",
         "default_statement",
         "match_default_expression",
-        "else_clause",
     ],
+    strings: &["string", "encapsed_string", "heredoc", "nowdoc"],
 };
 
 const PYTHON: Row = Row {
@@ -393,19 +386,14 @@ const PYTHON: Row = Row {
     conditionals: &["conditional_expression"],
     logical: &["boolean_operator"],
     operators: &["and", "or"],
-    other: &[
+    named: &[
         "parameters",
         "lambda_parameters",
         "keyword_separator",
         "positional_separator",
         "decorated_definition",
-        "class_definition",
-        "block",
-        "expression_statement",
-        "string",
-        "concatenated_string",
-        "case_pattern",
     ],
+    strings: &["string"],
 };
 
 const RUBY: Row = Row {
@@ -420,13 +408,14 @@ const RUBY: Row = Row {
     conditionals: &["conditional"],
     logical: &["binary"],
     operators: &["&&", "||", "and", "or"],
-    other: &[
+    named: &[
         "method_parameters",
         "lambda_parameters",
         "block_parameters",
         "hash_splat_nil",
         "else",
     ],
+    strings: &["string", "heredoc_body"],
 };
 
 const RUST: Row = Row {
@@ -441,15 +430,14 @@ const RUST: Row = Row {
     conditionals: NONE,
     logical: &["binary_expression", "let_chain"],
     operators: &["&&", "||"],
-    other: &[
+    named: &[
         "parameters",
         "parameter",
         "variadic_parameter",
         "self_parameter",
         "closure_parameters",
-        "match_pattern",
-        "else_clause",
     ],
+    strings: &["string_literal", "raw_string_literal"],
 };
 
 const SCALA: Row = Row {
@@ -464,15 +452,8 @@ const SCALA: Row = Row {
     conditionals: NONE,
     logical: &["infix_expression"],
     operators: &["&&", "||"],
-    other: &[
-        "parameters",
-        "parameter",
-        "bindings",
-        "binding",
-        "case_block",
-        "wildcard",
-        "guard",
-    ],
+    named: &["parameters", "parameter", "bindings"],
+    strings: &["string", "interpolated_string"],
 };
 
 const SWIFT: Row = Row {
@@ -503,15 +484,11 @@ const SWIFT: Row = Row {
         "nil_coalescing_expression",
     ],
     operators: &["&&", "||", "??"],
-    other: &[
-        "parameter",
-        "lambda_function_type",
-        "lambda_function_type_parameters",
-        "lambda_parameter",
-        "default_keyword",
-        "property_declaration",
-        "function_body",
-        "else",
+    named: &["parameter", "lambda_parameter", "default_keyword"],
+    strings: &[
+        "line_string_literal",
+        "multi_line_string_literal",
+        "raw_string_literal",
     ],
 };
 
@@ -541,7 +518,7 @@ pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
 }
 
 impl Row {
-    /// Every named node kind of the row.
+    /// Every node kind the table names for the language.
     pub fn kinds(&self) -> Vec<&'static str> {
         let mut kinds: Vec<&'static str> = [
             self.functions,
@@ -554,7 +531,7 @@ impl Row {
             self.handlers,
             self.conditionals,
             self.logical,
-            self.other,
+            self.named,
         ]
         .concat();
         kinds.sort_unstable();
@@ -894,10 +871,25 @@ impl Ctx<'_> {
         }
         children(node)
             .iter()
-            .filter(|c| {
-                c.child_count() == 0 && self.row.operators.contains(&text(**c, self.source))
-            })
+            .filter(|c| c.child_count() == 0 && self.is_operator(text(**c, self.source)))
             .count() as u32
+    }
+
+    /// Whether `token` is a logical operator of the row. PHP keyword operators
+    /// (`and`, `or`) are case-insensitive.
+    fn is_operator(&self, token: &str) -> bool {
+        if self.grammar == Grammar::Php && token.chars().all(|c| c.is_ascii_alphabetic()) {
+            return self
+                .row
+                .operators
+                .contains(&token.to_ascii_lowercase().as_str());
+        }
+        self.row.operators.contains(&token)
+    }
+
+    /// Whether `node` is a string literal, which counts every line it spans.
+    pub fn is_string(&self, node: Node) -> bool {
+        self.is(node, self.row.strings)
     }
 
     /// The Python docstring of a function: a string that is the first statement of its body.
@@ -1281,5 +1273,76 @@ impl Ctx<'_> {
             stack.extend(kids);
         }
         last.map(|n| text(n, self.source).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Node kinds the rules read by name that the table does not name.
+    fn helper_kinds(grammar: Grammar) -> &'static [&'static str] {
+        match grammar {
+            Grammar::Bash => &["else_clause", "word"],
+            Grammar::C => &["compound_statement", "else_clause"],
+            Grammar::Cpp => &[
+                "operator_name",
+                "destructor_name",
+                "operator_cast",
+                "template_argument_list",
+                "template_parameter_list",
+                "compound_statement",
+                "else_clause",
+            ],
+            Grammar::CSharp => &["discard"],
+            Grammar::Dart => &["operator_signature", "type_parameters", "program"],
+            Grammar::Elixir => &[
+                "else_block",
+                "keywords",
+                "pair",
+                "keyword",
+                "identifier",
+                "boolean",
+            ],
+            Grammar::JavaScript | Grammar::Jsx => &["else_clause"],
+            Grammar::TypeScript | Grammar::Tsx => &["else_clause"],
+            Grammar::Kotlin => &["function_body", "type_parameters", "control_structure_body"],
+            Grammar::Lua => &["dot_index_expression", "method_index_expression"],
+            Grammar::Php => &["else_clause"],
+            Grammar::Python => &[
+                "class_definition",
+                "block",
+                "expression_statement",
+                "concatenated_string",
+                "case_pattern",
+            ],
+            Grammar::Rust => &["match_pattern", "else_clause"],
+            Grammar::Scala => &["binding", "case_block", "wildcard", "guard"],
+            Grammar::Swift => &[
+                "lambda_function_type",
+                "lambda_function_type_parameters",
+                "property_declaration",
+                "function_body",
+                "else",
+            ],
+            _ => &[],
+        }
+    }
+
+    /// The kinds the table does not name (and so the integration test does
+    /// not probe) exist in their grammars too.
+    #[test]
+    fn helper_and_string_kinds_exist_in_their_grammars() {
+        let mut missing = Vec::new();
+        for grammar in Grammar::all() {
+            let Some(row) = row(grammar) else { continue };
+            let language = grammar.language_support().ts_language();
+            for kind in helper_kinds(grammar).iter().chain(row.strings) {
+                if tree_sitter::Query::new(&language, &format!("({kind}) @probe")).is_err() {
+                    missing.push(format!("{grammar:?}: {kind}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{missing:#?}");
     }
 }
