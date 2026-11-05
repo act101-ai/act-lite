@@ -1506,6 +1506,7 @@ fn symbol_kind_from_suffix(suffix: &str) -> Option<SymbolKind> {
         "module" | "namespace" | "package" | "program" | "unit" => SymbolKind::Module,
         "variable" | "loop_variable" | "global" | "storage" => SymbolKind::Variable,
         "constant" => SymbolKind::Constant,
+        "enum_member" => SymbolKind::EnumMember,
         "field" | "property" | "port" => SymbolKind::Field,
         "parameter" => SymbolKind::Parameter,
         "constructor" => SymbolKind::Constructor,
@@ -3389,6 +3390,14 @@ func main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enum_member_suffix_maps_to_enum_member() {
+        assert_eq!(
+            symbol_kind_from_suffix("enum_member"),
+            Some(SymbolKind::EnumMember)
+        );
+    }
 
     #[test]
     fn tree_sitter_only() {
