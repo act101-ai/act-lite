@@ -8,6 +8,7 @@ mod langs_added;
 
 use langs_added::{Mcp, cli, cli_json, fixture};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 fn read(rel: &str) -> String {
@@ -19,19 +20,39 @@ fn read(rel: &str) -> String {
     .unwrap()
 }
 
+/// The README with `\r\n` line ends read as `\n`, so a Windows checkout reads
+/// the same text.
+fn readme_source() -> String {
+    read("README.md").replace("\r\n", "\n")
+}
+
 /// The README with each run of whitespace collapsed to one space, so a
 /// statement matches wherever the README wraps its lines.
 fn readme() -> String {
-    flat(&read("README.md"))
+    flat(&readme_source())
 }
 
 fn flat(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The README's blank-line separated blocks, whitespace collapsed.
+/// The README's blocks, separated by one or more blank lines, whitespace
+/// collapsed.
 fn blocks() -> Vec<String> {
-    read("README.md").split("\n\n").map(flat).collect()
+    let mut blocks = Vec::new();
+    let mut block: Vec<&str> = Vec::new();
+    let source = readme_source();
+    for line in source.lines().chain([""]) {
+        if line.trim().is_empty() {
+            if !block.is_empty() {
+                blocks.push(flat(&block.join("\n")));
+                block.clear();
+            }
+        } else {
+            block.push(line);
+        }
+    }
+    blocks
 }
 
 fn must_state(statements: &[&str]) {
@@ -124,7 +145,7 @@ fn status_languages() -> Vec<String> {
 /// The rows of the README table whose heading line starts with `header`, each
 /// as its trimmed cells.
 fn table(header: &str) -> Vec<Vec<String>> {
-    let readme = read("README.md");
+    let readme = readme_source();
     let mut lines = readme.lines().skip_while(|l| !l.starts_with(header));
     assert!(lines.next().is_some(), "README has no table `{header}`");
     lines
@@ -421,7 +442,7 @@ fn the_examples_for_the_added_languages_run() {
         let source = fixture(rel);
         std::fs::copy(&source, ws.path().join(source.file_name().unwrap())).unwrap();
     }
-    let examples: Vec<String> = read("README.md")
+    let examples: Vec<(String, String)> = readme_source()
         .lines()
         .filter(|l| l.starts_with("act-lite query "))
         .filter(|l| {
@@ -429,26 +450,64 @@ fn the_examples_for_the_added_languages_run() {
                 .iter()
                 .any(|f| l.contains(f))
         })
-        .map(|l| l.split('#').next().unwrap().trim().to_string())
+        .map(|l| {
+            let (command, comment) = l.split_once('#').expect("each example has a comment");
+            (command.trim().to_string(), comment.trim().to_string())
+        })
         .collect();
     assert_eq!(examples.len(), 3, "{examples:?}");
-    for example in &examples {
+    for (example, comment) in &examples {
         let args: Vec<&str> = example.split_whitespace().skip(1).collect();
-        let output = cli(ws.path(), &args);
-        assert!(
-            output.status.success(),
-            "{example}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-        if args[1] == "references" {
-            assert_eq!(result["source"], "tree-sitter", "{example}: {result}");
-            assert!(
-                result["references"].as_array().unwrap().len() >= 2,
-                "{result}"
-            );
-        } else {
-            assert!(!result.to_string().is_empty());
+        let result = cli_json(ws.path(), &args);
+        match args[1] {
+            "skeleton" => {
+                assert_eq!(comment, "targets, variables, includes", "{example}");
+                let found = kind_names(&result, "declarations");
+                let kinds: BTreeSet<&str> = found.iter().map(|(k, _)| k.as_str()).collect();
+                assert_eq!(
+                    kinds,
+                    BTreeSet::from(["function", "variable", "include"]),
+                    "{result}"
+                );
+                for entry in [
+                    ("function", "all"),
+                    ("variable", "CC"),
+                    ("include", "common.mk"),
+                ] {
+                    assert!(found.contains(&pair(entry)), "{entry:?}: {result}");
+                }
+            }
+            "symbols" => {
+                assert_eq!(comment, "types, fields, enum values", "{example}");
+                let found = kind_names(&result, "symbols");
+                for entry in [("class", "User"), ("field", "id"), ("enum_member", "ADMIN")] {
+                    assert!(found.contains(&pair(entry)), "{entry:?}: {result}");
+                }
+            }
+            "references" => {
+                assert_eq!(comment, "name matches", "{example}");
+                assert_eq!(result["source"], "tree-sitter", "{example}: {result}");
+                let sites: Vec<(String, u64, u64)> = result["references"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| {
+                        let file = Path::new(r["file"].as_str().unwrap());
+                        (
+                            file.file_name().unwrap().to_string_lossy().to_string(),
+                            r["line"].as_u64().unwrap(),
+                            r["column"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect();
+                let at = |line, column| ("shop.proto".to_string(), line, column);
+                assert_eq!(
+                    sites,
+                    [at(5, 9), at(15, 11), at(15, 27), at(16, 20), at(16, 43)],
+                    "{result}"
+                );
+            }
+            other => panic!("unexpected example `{other}`: {example}"),
         }
     }
 }
@@ -562,4 +621,271 @@ fn imports_are_in_query_skeleton_and_not_in_mcp_skeleton() {
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Point"), "{text}");
     assert!(!text.to_lowercase().contains("import"), "{text}");
+}
+
+/// The `(kind, name)` pairs of the entries under `key` of a `query` result.
+fn kind_names(result: &Value, key: &str) -> BTreeSet<(String, String)> {
+    result[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("no `{key}` in {result}"))
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap().to_string(),
+                e["name"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn pair((kind, name): (&str, &str)) -> (String, String) {
+    (kind.to_string(), name.to_string())
+}
+
+fn pairs(entries: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    entries.iter().copied().map(pair).collect()
+}
+
+/// A temporary workspace holding each `(path, content)` of `files`.
+fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (rel, content) in files {
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    dir
+}
+
+/// One small file for each language `status` lists: `(language, path, content)`.
+const ONE_FILE_EACH: [(&str, &str, &str); 40] = [
+    ("Bash", "a.sh", "f() { :; }\n"),
+    ("C", "a.c", "int f(void) { return 0; }\n"),
+    ("C#", "a.cs", "class A { void F() {} }\n"),
+    ("C++", "a.cpp", "int f() { return 0; }\n"),
+    ("CMake", "CMakeLists.txt", "set(A 1)\n"),
+    ("CSS", "a.css", "a { color: red; }\n"),
+    ("Dart", "a.dart", "void f() {}\n"),
+    ("Dockerfile", "Dockerfile", "FROM x\n"),
+    ("Elixir", "a.ex", "defmodule A do\nend\n"),
+    ("Go", "a.go", "package a\n"),
+    ("GraphQL", "a.graphql", "type A { a: Int }\n"),
+    ("HCL/Terraform", "a.tf", "a = 1\n"),
+    ("HTML", "a.html", "<p></p>\n"),
+    ("Java", "A.java", "class A {}\n"),
+    ("JavaScript", "a.js", "function f() {}\n"),
+    ("JSX", "a.jsx", "function f() {}\n"),
+    ("JSON", "a.json", "{\"a\": 1}\n"),
+    ("JSONC", "a.jsonc", "{\"a\": 1}\n"),
+    ("Julia", "a.jl", "f(x) = x\n"),
+    ("Kotlin", "a.kt", "fun f() {}\n"),
+    ("Lua", "a.lua", "local a = 1\n"),
+    ("Make", "Makefile", "a = 1\n"),
+    ("Markdown", "a.md", "# a\n"),
+    ("Nix", "a.nix", "{ a = 1; }\n"),
+    ("PHP", "a.php", "<?php function f() {}\n"),
+    ("Protocol Buffers", "a.proto", "syntax = \"proto3\";\n"),
+    ("Python", "a.py", "def f(): pass\n"),
+    ("R", "a.R", "f <- function() 1\n"),
+    ("Ruby", "a.rb", "def f; end\n"),
+    ("Rust", "a.rs", "fn f() {}\n"),
+    ("Scala", "a.scala", "object A\n"),
+    ("SCSS", "a.scss", "a { b: c; }\n"),
+    ("SQL", "a.sql", "SELECT 1;\n"),
+    ("Swift", "a.swift", "func f() {}\n"),
+    ("TOML", "a.toml", "a = 1\n"),
+    ("TSX", "a.tsx", "function f() {}\n"),
+    ("TypeScript", "a.ts", "function f() {}\n"),
+    ("XML", "a.xml", "<a/>\n"),
+    ("YAML", "a.yaml", "a: 1\n"),
+    ("Zig", "a.zig", "fn f() void {}\n"),
+];
+
+/// The count and the names of the README list that follows `lead` and ends
+/// at `end`: `lead` is followed by the count, then `noun`, then the names.
+fn analyzer_list(readme: &str, lead: &str, noun: &str, end: &str) -> (usize, BTreeSet<String>) {
+    let rest = &readme[readme
+        .find(lead)
+        .unwrap_or_else(|| panic!("README lacks: {lead}"))
+        + lead.len()..];
+    let (count, rest) = rest
+        .split_once(noun)
+        .unwrap_or_else(|| panic!("README lacks: {noun}"));
+    let (list, _) = rest
+        .split_once(end)
+        .unwrap_or_else(|| panic!("README lacks: {end}"));
+    let names = list
+        .replace(" and ", ", ")
+        .split(", ")
+        .map(str::to_string)
+        .collect();
+    (count.parse().unwrap(), names)
+}
+
+#[test]
+fn the_analyzer_language_lists_are_what_the_analyzers_report() {
+    let files: Vec<(&str, &str)> = ONE_FILE_EACH.iter().map(|(_, p, c)| (*p, *c)).collect();
+    let ws = workspace(&files);
+    let mut languages: Vec<String> = ONE_FILE_EACH
+        .iter()
+        .map(|(l, _, _)| l.to_string())
+        .collect();
+    languages.sort();
+    assert_eq!(
+        languages,
+        status_languages(),
+        "one file for each language of `status`"
+    );
+
+    let patterns = cli_json(ws.path(), &["analyze", "patterns"]);
+    let coverage = patterns["coverage"]["languages"].as_array().unwrap();
+    assert_eq!(coverage.len(), 40, "{patterns}");
+    let reported = |supported: bool| -> BTreeSet<String> {
+        coverage
+            .iter()
+            .filter(|l| l["supported"] == supported)
+            .inspect(|l| assert_eq!(l["files"], 1, "{l}"))
+            .map(|l| l["language"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (supported, unsupported) = (reported(true), reported(false));
+    assert_eq!((supported.len(), unsupported.len()), (23, 17), "{patterns}");
+
+    let readme = readme();
+    let (count, listed) = analyzer_list(
+        &readme,
+        "The three analyzers support ",
+        " programming languages: ",
+        ". They do not support",
+    );
+    assert_eq!((count, listed.len()), (23, 23), "{listed:?}");
+    assert_eq!(listed, supported);
+    let (count, listed) = analyzer_list(
+        &readme,
+        "They do not support the ",
+        " data, schema and markup formats: ",
+        ". Those files",
+    );
+    assert_eq!((count, listed.len()), (17, 17), "{listed:?}");
+    assert_eq!(listed, unsupported);
+    assert_eq!(supported, ANALYZED.iter().map(|l| l.to_string()).collect());
+
+    let mut mcp = Mcp::start(ws.path());
+    let result = mcp.call("analyze_hotspots", json!({})).unwrap();
+    let hotspots: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(hotspots["coverage"], patterns["coverage"]);
+}
+
+#[test]
+fn the_design_statements_of_the_added_languages_are_stated() {
+    must_state(&[
+        "An `element` in the skeleton is an element, and in the symbols an element name is a `class` and an attribute name a `field`.",
+        "Types, interfaces, inputs, enums, unions, scalars, directives, named operations and fragments are declarations; fields and enum values are symbols.",
+        "Not reported: `schema { … }`, anonymous operations, field arguments, operation variables and selections.",
+        "Messages, enums, services and `rpc` methods are declarations; fields and enum values are symbols; `import` and `package` are skeleton entries.",
+        "Targets are functions and variable assignments are variables; GNU special targets (`.PHONY`) and target-specific assignments are not reported.",
+        "`include()`d files and subdirectories are not read, and a call such as `add_tool(cli)` is a use, not a target.",
+        "The built-in commands are recognized in any letter case, but name matches are case-sensitive: `ADD_TOOL(cli)` is not a reference to `function(add_tool …)`.",
+        "navigation results carry `parse_error: true`, and an analyzer lists the file in `parse_failures` and says `complete: false`.",
+        "`comptime` is not evaluated: a type built by a call (`const T = List(u8)`) is a `constant`, not a `struct`.",
+        "`test name { … }` (a doctest) is a use of `name`, not a declaration.",
+        "A function is an assignment whose value is a `function` or `\\(…)` definition.",
+        "Not modeled: `function(…) -> name`, assignments inside function bodies other than functions, `assign()`, and classes made by calls (`setClass`, `setRefClass` and `R6Class`).",
+        "Each method of a function is a separate entry, and multiple dispatch is not resolved.",
+        "`imports = [ ./a.nix ]` is a binding whose list is not followed.",
+        "The kind comes from the syntax of the bound expression.",
+        "R functions are `function(…)` and `\\(…)` definitions, named by the `<-`, `=` or `<<-` assignment whose right side they are, else `null`.",
+        "Julia functions are long-form and short-form definitions (`f(x) = …`, also with a `::T` return type or a `where` clause), macros, anonymous `function (x) … end` and `x -> …` functions, and `do` blocks;",
+    ]);
+}
+
+#[test]
+fn r_and_julia_functions_are_named_as_the_analyzer_paragraph_states() {
+    let ws = workspace(&[
+        (
+            "a.R",
+            "g = function(x) x\nh <<- function() 2\nk <- \\(x) x\nlapply(1, function(y) y)\n",
+        ),
+        ("b.jl", "macro twice(ex) ex end\n"),
+    ]);
+    let hotspots = cli_json(ws.path(), &["analyze", "hotspots"]);
+    let mut functions: Vec<(String, Option<String>)> = hotspots["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|f| {
+            let file = f["file"].as_str().unwrap().to_string();
+            f["top_functions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(move |t| (file.clone(), t["function"].as_str().map(str::to_string)))
+        })
+        .collect();
+    functions.sort();
+    let at = |file: &str, name: Option<&str>| (file.to_string(), name.map(str::to_string));
+    assert_eq!(
+        functions,
+        [
+            at("a.R", None),
+            at("a.R", Some("g")),
+            at("a.R", Some("h")),
+            at("a.R", Some("k")),
+            at("b.jl", Some("twice")),
+        ],
+        "{hotspots}"
+    );
+}
+
+#[test]
+fn proto2_groups_xml_prologs_and_zig_test_names_are_stated_and_hold() {
+    must_state(&[
+        "A proto2 `group` is reported as a `struct` (its message) and a `field` (the group name as written).",
+        "Text content, comments, processing instructions, the XML declaration, `DOCTYPE` and internal DTD declarations are not reported.",
+        "`test \"name\" { … }` is a `function` in `skeleton` and `symbols`, named by the string content (`test \"point len\"` is named `point len`);",
+    ]);
+    let ws = workspace(&[
+        (
+            "g.proto",
+            "syntax = \"proto2\";\nmessage G {\n  optional group Result = 1 {}\n}\n",
+        ),
+        (
+            "a.xml",
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ELEMENT r ANY>]>\n<!-- c -->\n<?pi x?>\n<r a=\"1\">text</r>\n",
+        ),
+        (
+            "t.zig",
+            "const name = 1;\ntest name { }\ntest \"point len\" { }\n",
+        ),
+    ]);
+    let symbols = |file: &str| cli_json(ws.path(), &["query", "symbols", file]);
+    let skeleton = |file: &str| cli_json(ws.path(), &["query", "skeleton", file]);
+
+    let group = symbols("g.proto");
+    assert_eq!(
+        kind_names(&group, "symbols"),
+        pairs(&[("struct", "G"), ("struct", "Result"), ("field", "Result")]),
+        "{group}"
+    );
+
+    let xml = symbols("a.xml");
+    assert_eq!(xml["parse_error"], Value::Null, "{xml}");
+    assert_eq!(
+        kind_names(&xml, "symbols"),
+        pairs(&[("class", "r"), ("field", "a")]),
+        "{xml}"
+    );
+    let xml = skeleton("a.xml");
+    assert_eq!(
+        kind_names(&xml, "declarations"),
+        pairs(&[("element", "r")]),
+        "{xml}"
+    );
+
+    let want = pairs(&[("constant", "name"), ("function", "point len")]);
+    let zig = symbols("t.zig");
+    assert_eq!(kind_names(&zig, "symbols"), want, "{zig}");
+    let zig = skeleton("t.zig");
+    assert_eq!(kind_names(&zig, "declarations"), want, "{zig}");
 }
