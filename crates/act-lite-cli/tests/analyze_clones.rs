@@ -1107,3 +1107,27 @@ fn string_text_the_grammar_keeps_out_of_the_tree_is_part_of_the_form() {
         assert_eq!(finding["variants"], 2);
     }
 }
+
+#[test]
+fn a_comment_between_adjacent_strings_does_not_change_the_form() {
+    for (plain, commented) in [
+        ("'a' 'b ${x}'", "'a' /* note */ 'b ${x}'"),
+        ("'a' 'b'", "'a' /* note */ 'b'"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.dart", &dart_label_expr(plain));
+        write(dir.path(), "b.dart", &dart_label_expr(commented));
+        let out = analyze(dir.path());
+        assert_eq!(out["total"], 1, "{plain}: {}", out["findings"]);
+        assert_eq!(out["findings"][0]["kind"], "exact", "{plain}");
+        assert_eq!(out["findings"][0]["variants"], 1, "{plain}");
+    }
+}
+
+/// A Dart function of more than 50 tokens that assigns `label` the
+/// expression `expr`.
+fn dart_label_expr(expr: &str) -> String {
+    format!(
+        "String report(int x, int y) {{\n  var a = x + y * 2;\n  var b = a - x * 3;\n  var c = b * a + y;\n  var label = {expr};\n  if (c > a && b < y) {{\n    return label + c.toString();\n  }}\n  return label;\n}}\n"
+    )
+}
