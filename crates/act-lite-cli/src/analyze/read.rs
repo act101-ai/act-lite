@@ -95,7 +95,8 @@ pub trait FileSource: Send {
     fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError>;
 
     /// Reads a file returned by `next_file` again, with the same blanking.
-    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError>;
+    /// A parse failure or test exclusion it finds is added to the evidence.
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError>;
 }
 
 /// A [`FileSource`] over a list of candidates.
@@ -180,7 +181,7 @@ impl FileSource for Reader {
         Ok(None)
     }
 
-    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
         if self.cancel.is_cancelled() {
             return Err(AnalyzeError::Cancelled);
         }
@@ -192,12 +193,29 @@ impl FileSource for Reader {
             return Err(failed(format!("{rel} was not returned by this reader")));
         };
         match read_file(file, self.include_tests)? {
-            ReadResult::Parsed { parsed, .. } => Ok(parsed),
+            ReadResult::Parsed {
+                parsed,
+                parse_failures,
+                test_exclusions,
+            } => {
+                add_new(&mut self.outcome.parse_failures, parse_failures);
+                add_new(&mut self.outcome.test_exclusions, test_exclusions);
+                Ok(parsed)
+            }
             ReadResult::Skipped(skip) => Err(failed(format!(
                 "cannot read {rel} again: {}",
                 skip.file.reason
             ))),
             ReadResult::TestFile(_) => Err(failed(format!("{rel} is now a test file"))),
+        }
+    }
+}
+
+/// Adds each of `found` that `list` does not hold yet.
+fn add_new<T: PartialEq>(list: &mut Vec<T>, found: Vec<T>) {
+    for item in found {
+        if !list.contains(&item) {
+            list.push(item);
         }
     }
 }
@@ -709,6 +727,31 @@ mod tests {
             reader.reread("src/broken.rs"),
             Err(AnalyzeError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn reread_records_a_new_parse_failure_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        pulled(&mut reader);
+        write(
+            dir.path(),
+            "src/more.rs",
+            b"fn more() {\n    let c = ;\n}\n",
+        );
+        reader.reread("src/more.rs").unwrap();
+        reader.reread("src/more.rs").unwrap();
+        reader.reread("src/broken.rs").unwrap();
+        reader.reread("src/lib.rs").unwrap();
+        let out = reader.finish();
+        let failures: Vec<_> = out
+            .parse_failures
+            .iter()
+            .map(|f| (f.file.as_str(), f.range.start_line()))
+            .collect();
+        assert_eq!(failures, [("src/broken.rs", 4), ("src/more.rs", 2)]);
+        assert_eq!(out.test_exclusions.len(), 2);
     }
 
     #[test]
