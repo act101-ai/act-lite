@@ -479,3 +479,56 @@ fn an_unreadable_directory_inside_a_root_is_reported() {
     assert_eq!(outcome(&graph, "app/main.py", "app.sub"), reason);
     assert_eq!(outcome(&graph, "app/other.py", "app.sub"), reason);
 }
+
+/// As `build`, with vendored files included.
+fn build_with_vendored(root: &Path) -> DepGraph {
+    let cancel = CancellationToken::new();
+    let includes = Includes {
+        vendored: true,
+        ..Includes::default()
+    };
+    let request = Request::new(root, &[], &[], &[], includes, 100).unwrap();
+    let ctx = RunContext {
+        root: root.to_path_buf(),
+        discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
+        support: SupportReader::new(root, &includes, &cancel),
+    };
+    let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
+    DepGraph::build_with(&mut reader, &ctx, &[&PythonResolver], &cancel).unwrap()
+}
+
+/// A declared `requests` whose only workspace copy is inside the virtual
+/// environment `venv`, with vendored files included.
+fn requests_in_a_virtual_environment(venv: &str) -> Outcome {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "pyproject.toml",
+        "[project]\nname = \"p\"\ndependencies = [\"requests\"]\n",
+    );
+    write(
+        ws.path(),
+        &format!("{venv}/pyvenv.cfg"),
+        "home = /usr/bin\n",
+    );
+    write(
+        ws.path(),
+        &format!("{venv}/lib/python3.13/site-packages/requests/__init__.py"),
+        "",
+    );
+    write(ws.path(), "main.py", "import requests\n");
+    outcome(&build_with_vendored(ws.path()), "main.py", "requests")
+}
+
+#[test]
+fn a_module_in_a_virtual_environment_is_no_top_level_candidate() {
+    assert_eq!(
+        requests_in_a_virtual_environment(".venv"),
+        Outcome::External
+    );
+}
+
+#[test]
+fn a_pyvenv_cfg_marks_a_directory_of_any_name_as_vendored() {
+    assert_eq!(requests_in_a_virtual_environment("env"), Outcome::External);
+}
