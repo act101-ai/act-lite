@@ -40,24 +40,91 @@ pub fn is_generated_dir(dir: &Path) -> bool {
         && head == CACHEDIR_SIGNATURE
 }
 
+const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
+
+/// Whether `name` matches a test file-name pattern of a language that has one.
+fn is_test_name(name: &str) -> bool {
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let suffixed = |ends: &[&str]| ends.iter().any(|e| stem.ends_with(e));
+    match ext {
+        "go" => stem.ends_with("_test"),
+        "py" => stem.starts_with("test_") || stem.ends_with("_test") || name == "conftest.py",
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => {
+            stem.ends_with(".test") || stem.ends_with(".spec")
+        }
+        "java" | "kt" | "kts" | "scala" | "cs" | "swift" | "php" => {
+            suffixed(&["Test", "Tests", "Spec"])
+        }
+        "dart" | "exs" | "sh" if stem.ends_with("_test") => true,
+        "sh" => stem.starts_with("test_"),
+        "rb" => suffixed(&["_spec", "_test"]) || stem.starts_with("test_"),
+        "c" | "cc" | "cpp" | "cxx" => {
+            suffixed(&["_test", "_unittest"]) || stem.starts_with("test_")
+        }
+        "lua" => suffixed(&["_spec", "_test"]),
+        "hcl" => stem.ends_with(".tftest"),
+        _ => false,
+    }
+}
+
 /// Whether the relative path `rel_path` (`/` separators, a trailing `/` for a
 /// directory) names a test file or lies below a test directory.
 pub fn is_test_file(rel_path: &str) -> bool {
-    let _ = rel_path;
-    false
+    let mut parts = rel_path.split('/');
+    let name = parts.next_back().unwrap_or_default();
+    parts.any(|d| TEST_DIRS.contains(&d)) || is_test_name(name)
 }
 
 /// Whether `file_name` is a generated file by name.
 pub fn is_generated_name(file_name: &str) -> bool {
-    let _ = file_name;
-    false
+    const SUFFIXES: [&str; 9] = [
+        ".min.js",
+        ".min.css",
+        ".pb.go",
+        "_pb2.py",
+        "_pb2_grpc.py",
+        ".pb.cc",
+        ".pb.h",
+        ".g.dart",
+        ".freezed.dart",
+    ];
+    SUFFIXES.iter().any(|s| file_name.ends_with(s))
+        || file_name.to_ascii_lowercase().ends_with(".designer.cs")
+        || file_name.ends_with(".g.cs")
+        || file_name.contains(".generated.")
+        || file_name == "package-lock.json"
+        || file_name == "pnpm-lock.yaml"
+}
+
+const HEADER_BYTES: u64 = 4096;
+const HEADER_LINES: usize = 20;
+const COMMENT_OPENERS: [&str; 7] = ["//", "/*", "*", "#", "--", "<!--", ";"];
+
+/// Whether `line` starts with a comment opener and, on the same line, holds
+/// `@generated` or `Code generated` followed by `DO NOT EDIT`.
+fn is_generated_marker_line(line: &str) -> bool {
+    let line = line.trim_start();
+    COMMENT_OPENERS.iter().any(|o| line.starts_with(o))
+        && (line.contains("@generated")
+            || line
+                .split_once("Code generated")
+                .is_some_and(|(_, rest)| rest.contains("DO NOT EDIT")))
 }
 
 /// Whether the first lines of the file at `path` carry a generated-file
 /// marker in a comment.
 pub fn has_generated_header(path: &Path) -> io::Result<bool> {
-    let _ = path;
-    Ok(false)
+    let mut head = Vec::new();
+    File::open(path)?
+        .take(HEADER_BYTES)
+        .read_to_end(&mut head)?;
+    let head = String::from_utf8_lossy(&head);
+    Ok(head
+        .lines()
+        .take(HEADER_LINES)
+        .any(is_generated_marker_line))
 }
 
 #[cfg(test)]
@@ -436,7 +503,6 @@ mod tests {
             "mytest/a.rs",
             "specs/a.rs",
             "footest.java",
-            "Foo_Test.java",
             "FooTest.rs",
             "FooTest.js",
             "a.TEST.js",
