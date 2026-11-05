@@ -19,7 +19,7 @@ HEADER = "| ID | Node | Depends | State | Tier | Refs |\n|----|------|---------|
 LOG_HEADER = "| Date | Event |\n|------|-------|\n"
 
 
-def row(id_, depends="—", state="TODO", tier="standard", node=None, refs="—"):
+def row(id_, depends="—", state="TODO", tier="normal", node=None, refs="—"):
     return f"| {id_} | {node or 'Node ' + id_} | {depends} | {state} | {tier} | {refs} |"
 
 
@@ -187,12 +187,12 @@ class CheckTests(CoreCase):
     def test_bad_state_and_tier_refused(self):
         g = self.make([row("N1", state="WIP", tier="gpt")], nodes={"N1": contract()})
         self.assertDefect(g, "N1: state WIP")
-        self.assertDefect(g, "N1: tier gpt is not light, standard or strong")
+        self.assertDefect(g, "N1: tier gpt is not simple, normal or demanding")
 
     def test_tier_opus_refused_and_strong_accepted(self):
         bad = self.make([row("N1", tier="opus")], nodes={"N1": contract()})
-        self.assertDefect(bad, "N1: tier opus is not light, standard or strong")
-        good = self.make([row("N1", tier="strong")], nodes={"N1": contract()})
+        self.assertDefect(bad, "N1: tier opus is not simple, normal or demanding")
+        good = self.make([row("N1", tier="demanding")], nodes={"N1": contract()})
         self.assertEqual(good.check(), [])
 
     def test_blocked_and_dropped_states_accepted(self):
@@ -321,7 +321,7 @@ class LedgerRowsTests(CoreCase):
         return g, path
 
     @staticmethod
-    def jrow(id_, depends=(), state="TODO", tier="standard"):
+    def jrow(id_, depends=(), state="TODO", tier="normal"):
         return {"id": id_, "node": f"Node {id_}", "depends": list(depends), "state": state, "tier": tier, "refs": ""}
 
     def run_main(self, args):
@@ -559,7 +559,7 @@ class ReviewFixTests(CoreCase):
         self.assertIn("schedule: N1", text)
 
     def test_r18_double_backtick_span(self):
-        self.assertEqual(len(wg.split_cells("| N1 | Parse ``a`b`` spans | — | TODO | standard | — |")), 6)
+        self.assertEqual(len(wg.split_cells("| N1 | Parse ``a`b`` spans | — | TODO | normal | — |")), 6)
 
     def test_r21_status_reports_stuck_nodes(self):
         g = self.make([row("N1", state="DROPPED(gone)"), row("N2", "N1"), row("N3", state="BLOCKED(x)")],
@@ -570,7 +570,7 @@ class ReviewFixTests(CoreCase):
     def test_l2_archive_with_rows_moves_only_log(self):
         g = self.make([], log=[("2026-09-01", "old"), ("2026-10-21", "new")])
         rows = g.root / "rows.json"
-        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "tier": "standard"}]), encoding="utf-8")
+        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "tier": "normal"}]), encoding="utf-8")
         (g.root / "nodes" / "N1.md").write_text(contract(), encoding="utf-8")
         code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
         self.assertEqual(code, 1)

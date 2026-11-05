@@ -34,7 +34,7 @@ from pathlib import Path
 ID_RE = re.compile(r"^[A-Z]+-?\d+$")
 LEDGER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STATE_RE = re.compile(r"^(TODO|PLANNED|IN-PROGRESS|DONE|BLOCKED\(.+\)|DROPPED\(.+\))$")
-TIERS = ("light", "standard", "strong")
+TIERS = ("simple", "normal", "demanding")
 NONE = "—"
 NODE_HEADER = ("ID", "Node", "Depends", "State", "Tier", "Refs")
 LOG_HEADER = ("Date", "Event")
@@ -423,7 +423,7 @@ def check(graph: Graph) -> list[str]:
         if not STATE_RE.match(r.state):
             defects.append(f"{r.id}: state {r.state} is not TODO, PLANNED, IN-PROGRESS, DONE, BLOCKED(reason) or DROPPED(evidence)")
         if r.tier not in TIERS and not (r.tier == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
-            defects.append(f"{r.id}: tier {r.tier} is not light, standard or strong")
+            defects.append(f"{r.id}: tier {r.tier} is not simple, normal or demanding")
         if len(r.line) > ROW_CAP and not graph.ledger:
             defects.append(f"{r.id}: row exceeds {ROW_CAP} characters ({len(r.line)}); move detail to nodes/{r.id}.md")
         for dep in r.depends:

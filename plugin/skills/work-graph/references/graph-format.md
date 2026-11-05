@@ -61,9 +61,9 @@ The header fixes the boundaries before any work starts.
 ```
 | ID | Node | Depends | State | Tier | Refs |
 |----|------|---------|-------|-------|------|
-| N1 | Parse config file | — | DONE | standard | a1b2c3d; acceptance 12/12 |
-| N2 | Validate config | N1 | IN-PROGRESS | standard | wt .worktrees/cfg/N2 |
-| N3 | Config defaults | N1 | TODO | light | — |
+| N1 | Parse config file | — | DONE | normal | a1b2c3d; acceptance 12/12 |
+| N2 | Validate config | N1 | IN-PROGRESS | normal | wt .worktrees/cfg/N2 |
+| N3 | Config defaults | N1 | TODO | simple | — |
 ```
 
 - States: `TODO` → `PLANNED` → `IN-PROGRESS` → `DONE`, or `BLOCKED(reason)`,

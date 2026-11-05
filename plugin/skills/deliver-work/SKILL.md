@@ -64,7 +64,7 @@ request.
 3. **Review stage.** Review the whole branch, from where it left its base to
    its head, adversarially. The reviewer, in this order: the operator's or
    the project's declared reviewer; else a fresh reviewer that has not seen
-   this session, at the `strong` tier. Brief the reviewer with the
+   this session, at the `demanding` tier. Brief the reviewer with the
    range, the requirements and the project's rules; not this session's
    history. Its task: find defects, not approve; report each with its
    location, the failure it causes and the evidence, and name each

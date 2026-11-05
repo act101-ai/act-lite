@@ -123,9 +123,11 @@ technicality:
 
 | Tier | Work |
 |---|---|
-| `light` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `standard` | Ordinary implementation from a complete plan; node reviews. |
-| `strong` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `simple` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
+| `normal` | Ordinary implementation from a complete plan; node reviews. |
+| `demanding` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+
+A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class.
 
 ## 5. Verification stage
 
@@ -133,7 +135,7 @@ The stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session, of the `strong` tier. Tell it to find defects, not to approve. Give it the
+   session, of the `demanding` tier. Tell it to find defects, not to approve. Give it the
    graph, the authority specs it answers, and the review focus. It reports
    each finding with its location, the failure it causes, and the evidence.
 2. **Verify each finding.** Read the spec or graph text it cites and
