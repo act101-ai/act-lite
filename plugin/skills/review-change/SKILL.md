@@ -68,6 +68,12 @@ below. Never stash, reset, check out or commit.
    workspace), `focus` = the changed files and `limit` = 1000.
    - Keep each clone class with a member whose `file` is a changed file and
      whose `range` overlaps a changed line of that file.
+   - A result lists at most 20 `members` of a class; `members_total` gives
+     the full count. When no listed member overlaps a changed line and
+     `members_total` is more than the members listed, keep the class too: a
+     member that is not listed can overlap the change. Mark it "overlap not
+     determined". Members in `focus` files are listed first, so this occurs
+     only when at least 20 members are in changed files.
    - If the result has `truncated: true`, split `focus` in two halves and call
      once per half, again while a result is truncated and its list has more
      than one file. A single file that is still truncated contributes its
@@ -100,6 +106,8 @@ A clone class shows that code has the same syntax tree, apart from formatting, c
 - **Duplication:** one line per kept class, in result order, with its
   `members` (each `<file>:<range> (variant <variant>)`); when
   `members_total` is more than the members listed, add "and <n> more".
+  For a class marked "overlap not determined", end its line with
+  "— overlap not determined (<listed> of <members_total> members shown)".
   With no kept class, write "None that touches the change."
 - **Not analyzed:** from each result, the `coverage.languages` entries with
   `supported: false`, the `excluded.counts`, the `incomplete.skipped_files`
