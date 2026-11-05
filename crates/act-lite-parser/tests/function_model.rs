@@ -655,6 +655,29 @@ fn swift_shorthand_computed_property_is_unnamed() {
 }
 
 #[test]
+fn swift_requirements_without_a_body_are_not_functions() {
+    let protocol = "protocol P {\n    subscript(i: Int) -> Int { get }\n    subscript(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int) -> Int { get set }\n    var v: Int { get }\n    var w: Int { get set }\n    func f(a: Int) -> Int\n}\n";
+    let fs = functions(Grammar::Swift, protocol);
+    assert!(fs.is_empty(), "{fs:#?}");
+    // An implemented subscript is a function; a `get` block in it is one too.
+    for (source, names) in [
+        (
+            "struct S {\n    subscript(i: Int) -> Int { return i }\n}\n",
+            &["subscript"][..],
+        ),
+        (
+            "struct S {\n    subscript(i: Int) -> Int { get { i } }\n}\n",
+            &["subscript", "get"][..],
+        ),
+    ] {
+        let fs = functions(Grammar::Swift, source);
+        let found: Vec<_> = fs.iter().map(|f| f.name.as_deref().unwrap()).collect();
+        assert_eq!(found, names, "{source}");
+        assert_eq!(fs[0].metrics.parameters, Some(1), "{source}");
+    }
+}
+
+#[test]
 fn csharp_expression_bodied_property_and_indexer_are_functions() {
     let fs = functions(
         Grammar::CSharp,
