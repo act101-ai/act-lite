@@ -103,7 +103,8 @@ main() {
   name=act-lite-$tag-$target
 
   tmp=$(mktemp -d) || die "could not create a temporary directory"
-  trap 'rm -rf "$tmp"' EXIT
+  staged=
+  trap 'rm -rf "$tmp"; [ -z "$staged" ] || rm -f "$staged"' EXIT
   trap 'exit 1' HUP INT TERM
 
   printf 'Installing act-lite %s for %s\n' "$tag" "$target"
@@ -120,7 +121,14 @@ main() {
   [ -f "$tmp/$name/act-lite" ] || die "$name.tar.gz does not contain $name/act-lite"
 
   mkdir -p "$dir" || die "could not create $dir"
-  install -m 0755 "$tmp/$name/act-lite" "$dir/act-lite" || die "could not install into $dir"
+  [ -d "$dir" ] && [ -w "$dir" ] || die "$dir is not a writable directory"
+  [ ! -d "$dir/act-lite" ] || die "$dir/act-lite is a directory; remove it or choose another ACT_LITE_INSTALL_DIR"
+
+  staged=$dir/.act-lite.$$.tmp
+  install -m 0755 "$tmp/$name/act-lite" "$staged" || die "could not write into $dir"
+  "$staged" --version >/dev/null 2>&1 || die "the downloaded act-lite does not run; the existing install was not changed"
+  mv -f "$staged" "$dir/act-lite" || die "could not replace $dir/act-lite"
+  staged=
 
   printf 'Installed %s\n' "$dir/act-lite"
   "$dir/act-lite" --version
