@@ -529,6 +529,39 @@ const R: Row = Row {
     strings: &["string"],
 };
 
+const JULIA: Row = Row {
+    functions: &[
+        "function_definition",
+        "assignment",
+        "macro_definition",
+        "arrow_function_expression",
+        "do_clause",
+    ],
+    ifs: &["if_statement"],
+    else_ifs: &["elseif_clause"],
+    multiways: NONE,
+    arms: NONE,
+    loops: &["for_statement", "while_statement"],
+    tries: &["try_statement"],
+    handlers: &["catch_clause"],
+    conditionals: &["ternary_expression"],
+    logical: &["binary_expression"],
+    operators: &["&&", "||"],
+    named: &[
+        "signature",
+        "argument_list",
+        "call_expression",
+        "typed_expression",
+        "where_expression",
+    ],
+    strings: &[
+        "string_literal",
+        "prefixed_string_literal",
+        "command_literal",
+        "prefixed_command_literal",
+    ],
+};
+
 /// The row of a supported grammar; `None` for the `Data` formats.
 pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
     Some(match grammar {
@@ -540,6 +573,7 @@ pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
         Grammar::Elixir => &ELIXIR,
         Grammar::Go => &GO,
         Grammar::Java => &JAVA,
+        Grammar::Julia => &JULIA,
         Grammar::JavaScript | Grammar::Jsx => &JAVASCRIPT,
         Grammar::TypeScript | Grammar::Tsx => &TYPESCRIPT,
         Grammar::Kotlin => &KOTLIN,
@@ -763,8 +797,35 @@ impl Ctx<'_> {
                 _ => true,
             },
             Grammar::Zig if kind == "function_declaration" => body(),
+            Grammar::Julia => match kind {
+                "arrow_function_expression" | "do_clause" => true,
+                _ => self.julia_head(node).is_some_and(|h| {
+                    h.kind() == "call_expression"
+                        || (kind != "assignment" && h.kind() == "argument_list")
+                }),
+            },
             _ => true,
         }
+    }
+
+    /// The head of a Julia definition, inside any `typed_expression` or
+    /// `where_expression`: the `signature`'s content, or an assignment's left
+    /// side. A method has a `call_expression` head, an anonymous `function` an
+    /// `argument_list`.
+    fn julia_head<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        let mut head = match node.kind() {
+            "assignment" => *named_children(node).first()?,
+            _ => {
+                let signature = children(node)
+                    .into_iter()
+                    .find(|c| c.kind() == "signature")?;
+                *named_children(signature).first()?
+            }
+        };
+        while matches!(head.kind(), "typed_expression" | "where_expression") {
+            head = *named_children(head).first()?;
+        }
+        Some(head)
     }
 
     /// The `function_body` that follows a Dart top-level getter or setter signature.
@@ -1133,6 +1194,27 @@ impl Ctx<'_> {
                 .map(|l| count_kinds(*l, &["parameter"]))
                 .sum(),
             Grammar::R => field("parameters").map_or(0, |l| count_kinds(l, &["parameter"])),
+            Grammar::Julia => {
+                let list = match kind {
+                    "arrow_function_expression" => match named_children(node).first() {
+                        Some(p) if p.kind() == "argument_list" => Some(*p),
+                        Some(_) => return Some(1),
+                        None => None,
+                    },
+                    "do_clause" => named_children(node).first().copied(),
+                    _ => self.julia_head(node).and_then(|h| {
+                        if h.kind() == "argument_list" {
+                            Some(h)
+                        } else {
+                            children(h)
+                                .into_iter()
+                                .find(|c| c.kind() == "argument_list")
+                        }
+                    }),
+                };
+                list.filter(|l| l.kind() == "argument_list")
+                    .map_or(0, |l| named_children(l).len() as u32)
+            }
             _ => 0,
         };
         Some(count)
@@ -1311,6 +1393,10 @@ impl Ctx<'_> {
                 self.last_identifier_before(node, &["block"], &[])
             }
             Grammar::R => self.r_assigned_name(node),
+            Grammar::Julia => match kind {
+                "arrow_function_expression" | "do_clause" => None,
+                _ => self.last_identifier_before(node, &["argument_list"], &["curly_expression"]),
+            },
             _ => match kind {
                 "block" | "static_initializer" | "lambda_expression" | "class_static_block"
                 | "arrow_function" | "func_literal" | "anonymous_function" | "lambda"
@@ -1430,6 +1516,7 @@ mod tests {
             ],
             Grammar::Zig => &["block", "else_clause"],
             Grammar::R => &["identifier", "string"],
+            Grammar::Julia => &["curly_expression"],
             _ => &[],
         }
     }

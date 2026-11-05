@@ -7,10 +7,11 @@ use crate::language::LanguageSupport;
 use crate::languages::{
     BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport,
     DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
-    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, KotlinSupport,
-    LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport,
-    PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport,
-    SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport, ZigSupport,
+    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, JuliaSupport,
+    KotlinSupport, LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport,
+    ProtobufSupport, PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport,
+    SqlSupport, SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
+    ZigSupport,
 };
 
 /// Supported language grammars.
@@ -55,6 +56,8 @@ pub enum Grammar {
     Json,
     /// JSONC — JSON with comments
     Jsonc,
+    /// Julia
+    Julia,
     /// Kotlin
     Kotlin,
     /// Lua
@@ -121,6 +124,7 @@ impl Grammar {
             Grammar::Jsx => "JSX",
             Grammar::Json => "JSON",
             Grammar::Jsonc => "JSONC",
+            Grammar::Julia => "Julia",
             Grammar::Kotlin => "Kotlin",
             Grammar::Lua => "Lua",
             Grammar::Make => "Make",
@@ -169,6 +173,7 @@ impl Grammar {
             Grammar::JavaScript => "javascript",
             Grammar::Jsx => "jsx",
             Grammar::Json | Grammar::Jsonc => "json",
+            Grammar::Julia => "julia",
             Grammar::Kotlin => "kotlin",
             Grammar::Lua => "lua",
             Grammar::Make => "make",
@@ -218,6 +223,7 @@ impl Grammar {
             Grammar::Jsx => &JsxSupport,
             Grammar::Json => &JsonSupport,
             Grammar::Jsonc => &JsoncSupport,
+            Grammar::Julia => &JuliaSupport,
             Grammar::Kotlin => &KotlinSupport,
             Grammar::Lua => &LuaSupport,
             Grammar::Make => &MakeSupport,
@@ -400,6 +406,7 @@ impl Grammar {
             "jsx" => Some(Grammar::Jsx),
             "json" => Some(Grammar::Json),
             "jsonc" | "code-workspace" => Some(Grammar::Jsonc),
+            "jl" => Some(Grammar::Julia),
             "kt" | "kts" => Some(Grammar::Kotlin),
             "lua" => Some(Grammar::Lua),
             "mk" | "mak" => Some(Grammar::Make),
