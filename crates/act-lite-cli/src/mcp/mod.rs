@@ -2,7 +2,7 @@
 
 mod catalog;
 mod params;
-mod path_error;
+pub(crate) mod path_error;
 mod server;
 
 pub use server::ActLiteServer;
