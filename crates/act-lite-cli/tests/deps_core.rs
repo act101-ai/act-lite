@@ -17,9 +17,9 @@ use act_lite_cli::analyze::deps::{
     DepGraph, Family, InputKind, Outcome, Probe, ResolveCx, Resolver, supports,
 };
 use act_lite_cli::analyze::discovery::{Includes, discover};
+use act_lite_cli::analyze::envelope::AnalyzeError;
 use act_lite_cli::analyze::read::{Reader, SupportReader};
 use act_lite_cli::analyze::run::{Request, RunContext};
-use act_lite_cli::analyze::envelope::AnalyzeError;
 use act_lite_parser::Grammar;
 use act_lite_parser::deps::Relationship;
 use serde_json::{Value, json};
@@ -207,7 +207,10 @@ fn evidence_is_capped_at_five() {
         .iter()
         .map(|e| e["range"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(lines, ["1:1-1:19", "2:1-2:19", "3:1-3:19", "4:1-4:19", "5:1-5:19"]);
+    assert_eq!(
+        lines,
+        ["1:1-1:19", "2:1-2:19", "3:1-3:19", "4:1-4:19", "5:1-5:19"]
+    );
 }
 
 #[test]
@@ -220,7 +223,13 @@ fn targets_outside_the_analyzed_set_and_the_workspace() {
     );
     write(ws.path(), "src/y.test.ts", "export const t = 1;\n");
     write(ws.path(), "other/z.ts", "export const z = 1;\n");
-    let graph = build(ws.path(), &["src"], &TestResolver::new(), &CancellationToken::new()).unwrap();
+    let graph = build(
+        ws.path(),
+        &["src"],
+        &TestResolver::new(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
     let edges = edges_json(&graph);
     let to_analyzed: Vec<(String, bool)> = edges
         .as_array()
@@ -235,7 +244,10 @@ fn targets_outside_the_analyzed_set_and_the_workspace() {
         .collect();
     assert_eq!(
         to_analyzed,
-        [("other/z.ts".to_string(), false), ("src/y.test.ts".to_string(), false)]
+        [
+            ("other/z.ts".to_string(), false),
+            ("src/y.test.ts".to_string(), false)
+        ]
     );
     assert_eq!(graph.common_details()["relationships"]["external"], 1);
 }
@@ -249,7 +261,11 @@ fn symlink_probes_resolve_into_the_workspace_or_are_outside() {
     write(tmp.path(), "out.ts", "export const o = 1;\n");
     std::os::unix::fs::symlink(root.join("src/real.ts"), root.join("src/link.ts")).unwrap();
     std::os::unix::fs::symlink(tmp.path().join("out.ts"), root.join("src/out.ts")).unwrap();
-    write(&root, "src/x.ts", "import 'src/link.ts';\nimport 'src/out.ts';\n");
+    write(
+        &root,
+        "src/x.ts",
+        "import 'src/link.ts';\nimport 'src/out.ts';\n",
+    );
     let graph = graph(&root);
     let targets: Vec<&str> = graph.edges().iter().map(|e| e.to.as_str()).collect();
     assert_eq!(targets, ["src/real.ts"]);
@@ -318,7 +334,11 @@ fn resolution_inputs_are_capped_at_one_hundred() {
 #[test]
 fn the_unresolved_filter_keeps_the_matching_entries_in_order() {
     let ws = tempfile::tempdir().unwrap();
-    write(ws.path(), "src/b.ts", "import 'unres:b2';\nimport 'unres:b1';\n");
+    write(
+        ws.path(),
+        "src/b.ts",
+        "import 'unres:b2';\nimport 'unres:b1';\n",
+    );
     write(ws.path(), "src/a.ts", "import 'unres:a';\n");
     let graph = graph(ws.path());
     let all: Vec<(String, String)> = graph
@@ -350,7 +370,15 @@ fn supports_exactly_the_seven_entries() {
     supported.sort();
     assert_eq!(
         supported,
-        ["Go", "JSX", "JavaScript", "Python", "Rust", "TSX", "TypeScript"]
+        [
+            "Go",
+            "JSX",
+            "JavaScript",
+            "Python",
+            "Rust",
+            "TSX",
+            "TypeScript"
+        ]
     );
 }
 
@@ -413,7 +441,10 @@ fn the_families_and_the_stubs() {
         .into_iter()
         .map(|u| u.reason)
         .collect();
-    assert_eq!(reasons, ["resolution not implemented", "resolution not implemented"]);
+    assert_eq!(
+        reasons,
+        ["resolution not implemented", "resolution not implemented"]
+    );
     assert_eq!(graph.family_of("lib.py"), Some(Family::Python));
     assert_eq!(graph.family_of("README.md"), None);
     assert!(graph.analyzed().contains("src/a.ts"));
