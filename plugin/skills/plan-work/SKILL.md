@@ -94,7 +94,7 @@ workflow for part of the work, use it.
 4. **Draw the edges.** A node depends on another only when it consumes what
    that node produces or changes a file that node creates. An edge that is
    not a real dependency removes parallelism.
-5. **Choose each node's model** (§4).
+5. **Choose each node's tier** (§4).
 6. **Write the contracts** (format §4) and the header (format §2).
 7. **Self-review** the graph, and fix what you find in place:
    1. **Spec coverage.** Every requirement in every authority spec maps to a
@@ -116,16 +116,18 @@ workflow for part of the work, use it.
     control, ignore it in the same commit, so a merge never stages a
     checkout.
 
-## 4. Models
+## 4. Tiers
 
-The model is chosen at creation by the work's complexity, nuance and
+The capability tier is chosen at creation by the work's complexity, nuance and
 technicality:
 
-| Model | Work |
+| Tier | Work |
 |---|---|
-| `haiku` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `sonnet` | Ordinary implementation from a complete plan; node reviews. |
-| `opus` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `simple` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
+| `normal` | Ordinary implementation from a complete plan; node reviews. |
+| `demanding` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+
+A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the tier.
 
 ## 5. Verification stage
 
@@ -133,7 +135,7 @@ The stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session, on `opus`. Tell it to find defects, not to approve. Give it the
+   session, of the `demanding` tier. Tell it to find defects, not to approve. Give it the
    graph, the authority specs it answers, and the review focus. It reports
    each finding with its location, the failure it causes, and the evidence.
 2. **Verify each finding.** Read the spec or graph text it cites and
