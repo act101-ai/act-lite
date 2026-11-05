@@ -11,11 +11,11 @@
 //! directory or an ancestor, and no module of that name sits elsewhere in
 //! the workspace.
 
+use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver};
 use act_lite_parser::deps::{ModuleNames, Relationship, RelationshipKind, module_names};
 use act_lite_parser::{Grammar, SourceFile};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use tree_sitter::Node;
 
 /// Python 3.13's `sys.stdlib_module_names`, in byte order.
 pub const STDLIB_MODULES: &[&str] = &[
@@ -885,14 +885,20 @@ fn pyproject_names(text: &str) -> Result<Vec<String>, String> {
     let mut cursor = root.walk();
     for item in root.named_children(&mut cursor) {
         match item.kind() {
-            "pair" => toml_pair(item, &[], text, &mut pairs),
+            "pair" => toml_pair(item, &[], text, &mut |path, value| {
+                pairs.push((path, value))
+            }),
             "table" | "table_array_element" => {
                 let mut cursor = item.walk();
                 let mut prefix: Option<Vec<String>> = None;
                 for child in item.named_children(&mut cursor) {
                     match (&prefix, child.kind()) {
                         (None, _) if is_key(child) => prefix = Some(key_path(child, text)),
-                        (Some(prefix), "pair") => toml_pair(child, prefix, text, &mut pairs),
+                        (Some(prefix), "pair") => {
+                            toml_pair(child, prefix, text, &mut |path, value| {
+                                pairs.push((path, value))
+                            })
+                        }
                         _ => {}
                     }
                 }
@@ -910,7 +916,7 @@ fn pyproject_names(text: &str) -> Result<Vec<String>, String> {
                 let mut cursor = value.walk();
                 for element in value.named_children(&mut cursor) {
                     if element.kind() == "string"
-                        && let Some(name) = requirement_name(unquote(&text[element.byte_range()]))
+                        && let Some(name) = requirement_name(&unquote(&text[element.byte_range()]))
                     {
                         out.push(name.to_string());
                     }
@@ -926,74 +932,6 @@ fn pyproject_names(text: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
-}
-
-/// Each pair below `prefix`, also those of inline tables, with its full key.
-fn toml_pair<'t>(
-    pair: Node<'t>,
-    prefix: &[String],
-    text: &str,
-    out: &mut Vec<(Vec<String>, Node<'t>)>,
-) {
-    let mut cursor = pair.walk();
-    let children: Vec<Node> = pair.named_children(&mut cursor).collect();
-    let (Some(key), Some(value)) = (children.first(), children.last()) else {
-        return;
-    };
-    let mut path = prefix.to_vec();
-    path.extend(key_path(*key, text));
-    if value.kind() == "inline_table" {
-        let mut cursor = value.walk();
-        for inner in value.named_children(&mut cursor) {
-            if inner.kind() == "pair" {
-                toml_pair(inner, &path, text, out);
-            }
-        }
-    }
-    out.push((path, *value));
-}
-
-fn is_key(node: Node) -> bool {
-    matches!(node.kind(), "bare_key" | "quoted_key" | "dotted_key")
-}
-
-/// The segments of a key.
-fn key_path(key: Node, text: &str) -> Vec<String> {
-    if key.kind() == "dotted_key" {
-        let mut cursor = key.walk();
-        return key
-            .named_children(&mut cursor)
-            .filter(|k| is_key(*k))
-            .flat_map(|k| key_path(k, text))
-            .collect();
-    }
-    vec![unquote(&text[key.byte_range()]).to_string()]
-}
-
-/// A TOML string or quoted key without its quotes.
-fn unquote(literal: &str) -> &str {
-    for quote in ["\"\"\"", "'''", "\"", "'"] {
-        if let Some(inner) = literal
-            .strip_prefix(quote)
-            .and_then(|l| l.strip_suffix(quote))
-        {
-            return inner;
-        }
-    }
-    literal
-}
-
-/// The first `ERROR` or `MISSING` node of the tree.
-fn first_error(node: Node) -> Option<Node> {
-    if node.is_error() || node.is_missing() {
-        return Some(node);
-    }
-    if !node.has_error() {
-        return None;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node> = node.children(&mut cursor).collect();
-    children.into_iter().find_map(first_error)
 }
 
 fn is_init(path: &str) -> bool {

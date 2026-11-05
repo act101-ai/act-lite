@@ -12,6 +12,7 @@
 //! goes through it. `cfg` is not evaluated, so a name with several `mod`
 //! declarations or dependency entries resolves to every file it reaches.
 
+use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{InlineModule, Relationship, RelationshipKind, extract, module_names};
@@ -999,7 +1000,13 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
     let mut cursor = root.walk();
     for item in root.named_children(&mut cursor) {
         match item.kind() {
-            "pair" => toml_pair(item, &[], None, text, &mut entries),
+            "pair" => toml_pair(item, &[], text, &mut |path, value| {
+                entries.push(Entry {
+                    path,
+                    element: None,
+                    value: Some(value),
+                })
+            }),
             "table" | "table_array_element" => {
                 let element = (item.kind() == "table_array_element").then(|| {
                     elements += 1;
@@ -1019,7 +1026,13 @@ fn parse_manifest(text: &str) -> Result<Manifest, String> {
                             prefix = Some(path);
                         }
                         (Some(prefix), "pair") => {
-                            toml_pair(child, prefix, element, text, &mut entries)
+                            toml_pair(child, prefix, text, &mut |path, value| {
+                                entries.push(Entry {
+                                    path,
+                                    element,
+                                    value: Some(value),
+                                })
+                            })
                         }
                         _ => {}
                     }
@@ -1131,148 +1144,8 @@ fn dependency(
     }
 }
 
-/// Each pair below `prefix`, also those of inline tables, with its full key.
-fn toml_pair<'t>(
-    pair: Node<'t>,
-    prefix: &[String],
-    element: Option<usize>,
-    text: &str,
-    out: &mut Vec<Entry<'t>>,
-) {
-    let mut cursor = pair.walk();
-    let children: Vec<Node> = pair.named_children(&mut cursor).collect();
-    let (Some(key), Some(value)) = (children.first(), children.last()) else {
-        return;
-    };
-    let mut path = prefix.to_vec();
-    path.extend(key_path(*key, text));
-    if value.kind() == "inline_table" {
-        let mut cursor = value.walk();
-        for inner in value.named_children(&mut cursor) {
-            if inner.kind() == "pair" {
-                toml_pair(inner, &path, element, text, out);
-            }
-        }
-    }
-    out.push(Entry {
-        path,
-        element,
-        value: Some(*value),
-    });
-}
-
-fn is_key(node: Node) -> bool {
-    matches!(node.kind(), "bare_key" | "quoted_key" | "dotted_key")
-}
-
-/// The segments of a key.
-fn key_path(key: Node, text: &str) -> Vec<String> {
-    if key.kind() == "dotted_key" {
-        let mut cursor = key.walk();
-        return key
-            .named_children(&mut cursor)
-            .filter(|k| is_key(*k))
-            .flat_map(|k| key_path(k, text))
-            .collect();
-    }
-    vec![unquote(&text[key.byte_range()])]
-}
-
 fn string_value(node: Node, text: &str) -> Option<String> {
     (node.kind() == "string").then(|| unquote(&text[node.byte_range()]))
-}
-
-/// The value of a TOML string or quoted key: quotes removed, the newline
-/// after an opening `"""` or `'''` trimmed, basic-string escapes applied.
-fn unquote(literal: &str) -> String {
-    let strip = |quote: &str| literal.strip_prefix(quote)?.strip_suffix(quote);
-    let first_line = |s: &'_ str| -> String {
-        s.strip_prefix("\r\n")
-            .or_else(|| s.strip_prefix('\n'))
-            .unwrap_or(s)
-            .to_string()
-    };
-    if let Some(inner) = strip("'''") {
-        return first_line(inner);
-    }
-    if let Some(inner) = strip("\"\"\"") {
-        return unescape(&first_line(inner), true);
-    }
-    if let Some(inner) = strip("'") {
-        return inner.to_string();
-    }
-    if let Some(inner) = strip("\"") {
-        return unescape(inner, false);
-    }
-    literal.to_string()
-}
-
-/// TOML basic-string escapes; in a multi-line string, a `\` before
-/// whitespace removes that whitespace and the newlines after it.
-fn unescape(text: &str, multiline: bool) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        let Some(next) = chars.next() else {
-            out.push('\\');
-            break;
-        };
-        let simple = match next {
-            'b' => Some('\u{8}'),
-            't' => Some('\t'),
-            'n' => Some('\n'),
-            'f' => Some('\u{c}'),
-            'r' => Some('\r'),
-            'e' => Some('\u{1b}'),
-            '"' => Some('"'),
-            '\\' => Some('\\'),
-            _ => None,
-        };
-        if let Some(simple) = simple {
-            out.push(simple);
-        } else if next == 'u' || next == 'U' {
-            let digits: String = chars
-                .by_ref()
-                .take(if next == 'u' { 4 } else { 8 })
-                .collect();
-            match u32::from_str_radix(&digits, 16)
-                .ok()
-                .and_then(char::from_u32)
-            {
-                Some(decoded) => out.push(decoded),
-                None => {
-                    out.push('\\');
-                    out.push(next);
-                    out.push_str(&digits);
-                }
-            }
-        } else if multiline && next.is_whitespace() {
-            while chars.peek().is_some_and(|c| c.is_whitespace()) {
-                chars.next();
-            }
-        } else {
-            out.push('\\');
-            out.push(next);
-        }
-    }
-    out
-}
-
-/// The first `ERROR` or `MISSING` node of the tree.
-fn first_error(node: Node) -> Option<Node> {
-    if node.is_error() || node.is_missing() {
-        return Some(node);
-    }
-    if !node.has_error() {
-        return None;
-    }
-    let mut cursor = node.walk();
-    let children: Vec<Node> = node.children(&mut cursor).collect();
-    children.into_iter().find_map(first_error)
 }
 
 /// Whether a path as written is absolute.
