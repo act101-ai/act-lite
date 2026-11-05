@@ -34,6 +34,7 @@ impl LanguageSupport for JuliaSupport {
             "module_definition" => NodeKind::Module,
             "struct_definition" => NodeKind::Struct,
             "abstract_definition" => NodeKind::Interface,
+            "primitive_definition" => NodeKind::TypeAlias,
             "const_statement" => NodeKind::Constant,
             "import_statement" | "using_statement" => NodeKind::Import,
             "compound_statement" | "source_file" => NodeKind::Block,
