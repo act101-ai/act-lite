@@ -322,7 +322,7 @@ class LedgerRowsTests(CoreCase):
 
     @staticmethod
     def jrow(id_, depends=(), state="TODO", tier="standard"):
-        return {"id": id_, "node": f"Node {id_}", "depends": list(depends), "state": state, "model": tier, "refs": ""}
+        return {"id": id_, "node": f"Node {id_}", "depends": list(depends), "state": state, "tier": tier, "refs": ""}
 
     def run_main(self, args):
         out = io.StringIO()
@@ -570,7 +570,7 @@ class ReviewFixTests(CoreCase):
     def test_l2_archive_with_rows_moves_only_log(self):
         g = self.make([], log=[("2026-09-01", "old"), ("2026-10-21", "new")])
         rows = g.root / "rows.json"
-        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "model": "standard"}]), encoding="utf-8")
+        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "tier": "standard"}]), encoding="utf-8")
         (g.root / "nodes" / "N1.md").write_text(contract(), encoding="utf-8")
         code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
         self.assertEqual(code, 1)

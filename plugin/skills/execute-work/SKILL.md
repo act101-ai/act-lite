@@ -221,7 +221,7 @@ from one breaks the main checkout.
 When every node is `DONE` or `DROPPED`:
 
 1. Run the verification stage (§4) over the whole branch, from where it left
-   the default branch to its head, on the most capable model, with the
+   the default branch to its head, at the `strong` tier, with the
    header's review focus. Confirmed findings become nodes and run through
    §5.2.
 2. When the stage passes, deliver the branch in §2 precedence: the
