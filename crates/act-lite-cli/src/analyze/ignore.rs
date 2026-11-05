@@ -1,5 +1,6 @@
 //! Ignore rules from `.gitignore` files and `.git/info/exclude`.
 
+use super::classify::is_regular_file;
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::path::{Path, PathBuf};
@@ -101,10 +102,11 @@ impl IgnoreRules {
         self.add(top, &top.join(".gitignore"));
     }
 
-    /// Adds the patterns of `file`, relative to `dir`. A file that cannot
-    /// be read adds no pattern; a pattern that is not valid is skipped.
+    /// Adds the patterns of `file`, relative to `dir`. A file that is not a
+    /// regular file (a symlink among others) or that cannot be read adds no
+    /// pattern; a pattern that is not valid is skipped.
     fn add(&mut self, dir: &Path, file: &Path) {
-        if !file.is_file() {
+        if !is_regular_file(file) {
             return;
         }
         let mut builder = GitignoreBuilder::new(dir);

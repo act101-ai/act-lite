@@ -130,6 +130,8 @@ pub fn discover(
         supported,
         cancel,
         out: Discovered::default(),
+        excluded: Vec::new(),
+        skipped: Vec::new(),
     };
     walk.check_cancel()?;
     let mut named = scope.paths.clone();
@@ -144,12 +146,21 @@ pub fn discover(
         }
     }
     let mut out = walk.out;
-    out.files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    out.excluded.sort_by(|a, b| a.entry.path.cmp(&b.entry.path));
-    out.skipped.sort_by(|a, b| a.file.file.cmp(&b.file.file));
-    out.skipped
-        .dedup_by(|a, b| a.file.file == b.file.file && a.file.kind == b.file.kind);
+    out.files
+        .sort_by(|a, b| (&a.rel, bytes(&a.path)).cmp(&(&b.rel, bytes(&b.path))));
+    walk.excluded
+        .sort_by(|(a, x), (b, y)| (&x.entry.path, bytes(a)).cmp(&(&y.entry.path, bytes(b))));
+    walk.skipped
+        .sort_by(|(a, x), (b, y)| (&x.file.file, bytes(a)).cmp(&(&y.file.file, bytes(b))));
+    out.excluded = walk.excluded.into_iter().map(|(_, e)| e).collect();
+    out.skipped = walk.skipped.into_iter().map(|(_, s)| s).collect();
     Ok(out)
+}
+
+/// The path as it is on disk: two names that differ only in invalid UTF-8
+/// have the same written form and different bytes.
+fn bytes(path: &Path) -> &[u8] {
+    path.as_os_str().as_encoded_bytes()
 }
 
 /// What steps 0–3 do with a real directory.
@@ -166,6 +177,10 @@ struct Walk<'a> {
     supported: &'a dyn Fn(Grammar) -> bool,
     cancel: &'a CancellationToken,
     out: Discovered,
+    /// Each entry with its path on disk, which orders entries whose written
+    /// paths are equal.
+    excluded: Vec<(PathBuf, Exclusion)>,
+    skipped: Vec<(PathBuf, Skip)>,
 }
 
 impl Walk<'_> {
@@ -179,10 +194,18 @@ impl Walk<'_> {
     /// A named path: steps 0–3 on each directory between the root and the
     /// path, then the path itself as a walked entry.
     fn named(&mut self, path: &Path) -> Result<(), AnalyzeError> {
-        let mut rules = IgnoreRules::for_root(self.root);
         let Ok(rel) = path.strip_prefix(self.root) else {
-            return Ok(());
+            return Err(AnalyzeError::Failed {
+                analysis: "analyze",
+                cause: format!(
+                    "path {} is not inside the workspace root {}",
+                    path.display(),
+                    self.root.display()
+                ),
+            });
         };
+        self.check_cancel()?;
+        let mut rules = IgnoreRules::for_root(self.root);
         let parts: Vec<_> = rel.components().collect();
         let Some((last, ancestors)) = parts.split_last() else {
             return self.walk_dir(self.root, &rules);
@@ -190,7 +213,7 @@ impl Walk<'_> {
         let mut dir = self.root.to_path_buf();
         for part in ancestors {
             dir.push(part);
-            match self.dir_step(&dir, &rules) {
+            match self.dir_step(&dir, &rules)? {
                 DirStep::Prune => return Ok(()),
                 DirStep::Exclude(kind) => {
                     let is_dir = path.is_dir();
@@ -200,7 +223,10 @@ impl Walk<'_> {
                     }
                     return Ok(());
                 }
-                DirStep::Walk => rules = rules.child(&dir),
+                DirStep::Walk => {
+                    self.check_cancel()?;
+                    rules = rules.child(&dir);
+                }
             }
         }
         let path = dir.join(last);
@@ -210,9 +236,11 @@ impl Walk<'_> {
         }
     }
 
-    fn dir_step(&self, dir: &Path, rules: &IgnoreRules) -> DirStep {
+    /// Steps 0–3 for `dir`; the token is checked before any marker is read.
+    fn dir_step(&self, dir: &Path, rules: &IgnoreRules) -> Result<DirStep, AnalyzeError> {
+        self.check_cancel()?;
         let includes = self.scope.includes;
-        if dir.file_name() == Some(OsStr::new(".git")) {
+        Ok(if dir.file_name() == Some(OsStr::new(".git")) {
             DirStep::Prune
         } else if !includes.ignored && rules.is_ignored(dir, true) {
             DirStep::Exclude(ExcludedKind::Ignored)
@@ -222,7 +250,7 @@ impl Walk<'_> {
             DirStep::Exclude(ExcludedKind::Generated)
         } else {
             DirStep::Walk
-        }
+        })
     }
 
     fn walk_dir(&mut self, dir: &Path, rules: &IgnoreRules) -> Result<(), AnalyzeError> {
@@ -231,11 +259,15 @@ impl Walk<'_> {
             Ok(entries) => entries,
             Err(err) => return self.walk_error(dir, true, err),
         };
+        let mut listed = true;
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    self.walk_error(dir, true, err)?;
+                    if listed {
+                        self.walk_error(dir, true, err)?;
+                    }
+                    listed = false;
                     continue;
                 }
             };
@@ -256,10 +288,13 @@ impl Walk<'_> {
         rules: &IgnoreRules,
     ) -> Result<(), AnalyzeError> {
         if file_type.is_dir() {
-            return match self.dir_step(path, rules) {
+            return match self.dir_step(path, rules)? {
                 DirStep::Prune => Ok(()),
                 DirStep::Exclude(kind) => self.exclude(kind, path, true),
-                DirStep::Walk => self.walk_dir(path, &rules.child(path)),
+                DirStep::Walk => {
+                    self.check_cancel()?;
+                    self.walk_dir(path, &rules.child(path))
+                }
             };
         }
         let Some(name) = path.file_name() else {
@@ -304,14 +339,19 @@ impl Walk<'_> {
                 Ok(false) => {}
                 Err(err) => {
                     let reason = format!("cannot read file header: {err}");
-                    self.skip(Some(grammar), rel, SkipKind::Unreadable, reason);
+                    self.skip(path, Some(grammar), rel, SkipKind::Unreadable, reason);
                     return Ok(());
                 }
             }
         }
-        if supported && name.to_str().is_none() {
-            let reason = "file name is not valid UTF-8".to_string();
-            self.skip(Some(grammar), rel, SkipKind::NotUtf8, reason);
+        let utf8 = path
+            .strip_prefix(self.root)
+            .ok()
+            .and_then(Path::to_str)
+            .is_some();
+        if supported && !utf8 {
+            let reason = "file path is not valid UTF-8".to_string();
+            self.skip(path, Some(grammar), rel, SkipKind::NotUtf8, reason);
             return Ok(());
         }
         self.out.files.push(Candidate {
@@ -342,7 +382,7 @@ impl Walk<'_> {
         match target {
             Err(err) if supported => {
                 let reason = format!("symlink target unreadable: {err}");
-                self.skip(grammar, rel, SkipKind::Unreadable, reason);
+                self.skip(path, grammar, rel, SkipKind::Unreadable, reason);
             }
             Err(_) => {}
             Ok((_, target)) if target.starts_with(&self.canonical_root) => {}
@@ -350,6 +390,7 @@ impl Walk<'_> {
                 let rel = rel_path(self.root, path, true)?;
                 let reason = "symlink to a directory outside the workspace, not followed";
                 self.skip(
+                    path,
                     None,
                     rel,
                     SkipKind::SymlinkOutsideWorkspace,
@@ -359,6 +400,7 @@ impl Walk<'_> {
             Ok((false, _)) if supported => {
                 let reason = "symlink to a file outside the workspace, not followed";
                 self.skip(
+                    path,
                     grammar,
                     rel,
                     SkipKind::SymlinkOutsideWorkspace,
@@ -387,11 +429,15 @@ impl Walk<'_> {
         path: &Path,
         is_dir: bool,
     ) -> Result<(), AnalyzeError> {
-        let path = rel_path(self.root, path, is_dir)?;
-        self.out.excluded.push(Exclusion {
+        let rel = rel_path(self.root, path, is_dir)?;
+        let exclusion = Exclusion {
             kind,
-            entry: ExcludedEntry { path, range: None },
-        });
+            entry: ExcludedEntry {
+                path: rel,
+                range: None,
+            },
+        };
+        self.excluded.push((path.to_path_buf(), exclusion));
         Ok(())
     }
 
@@ -403,15 +449,23 @@ impl Walk<'_> {
     ) -> Result<(), AnalyzeError> {
         let file = rel_path(self.root, path, is_dir)?;
         let reason = format!("walk error: {err}");
-        self.skip(None, file, SkipKind::WalkError, reason);
+        self.skip(path, None, file, SkipKind::WalkError, reason);
         Ok(())
     }
 
-    fn skip(&mut self, grammar: Option<Grammar>, file: String, kind: SkipKind, reason: String) {
-        self.out.skipped.push(Skip {
+    fn skip(
+        &mut self,
+        path: &Path,
+        grammar: Option<Grammar>,
+        file: String,
+        kind: SkipKind,
+        reason: String,
+    ) {
+        let skip = Skip {
             grammar,
             file: SkippedFile { file, kind, reason },
-        });
+        };
+        self.skipped.push((path.to_path_buf(), skip));
     }
 }
 
@@ -784,7 +838,7 @@ mod tests {
                 ("src/shared/", SkipKind::SymlinkOutsideWorkspace, None),
             ]
         );
-        assert_no_absolute_path(&d, &root);
+        assert_no_absolute_path(&d, dir.path());
     }
 
     #[cfg(unix)]
@@ -928,5 +982,130 @@ mod tests {
 
         write(root, "tests/cli.rs", b"fn t() {}\n");
         assert!(run(root, &[]).removed_supported);
+    }
+
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_marker_is_not_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        write(&root, "src/ok.rs", b"fn ok() {}\n");
+        mkfifo(&root.join("src/CACHEDIR.TAG"));
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(run(&root, &[]).files.len());
+        });
+        let files = receive
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("discovery blocked on a FIFO marker");
+        assert_eq!(files, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_marker_and_ignore_files_are_not_followed() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        let outside = dir.path().join("outside");
+        write(
+            &outside,
+            "CACHEDIR.TAG",
+            b"Signature: 8a477f597d28d172789f06886806bc55\n",
+        );
+        write(&outside, "pyvenv.cfg", b"home = /usr\n");
+        write(&outside, "ignore", b"src/\n");
+        write(&root, "src/ok.rs", b"fn ok() {}\n");
+        fs::create_dir(root.join(".git")).unwrap();
+        symlink(outside.join("CACHEDIR.TAG"), root.join("src/CACHEDIR.TAG")).unwrap();
+        symlink(outside.join("pyvenv.cfg"), root.join("src/pyvenv.cfg")).unwrap();
+        symlink(outside.join("ignore"), root.join(".gitignore")).unwrap();
+        let d = run(&root, &[]);
+        assert_eq!(rels(&d), ["src/ok.rs"]);
+        assert!(d.excluded.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_names_stay_distinct() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "src/ok.rs", b"fn ok() {}\n");
+        let name = |bytes: &[u8]| root.join(OsStr::from_bytes(bytes));
+        if fs::write(name(b"a\xff.rs"), b"fn a() {}\n").is_err() {
+            // The file system accepts only UTF-8 names: nothing to test.
+            return;
+        }
+        fs::write(name(b"a\xfe.rs"), b"fn a() {}\n").unwrap();
+        for d in [&b"d\xff"[..], b"d\xfe"] {
+            fs::create_dir(name(d)).unwrap();
+            fs::write(name(d).join("x.rs"), b"fn x() {}\n").unwrap();
+        }
+        fs::write(name(b"t\xff.toml"), b"").unwrap();
+        fs::write(name(b"t\xfe.toml"), b"").unwrap();
+        let d = run(root, &[]);
+        assert_eq!(
+            skipped(&d),
+            [
+                ("a\u{FFFD}.rs", SkipKind::NotUtf8, Some(Grammar::Rust)),
+                ("a\u{FFFD}.rs", SkipKind::NotUtf8, Some(Grammar::Rust)),
+                ("d\u{FFFD}/x.rs", SkipKind::NotUtf8, Some(Grammar::Rust)),
+                ("d\u{FFFD}/x.rs", SkipKind::NotUtf8, Some(Grammar::Rust)),
+            ]
+        );
+        assert_eq!(rels(&d), ["src/ok.rs", "t\u{FFFD}.toml", "t\u{FFFD}.toml"]);
+        let mut paths: Vec<_> = d.files.iter().map(|c| &c.path).collect();
+        paths.dedup();
+        assert_eq!(paths.len(), 3);
+    }
+
+    #[test]
+    fn root_spelled_differently_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        write(&root, "src/ok.rs", b"fn ok() {}\n");
+        let scope = scope_with(&root, &["src"], &[], &[], Includes::default()).unwrap();
+        let other = root.join("..").join("ws");
+        let err = discover(&other, &scope, &rust, &CancellationToken::new()).err();
+        let Some(AnalyzeError::Failed { cause, .. }) = err else {
+            panic!("expected a failure, got {err:?}");
+        };
+        assert!(cause.contains(&*root.to_string_lossy()), "{cause}");
+        assert!(cause.contains(&*other.to_string_lossy()), "{cause}");
+    }
+
+    #[test]
+    fn cancellation_is_checked_before_directory_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        conv(dir.path());
+        write(dir.path(), "a.toml", b"");
+        for named in ["vendor", "vendor/dep/lib.rs"] {
+            let scope = scope_with(
+                dir.path(),
+                &["a.toml", named],
+                &[],
+                &[],
+                Includes::default(),
+            )
+            .unwrap();
+            let cancel = CancellationToken::new();
+            let cancel_on_first_file = |_: Grammar| {
+                cancel.cancel();
+                false
+            };
+            let result = discover(dir.path(), &scope, &cancel_on_first_file, &cancel);
+            assert!(matches!(result, Err(AnalyzeError::Cancelled)), "{named}");
+        }
     }
 }
