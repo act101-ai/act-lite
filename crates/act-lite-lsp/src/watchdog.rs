@@ -1,9 +1,11 @@
+#[cfg(unix)]
 use tokio::process::{Child, Command};
 
 /// Watchdog script: loop while BOTH the watched parent and the target
 /// process group are alive; once either is gone, TERM then KILL the group
 /// (both no-ops on ESRCH when the group died first — normal shutdown).
 /// `$1` = parent pid, `$2` = target process-group id.
+#[cfg(unix)]
 const WATCHDOG_SH: &str = r#"
 while kill -0 "$1" 2>/dev/null && kill -0 -"$2" 2>/dev/null; do
   sleep 1
@@ -54,7 +56,7 @@ pub fn spawn_with_parent_death_guard(
     Ok(child)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::spawn_with_parent_death_guard;
     use std::time::{Duration, Instant};
