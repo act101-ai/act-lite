@@ -173,6 +173,26 @@ The server exposes eight tools: `status`, `skeleton`, `symbols`,
 `status` lists the 30 languages and, for each language server, whether it is
 `ready` or `not_installed`.
 
+**Analyzer tools.** Each `analyze_*` tool (and `graph`) returns the same JSON
+as its `act-lite analyze` command (see [`act-lite analyze`](#act-lite-analyze)):
+for the same workspace root, language-server setting and parameters, the first
+content block, parsed, equals the command's stdout, parsed. The tool
+parameters follow one rule: a parameter `snake_case` is the flag
+`--kebab-case`, an array is a repeatable flag, a boolean (default `false`) is a
+presence flag, and `paths` is the positional arguments. `--workspace`,
+`--format` and `--disable-lsp` are fixed when the server starts. An array can
+also be sent as a string that holds a JSON array, and `limit` as a numeric
+string. A request error is a JSON-RPC `invalid_params` error (-32602) with the
+command's message; an internal failure is `internal_error` (-32603). A
+cancelled request stops its analysis and gets no response.
+
+The second content block is a hint, and is not part of the result. When
+`truncated` is `true`, it gives `total` and names the parameters that narrow
+the result: `paths`, `include`, `exclude` and `limit`. When `excluded` or
+`incomplete` has a list cut at 100 entries, it says so and gives that object's
+`counts`. Otherwise it gives the analyzer's usual next step. The first block
+is always the JSON result alone.
+
 ## `act-lite analyze`
 
 ```bash
