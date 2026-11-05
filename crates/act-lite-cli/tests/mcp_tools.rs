@@ -1121,17 +1121,19 @@ fn unknown_tool_is_an_error() {
 
 // ---- status ----
 
-/// The README's 30 languages.
-const README_LANGUAGES: [&str; 30] = [
+/// The languages the README lists.
+const README_LANGUAGES: [&str; 36] = [
     "Bash",
     "C",
     "C#",
     "C++",
+    "CMake",
     "CSS",
     "Dart",
     "Dockerfile",
     "Elixir",
     "Go",
+    "GraphQL",
     "HCL/Terraform",
     "HTML",
     "Java",
@@ -1140,8 +1142,11 @@ const README_LANGUAGES: [&str; 30] = [
     "JSON",
     "Kotlin",
     "Lua",
+    "Make",
     "Markdown",
+    "Nix",
     "PHP",
+    "Protocol Buffers",
     "Python",
     "Ruby",
     "Rust",
@@ -1152,6 +1157,7 @@ const README_LANGUAGES: [&str; 30] = [
     "TOML",
     "TSX",
     "TypeScript",
+    "XML",
     "YAML",
 ];
 
@@ -1190,7 +1196,7 @@ fn status_of(path: &Path) -> Value {
 }
 
 #[test]
-fn status_lists_the_thirty_languages() {
+fn status_lists_the_readme_languages() {
     let empty = tempfile::tempdir().unwrap();
     let status = status_of(empty.path());
     let mut languages: Vec<&str> = status["languages"]
@@ -1266,7 +1272,7 @@ fn skeleton_errors() {
     assert!(message.contains("single source file"), "{message}");
     let message = s.err("skeleton", json!({ "file": "" }));
     assert!(message.contains("single source file"), "{message}");
-    // An extension act-lite does not support: names it and lists the 30.
+    // An extension act-lite does not support: names it and lists every language.
     let message = serve_in(&fixtures()).err("skeleton", json!({ "file": "sample.cob" }));
     assert!(message.contains(".cob"), "{message}");
     for language in README_LANGUAGES {
