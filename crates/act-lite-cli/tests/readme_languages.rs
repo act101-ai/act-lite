@@ -6,7 +6,7 @@
 
 mod langs_added;
 
-use langs_added::{Mcp, cli, fixture};
+use langs_added::{Mcp, cli, cli_json, fixture};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -524,8 +524,7 @@ fn hidden_paths_are_seen_by_definition_and_outline_not_by_references() {
             .ends_with(".Rprofile"),
         "{definition}"
     );
-    let output = cli(ws.path(), &["query", "repo-outline"]);
-    let outline: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let outline = cli_json(ws.path(), &["query", "repo-outline"]);
     let paths: Vec<&str> = outline["files"]
         .as_array()
         .unwrap()
@@ -545,8 +544,7 @@ fn hidden_paths_are_seen_by_definition_and_outline_not_by_references() {
 fn imports_are_in_query_skeleton_and_not_in_mcp_skeleton() {
     let ws = tempfile::tempdir().unwrap();
     std::fs::copy(fixture("zig/point.zig"), ws.path().join("point.zig")).unwrap();
-    let output = cli(ws.path(), &["query", "skeleton", "point.zig"]);
-    let skeleton: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let skeleton = cli_json(ws.path(), &["query", "skeleton", "point.zig"]);
     let kinds = |value: &Value| -> Vec<String> {
         value["declarations"]
             .as_array()
