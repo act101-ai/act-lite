@@ -1,13 +1,14 @@
 //! The `act-lite analyze` command group.
 
 use super::run::{Analyzer, run};
-use crate::cli::{AnalyzeArgs, AnalyzeCommand, OutputFormat, SharedArgs};
+use crate::cli::{AnalyzeArgs, OutputFormat, SharedArgs};
 use crate::output::output;
 use crate::query::resolve_workspace_root;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 /// Runs the analyzer the subcommand names.
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
 pub fn execute(
     args: &AnalyzeArgs,
     format: OutputFormat,
@@ -15,7 +16,7 @@ pub fn execute(
 ) -> anyhow::Result<()> {
     match args.command {
         #[cfg(debug_assertions)]
-        AnalyzeCommand::Fixture(ref shared) => {
+        crate::cli::AnalyzeCommand::Fixture(ref shared) => {
             run_cli(&super::fixture::FixtureAnalyzer, shared, format, workspace)
         }
     }
