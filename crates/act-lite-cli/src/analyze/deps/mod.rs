@@ -719,6 +719,7 @@ impl DepGraph {
                 "unresolved": unresolved,
             }),
         );
+        details.insert("kinds_total".to_string(), json!(kinds.len()));
         details.insert("kinds".to_string(), json!(kinds));
         details.insert("resolution_inputs".to_string(), Value::Array(inputs));
         details.insert(
