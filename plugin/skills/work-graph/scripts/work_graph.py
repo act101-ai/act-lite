@@ -34,9 +34,9 @@ from pathlib import Path
 ID_RE = re.compile(r"^[A-Z]+-?\d+$")
 LEDGER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STATE_RE = re.compile(r"^(TODO|PLANNED|IN-PROGRESS|DONE|BLOCKED\(.+\)|DROPPED\(.+\))$")
-MODELS = ("haiku", "sonnet", "opus")
+TIERS = ("simple", "normal", "demanding")
 NONE = "—"
-NODE_HEADER = ("ID", "Node", "Depends", "State", "Model", "Refs")
+NODE_HEADER = ("ID", "Node", "Depends", "State", "Tier", "Refs")
 LOG_HEADER = ("Date", "Event")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SETTING_RE = re.compile(r"^\*\*([A-Za-z ]+):\*\*\s*(.*)$")
@@ -63,7 +63,7 @@ class Row:
     node: str
     depends: list[str]
     state: str
-    model: str
+    tier: str
     refs: str
     line: str  # normalized: "| " + " | ".join(cells) + " |"
     file: str
@@ -219,7 +219,7 @@ def ledger_rows(data: object, malformed: list[str]) -> list[Row]:
         if not isinstance(item, dict):
             malformed.append(f"row {n}: not an object")
             continue
-        missing = [k for k in ("id", "depends", "state", "model") if k not in item]
+        missing = [k for k in ("id", "depends", "state", "tier") if k not in item]
         if missing:
             malformed.append(f"row {n}: missing {', '.join(missing)}")
             continue
@@ -229,8 +229,8 @@ def ledger_rows(data: object, malformed: list[str]) -> list[Row]:
             continue
         depends = [str(d) for d in item["depends"]]
         node, refs = str(item.get("node", "")), str(item.get("refs", ""))
-        line = normal([node_id, node, ", ".join(depends) or NONE, str(item["state"]), str(item["model"]), refs])
-        rows.append(Row(node_id, node, depends, str(item["state"]), str(item["model"]), refs, line, "ledger"))
+        line = normal([node_id, node, ", ".join(depends) or NONE, str(item["state"]), str(item["tier"]), refs])
+        rows.append(Row(node_id, node, depends, str(item["state"]), str(item["tier"]), refs, line, "ledger"))
     return rows
 
 
@@ -422,8 +422,8 @@ def check(graph: Graph) -> list[str]:
         seen.add(r.id)
         if not STATE_RE.match(r.state):
             defects.append(f"{r.id}: state {r.state} is not TODO, PLANNED, IN-PROGRESS, DONE, BLOCKED(reason) or DROPPED(evidence)")
-        if r.model not in MODELS and not (r.model == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
-            defects.append(f"{r.id}: model {r.model} is not haiku, sonnet or opus")
+        if r.tier not in TIERS and not (r.tier == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
+            defects.append(f"{r.id}: tier {r.tier} is not simple, normal or demanding")
         if len(r.line) > ROW_CAP and not graph.ledger:
             defects.append(f"{r.id}: row exceeds {ROW_CAP} characters ({len(r.line)}); move detail to nodes/{r.id}.md")
         for dep in r.depends:

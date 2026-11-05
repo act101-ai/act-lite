@@ -59,8 +59,9 @@ frontmatter is one YAML mapping of single-line `key: value` pairs between
 `tools`, `color`, `skills`. Quote a value that contains `: ` or starts with a
 quote, `[`, `{`, `#`, `&`, `*`, `!`, `|`, `>`, `%` or `@` (single quotes;
 double an inner single quote). No tabs, flow mappings, anchors, aliases, merge
-keys or tags. Skill names are unique across the marketplace. Check before a
-pull request:
+keys or tags. Skill names are unique across the marketplace. Shipped skills, templates and
+scripts name no model; they describe work by capability tier (`simple`,
+`normal`, `demanding`). Check before a pull request:
 
 ```sh
 for f in plugin/skills/*/SKILL.md; do

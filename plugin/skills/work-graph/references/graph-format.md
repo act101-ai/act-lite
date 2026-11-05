@@ -59,18 +59,18 @@ The header fixes the boundaries before any work starts.
 ## 3. The node table
 
 ```
-| ID | Node | Depends | State | Model | Refs |
+| ID | Node | Depends | State | Tier | Refs |
 |----|------|---------|-------|-------|------|
-| N1 | Parse config file | — | DONE | sonnet | a1b2c3d; acceptance 12/12 |
-| N2 | Validate config | N1 | IN-PROGRESS | sonnet | wt .worktrees/cfg/N2 |
-| N3 | Config defaults | N1 | TODO | haiku | — |
+| N1 | Parse config file | — | DONE | normal | a1b2c3d; acceptance 12/12 |
+| N2 | Validate config | N1 | IN-PROGRESS | normal | wt .worktrees/cfg/N2 |
+| N3 | Config defaults | N1 | TODO | simple | — |
 ```
 
 - States: `TODO` → `PLANNED` → `IN-PROGRESS` → `DONE`, or `BLOCKED(reason)`,
   or `DROPPED(evidence)`.
 - A row is at most 600 characters; a Log entry at most 300. Detail goes in
   the node file or the commit message.
-- `Depends` and `Model` live only here, never in the node file.
+- `Depends` and `Tier` live only here, never in the node file.
 
 ## 4. The node contract
 
