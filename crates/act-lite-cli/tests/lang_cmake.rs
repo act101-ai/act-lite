@@ -188,7 +188,7 @@ fn nested_target_lies_inside_its_function() {
 }
 
 #[test]
-fn mcp_skeleton_gives_the_table_names_and_kinds_without_imports() {
+fn mcp_skeleton_gives_the_table_names_and_kinds_without_import_entries() {
     let skeleton = mcp_payload(
         &Mcp::start(&fixture("cmake"))
             .call("skeleton", json!({ "file": "CMakeLists.txt" }))
@@ -204,6 +204,8 @@ fn mcp_skeleton_gives_the_table_names_and_kinds_without_imports() {
             ("class", "${name}"),
             ("macro", "log"),
             ("class", "core"),
+            ("include", "tests"),
+            ("include", "cmake/Deps.cmake"),
         ])
     );
 }
@@ -384,7 +386,7 @@ fn variable_uses_and_unquoted_arguments_are_uses_of_the_name() {
     );
     assert_eq!(
         sites(&reference_sites(ws.path(), "core", "1", "13")),
-        [(1, 13), (2, 23)].into_iter().collect()
+        [(1, 13), (2, 27)].into_iter().collect()
     );
     assert_eq!(
         sites(&reference_sites(ws.path(), "x", "3", "5")),
@@ -395,9 +397,9 @@ fn variable_uses_and_unquoted_arguments_are_uses_of_the_name() {
 #[test]
 fn same_name_sets_are_a_name_match_on_cli() {
     let ws = workspace("CMakeLists.txt", TWO_SETS);
-    let answer = reference_sites(ws.path(), "v", "1", "20");
+    let answer = reference_sites(ws.path(), "v", "1", "17");
     assert_eq!(answer["source"], "tree-sitter", "{answer}");
-    assert_eq!(sites(&answer), [(1, 20), (2, 5)].into_iter().collect());
+    assert_eq!(sites(&answer), [(1, 17), (2, 5)].into_iter().collect());
 }
 
 fn assert_mcp_name_match(mcp: &mut Mcp, reason: &str) {
