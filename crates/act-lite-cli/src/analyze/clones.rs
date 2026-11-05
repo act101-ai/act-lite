@@ -613,30 +613,49 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
 
 /// Writes the text of literal `node` that none of its children covers, with
 /// the number of non-comment children before it: string content that some
-/// grammars keep out of the tree (Kotlin, Dart, Scala). Whitespace between
-/// two quoted parts of one literal (`"a" "b"`) is formatting and is left out.
+/// grammars keep out of the tree (Kotlin, Dart, Scala). Comments and the
+/// whitespace next to them are left out, and so is whitespace between two
+/// quoted parts of one literal (`"a" "b"`): both are formatting.
 fn hidden_text(node: Node, literals: &[&str], text: &str, h: &mut SipHasher13) {
     let quote = |c: &Node| !c.is_named() && (c.kind().ends_with('\'') || c.kind().ends_with('"'));
     let mut cursor = node.walk();
-    let children: Vec<Node> = node.children(&mut cursor).collect();
+    let (comments, children): (Vec<Node>, Vec<Node>) = node
+        .children(&mut cursor)
+        .partition(|c| is_comment(c.kind()));
     let mut end = node.start_byte();
     let mut quotes = 0;
-    let mut before = 0;
     for i in 0..=children.len() {
         let next = children.get(i);
         let start = next.map_or(node.end_byte(), |c| c.start_byte());
-        let gap = &text[end..start];
+        let mut pieces = Vec::new();
+        let mut at = end;
+        for c in comments
+            .iter()
+            .filter(|c| c.start_byte() >= end && c.end_byte() <= start)
+        {
+            pieces.push(&text[at..c.start_byte()]);
+            at = c.end_byte();
+        }
+        pieces.push(&text[at..start]);
+        let last = pieces.len() - 1;
+        let gap: String = pieces
+            .iter()
+            .enumerate()
+            .map(|(k, p)| {
+                let p = if k > 0 { p.trim_start() } else { p };
+                if k < last { p.trim_end() } else { p }
+            })
+            .collect();
         let part = |c: Option<&Node>| c.is_some_and(|c| is_literal(*c, literals));
         let outside = quotes % 2 == 0
             && (quotes > 0 || part(i.checked_sub(1).and_then(|p| children.get(p))) || part(next));
         if !gap.is_empty() && !(outside && gap.trim().is_empty()) {
             h.write_u8(b'"');
-            h.write_u32(before);
+            h.write_u32(i as u32);
             put(h, gap.as_bytes());
         }
         if let Some(c) = next {
             quotes += quote(c) as u32;
-            before += !is_comment(c.kind()) as u32;
             end = c.end_byte();
         }
     }

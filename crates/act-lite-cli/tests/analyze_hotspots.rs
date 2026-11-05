@@ -296,6 +296,12 @@ fn parameter_values_by_family() {
 fn language_specific_forms() {
     let dart = top_functions("src/top.dart", "int get top {\n  return 1;\n}\n");
     assert_eq!(named(&dart, "top")["range"], "1:1-3:2");
+    let dart = top_functions(
+        "src/top.dart",
+        "int get top /* note */ {\n  if (a) return 1;\n  return 2;\n}\n",
+    );
+    assert_eq!(named(&dart, "top")["range"], "1:1-4:2");
+    assert_eq!(named(&dart, "top")["complexity"], 2);
 
     let swift = top_functions(
         "src/s.swift",

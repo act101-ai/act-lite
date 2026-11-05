@@ -644,6 +644,21 @@ fn dart_top_level_getter_spans_signature_and_body() {
 }
 
 #[test]
+fn dart_top_level_accessor_with_a_comment_before_its_body_is_a_function() {
+    let fs = functions(
+        Grammar::Dart,
+        "int get top /* note */ {\n  if (a) return 1;\n  return 2;\n}\nset top(int v) // note\n{\n  if (v > 0) x = v;\n}\n",
+    );
+    assert_eq!(fs.len(), 2, "{fs:#?}");
+    assert_eq!(fs[0].name.as_deref(), Some("top"));
+    assert_eq!(fs[0].range.to_string(), "1:1-4:2");
+    assert_eq!(fs[0].metrics, metrics(4, 1, 2, Some(0)));
+    assert_eq!(fs[1].name.as_deref(), Some("top"));
+    assert_eq!(fs[1].range.to_string(), "5:1-8:2");
+    assert_eq!(fs[1].metrics, metrics(4, 1, 2, Some(1)));
+}
+
+#[test]
 fn swift_shorthand_computed_property_is_unnamed() {
     let fs = functions(
         Grammar::Swift,

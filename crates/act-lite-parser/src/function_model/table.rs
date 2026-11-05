@@ -601,6 +601,18 @@ fn previous(node: Node) -> Option<Node> {
     None
 }
 
+/// The next named sibling that is not a comment.
+fn following(node: Node) -> Option<Node> {
+    let mut next = node.next_named_sibling();
+    while let Some(n) = next {
+        if !is_comment(n.kind()) {
+            return Some(n);
+        }
+        next = n.next_named_sibling();
+    }
+    None
+}
+
 /// The first node of `kind` in preorder, not entering nodes of `stop` kinds.
 fn find_first<'t>(node: Node<'t>, kind: &str, stop: &[&str]) -> Option<Node<'t>> {
     let mut stack = vec![node];
@@ -723,7 +735,7 @@ impl Ctx<'_> {
         {
             return None;
         }
-        let next = node.next_named_sibling()?;
+        let next = following(node)?;
         (next.kind() == "function_body").then_some(next)
     }
 
