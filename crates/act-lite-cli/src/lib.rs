@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(test), deny(clippy::print_stdout))]
 
+pub mod analyze;
 pub mod cli;
 pub mod definition;
 pub mod env;
