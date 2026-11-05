@@ -29,6 +29,7 @@ fn grammar_set_is_exactly_the_lite_set() {
         "Bash",
         "SQL",
         "JSON",
+        "JSONC",
         "YAML",
         "TOML",
         "HTML",

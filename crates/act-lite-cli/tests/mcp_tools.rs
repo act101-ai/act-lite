@@ -1122,7 +1122,7 @@ fn unknown_tool_is_an_error() {
 // ---- status ----
 
 /// The languages the README lists.
-const README_LANGUAGES: [&str; 36] = [
+const README_LANGUAGES: [&str; 37] = [
     "Bash",
     "C",
     "C#",
@@ -1140,6 +1140,7 @@ const README_LANGUAGES: [&str; 36] = [
     "JavaScript",
     "JSX",
     "JSON",
+    "JSONC",
     "Kotlin",
     "Lua",
     "Make",

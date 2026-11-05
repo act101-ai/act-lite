@@ -152,8 +152,8 @@ pub struct ReferencesWalk {
     pub skipped: Vec<SkippedFile>,
 }
 
-fn path_is_reference_sibling(path: &Path, grammar: Grammar) -> bool {
-    Grammar::from_path(path) == Some(grammar)
+fn path_is_reference_sibling(anchor: &Path, path: &Path, grammar: Grammar) -> bool {
+    grammar.walk_reads(anchor, path)
 }
 
 pub fn walk_reference_siblings(
@@ -192,7 +192,7 @@ pub fn walk_reference_siblings(
         };
         let path = entry.path();
         if entry.depth() > 0 && entry.path_is_symlink() {
-            let family_relevant = path_is_reference_sibling(path, grammar);
+            let family_relevant = path_is_reference_sibling(anchor, path, grammar);
             let reason = match std::fs::metadata(path) {
                 Err(err) => Some(format!("symlink target unreadable: {err}")),
                 Ok(meta) if meta.is_file() && !family_relevant => None,
@@ -206,7 +206,7 @@ pub fn walk_reference_siblings(
             }
             continue;
         }
-        if !entry.file_type().is_file() || !path_is_reference_sibling(path, grammar) {
+        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammar) {
             continue;
         }
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1346,10 +1346,10 @@ pub fn execute_symbol(source: &SourceFile, name: &str) -> Result<QueryResult> {
     let symbols_result = execute_symbols(source)?;
     match symbols_result {
         QueryResult::Symbols { symbols } => {
-            // JSON keeps the string quotes and Markdown the heading's leading space in
+            // JSON and JSONC keep the string quotes and Markdown the heading's leading space in
             // a symbol's name; the bare name finds the same declaration.
             let bare = |s: &Symbol| match source.grammar() {
-                Grammar::Json => s.name().trim_matches('"') == name,
+                Grammar::Json | Grammar::Jsonc => s.name().trim_matches('"') == name,
                 Grammar::Markdown => s.name().trim() == name,
                 _ => false,
             };
