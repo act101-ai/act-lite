@@ -1,6 +1,7 @@
 //! Classification of vendored, generated and test files and directories.
 
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::Path;
 
 /// Directory names that mark vendored dependencies.
@@ -17,15 +18,26 @@ const VENDORED_DIRS: [&str; 7] = [
 /// Whether `dir` is a vendored directory: a known name, or a Python virtual
 /// environment (a `pyvenv.cfg` file inside).
 pub fn is_vendored_dir(dir: &Path) -> bool {
-    let _ = (dir, VENDORED_DIRS);
-    false
+    let named = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| VENDORED_DIRS.contains(&n));
+    named || dir.join("pyvenv.cfg").is_file()
 }
+
+const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 
 /// Whether `dir` holds a `CACHEDIR.TAG` file that starts with the cache
 /// directory signature.
 pub fn is_generated_dir(dir: &Path) -> bool {
-    let _ = dir;
-    false
+    let mut head = Vec::new();
+    File::open(dir.join("CACHEDIR.TAG"))
+        .and_then(|f| {
+            f.take(CACHEDIR_SIGNATURE.len() as u64)
+                .read_to_end(&mut head)
+        })
+        .is_ok()
+        && head == CACHEDIR_SIGNATURE
 }
 
 /// Whether the relative path `rel_path` (`/` separators, a trailing `/` for a
