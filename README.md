@@ -396,6 +396,23 @@ other symlink is neither counted nor reported.
 valid UTF-8 gives kind `not_utf8`, with each invalid sequence written as
 U+FFFD. A FIFO, socket or device file is not opened by discovery.
 
+## Resource bounds and cancellation
+
+- **Per file:** a file in a language the analyzer supports that is larger
+  than 8 MiB (8,388,608 bytes) is not read. It is in `skipped_files` with
+  kind `size_limit`, so the result is incomplete, not silently partial. A
+  file in a language the analyzer does not support is counted in
+  `coverage.languages` and never read, whatever its size.
+- **Scope:** there is no file-count limit and no repository-size limit. No
+  analyzer stops or refuses because the scope holds many files.
+- **Time and memory:** there is no hard time cap and no hard memory cap. An
+  analysis reads every in-scope file of up to 8 MiB, one file at a time.
+  Cancellation is the way to bound time: on the command line, interrupt the
+  process (for example with Ctrl-C), which then prints no result; over MCP,
+  cancel the request, and the analysis stops at its next check.
+- **Side effects:** an analyzer writes no file, inside or outside the
+  workspace, keeps no cache, and starts no language server.
+
 ## `act-lite env`
 
 `act-lite env` keeps a project's secrets out of the working tree and out of
