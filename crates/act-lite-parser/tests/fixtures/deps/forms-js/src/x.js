@@ -1,0 +1,1 @@
+const y = require('./y');
