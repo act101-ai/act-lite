@@ -6,7 +6,7 @@
 use act_lite_cli::analyze::deps::DepGraph;
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::envelope::AnalyzeError;
-use act_lite_cli::analyze::focus::{check_focus, focus_files};
+use act_lite_cli::analyze::focus::{FocusSet, check_focus, focus_files};
 use act_lite_cli::analyze::graph::{Direction, GraphAnalyzer, traverse};
 use act_lite_cli::analyze::read::{Reader, SupportReader};
 use act_lite_cli::analyze::run::{Request, RunContext, run};
@@ -539,4 +539,63 @@ fn directions_parse_from_their_names() {
     assert_eq!("out".parse::<Direction>(), Ok(Direction::Out));
     assert_eq!("both".parse::<Direction>(), Ok(Direction::Both));
     assert!("up".parse::<Direction>().is_err());
+}
+
+#[test]
+fn parameter_errors_are_invalid_requests() {
+    let ws = tempfile::tempdir().unwrap();
+    ts(ws.path());
+    let request = Request::new(ws.path(), &[], &[], &[], Includes::default(), 100).unwrap();
+    let focus = vec!["src/a.ts".to_string()];
+    let cases: [(&[String], Option<&str>, Option<u32>); 4] = [
+        (&focus, None, Some(0)),
+        (&[], None, Some(2)),
+        (&[], Some("in"), None),
+        (&focus, Some("up"), None),
+    ];
+    for (focus, direction, max_depth) in cases {
+        let err = GraphAnalyzer::new(&request, focus, direction, max_depth)
+            .err()
+            .expect("an error");
+        assert!(matches!(err, AnalyzeError::InvalidRequest(_)), "{err:?}");
+    }
+    let css = vec!["src/style.css".to_string()];
+    let analyzer = GraphAnalyzer::new(&request, &css, Some("out"), None).unwrap();
+    let err = run(&analyzer, &request, &CancellationToken::new())
+        .err()
+        .expect("an error");
+    assert!(matches!(err, AnalyzeError::InvalidRequest(_)), "{err:?}");
+}
+
+#[test]
+fn a_cancelled_token_stops_the_traversal_before_its_sort() {
+    let ws = tempfile::tempdir().unwrap();
+    ts(ws.path());
+    let (graph, _) = model(ws.path(), &["src/a.ts"], &CancellationToken::new());
+    let nothing = FocusSet {
+        paths: Vec::new(),
+        files: Vec::new(),
+        paths_not_analyzed: Vec::new(),
+    };
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let result = traverse(&graph, &nothing, Direction::Both, 1, &cancel);
+    assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+}
+
+#[test]
+fn the_limit_cuts_findings_but_not_the_file_count() {
+    let ws = tempfile::tempdir().unwrap();
+    ts(ws.path());
+    let request = Request::new(ws.path(), &[], &[], &[], Includes::default(), 3).unwrap();
+    let analyzer = GraphAnalyzer::new(&request, &[], None, None).unwrap();
+    let envelope = run(&analyzer, &request, &CancellationToken::new()).unwrap();
+    let v = serde_json::to_value(envelope).unwrap();
+    assert_eq!(
+        numbered(&v),
+        (1..=3).map(|n| (n, Value::Null)).collect::<Vec<_>>()
+    );
+    assert_eq!(v["total"], 8);
+    assert_eq!(v["truncated"], true);
+    assert_eq!(v["details"]["files"], 8);
 }

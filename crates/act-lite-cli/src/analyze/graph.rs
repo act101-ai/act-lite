@@ -619,3 +619,113 @@ fn no_focus_error(set: &FocusSet) -> AnalyzeError {
         text.join(", ")
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyze::discovery::{Includes, discover};
+    use crate::analyze::envelope::AnalyzeError;
+    use crate::analyze::read::{Reader, SupportReader};
+    use std::fs;
+    use std::path::Path;
+
+    fn write(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    /// `src/a.ts` imports three files; the focus is `src/a.ts`.
+    fn workspace(root: &Path) -> Request {
+        fs::create_dir_all(root.join(".git")).unwrap();
+        write(
+            root,
+            "src/a.ts",
+            "import './b';\nimport './c';\nimport './d';\n",
+        );
+        for name in ["b", "c", "d"] {
+            write(root, &format!("src/{name}.ts"), "export const x = 1;\n");
+        }
+        Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap()
+    }
+
+    fn context(request: &Request, cancel: &CancellationToken) -> RunContext {
+        let supported = deps::supports;
+        RunContext {
+            root: request.root.clone(),
+            discovered: discover(&request.root, &request.scope, &supported, cancel).unwrap(),
+            support: SupportReader::new(&request.root, &Includes::default(), cancel),
+        }
+    }
+
+    #[test]
+    fn a_token_cancelled_during_the_traversal_stops_before_the_next_visit() {
+        let ws = tempfile::tempdir().unwrap();
+        let request = workspace(ws.path());
+        let cancel = CancellationToken::new();
+        let ctx = context(&request, &cancel);
+        let mut reader = Reader::new(&ctx.discovered.files, &deps::supports, false, &cancel);
+        let graph = DepGraph::build(&mut reader, &ctx, &cancel).unwrap();
+        let paths = check_focus(&request.root, &request.scope, &["src/a.ts".to_string()]).unwrap();
+        let set = focus_files(
+            &request.root,
+            &paths,
+            &ctx.discovered,
+            &Includes::default(),
+            &deps::supports,
+            &cancel,
+        )
+        .unwrap();
+        let mut visits = 0;
+        let result = traverse_observed(&graph, &set, Direction::Out, 2, &cancel, &mut |_| {
+            visits += 1;
+            if visits == 2 {
+                cancel.cancel();
+            }
+        });
+        assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+        assert_eq!(visits, 2);
+    }
+
+    /// An analyzer whose focus state lock is poisoned.
+    fn poisoned(request: &Request) -> GraphAnalyzer {
+        let analyzer =
+            GraphAnalyzer::new(request, &["src/a.ts".to_string()], Some("out"), None).unwrap();
+        let _ = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _held = analyzer.focus_set.lock().unwrap();
+                panic!("poison the focus state");
+            })
+            .join()
+        });
+        assert!(analyzer.focus_set.is_poisoned());
+        analyzer
+    }
+
+    fn poisoned_error() -> AnalyzeError {
+        AnalyzeError::Failed {
+            analysis: "graph",
+            cause: "focus state poisoned".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_poisoned_focus_state_fails_the_analysis() {
+        let ws = tempfile::tempdir().unwrap();
+        let request = workspace(ws.path());
+        let analyzer = poisoned(&request);
+        let cancel = CancellationToken::new();
+        let ctx = context(&request, &cancel);
+        let mut reader = Reader::new(&ctx.discovered.files, &deps::supports, false, &cancel);
+        let result = analyzer.analyze_in(&mut reader, &ctx, &cancel);
+        assert_eq!(result.err(), Some(poisoned_error()));
+        let mut analysis = Analysis {
+            findings: Vec::new(),
+            unresolved: Vec::new(),
+            limits_hit: Vec::new(),
+            details: None,
+        };
+        let result = analyzer.after_scope(&ctx, &ReadOutcome::default(), &mut analysis);
+        assert_eq!(result.err(), Some(poisoned_error()));
+    }
+}
