@@ -10,7 +10,7 @@ use crate::languages::{
     JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, KotlinSupport,
     LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport,
     PythonSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport, SwiftSupport,
-    TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
+    TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport, ZigSupport,
 };
 
 /// Supported language grammars.
@@ -93,6 +93,8 @@ pub enum Grammar {
     Xml,
     /// YAML
     Yaml,
+    /// Zig
+    Zig,
 }
 
 impl Grammar {
@@ -136,6 +138,7 @@ impl Grammar {
             Grammar::TypeScript => "TypeScript",
             Grammar::Xml => "XML",
             Grammar::Yaml => "YAML",
+            Grammar::Zig => "Zig",
         }
     }
 
@@ -182,6 +185,7 @@ impl Grammar {
             Grammar::TypeScript => "typescript",
             Grammar::Xml => "xml",
             Grammar::Yaml => "yaml",
+            Grammar::Zig => "zig",
         }
     }
 
@@ -229,6 +233,7 @@ impl Grammar {
             Grammar::TypeScript => &TypeScriptSupport,
             Grammar::Xml => &XmlSupport,
             Grammar::Yaml => &YamlSupport,
+            Grammar::Zig => &ZigSupport,
         }
     }
 
@@ -410,6 +415,7 @@ impl Grammar {
             "csproj" | "fsproj" | "vbproj" | "props" | "targets" => Some(Grammar::Xml),
             "resx" | "xaml" => Some(Grammar::Xml),
             "yaml" | "yml" => Some(Grammar::Yaml),
+            "zig" => Some(Grammar::Zig),
             _ => None,
         }
     }
@@ -617,6 +623,17 @@ mod tests {
     #[test]
     fn nix_extension() {
         assert_eq!(Grammar::from_extension("nix"), Some(Grammar::Nix));
+    }
+
+    #[test]
+    fn zig_extension_name_query_dir_and_category() {
+        assert_eq!(Grammar::from_extension("zig"), Some(Grammar::Zig));
+        assert_eq!(Grammar::Zig.name(), "Zig");
+        assert_eq!(Grammar::Zig.query_dir(), "zig");
+        assert!(matches!(
+            Grammar::Zig.category(),
+            act_lite_core::registry::LanguageCategory::Systems
+        ));
     }
 
     #[test]
@@ -905,7 +922,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            37,
+            38,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

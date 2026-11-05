@@ -37,6 +37,7 @@ pub mod tsx;
 pub mod typescript;
 pub mod xml;
 pub mod yaml;
+pub mod zig;
 
 pub use bash::BashSupport;
 pub use c::CSupport;
@@ -75,3 +76,4 @@ pub use tsx::TsxSupport;
 pub use typescript::TypeScriptSupport;
 pub use xml::XmlSupport;
 pub use yaml::YamlSupport;
+pub use zig::ZigSupport;

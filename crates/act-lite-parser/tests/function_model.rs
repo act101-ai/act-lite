@@ -436,6 +436,22 @@ fn table_kinds(grammar: Grammar) -> &'static [&'static str] {
             "disjunction_expression",
             "nil_coalescing_expression",
         ],
+        Grammar::Zig => &[
+            "function_declaration",
+            "test_declaration",
+            "parameters",
+            "parameter",
+            "if_statement",
+            "if_expression",
+            "switch_expression",
+            "switch_case",
+            "while_statement",
+            "while_expression",
+            "for_statement",
+            "for_expression",
+            "catch_expression",
+            "binary_expression",
+        ],
         _ => &[],
     }
 }
@@ -466,9 +482,9 @@ fn node_kinds_are_the_table_kinds_and_exist_in_the_grammar() {
 }
 
 #[test]
-fn twenty_languages_are_supported() {
+fn twenty_one_languages_are_supported() {
     let names: Vec<&str> = supported().iter().map(|g| g.name()).collect();
-    assert_eq!(names.len(), 20, "{names:?}");
+    assert_eq!(names.len(), 21, "{names:?}");
     for grammar in Grammar::all() {
         assert_eq!(
             function_model::supports(grammar),
@@ -502,7 +518,7 @@ impl From<&Function> for Expected {
     }
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 20] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 21] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -523,6 +539,7 @@ const FIXTURE_LANGUAGES: [(&str, &str); 20] = [
     ("swift", "swift"),
     ("tsx", "tsx"),
     ("typescript", "ts"),
+    ("zig", "zig"),
 ];
 
 fn fixture_dir() -> PathBuf {
@@ -560,7 +577,7 @@ fn over_and_under_fixtures_match_their_expected_values() {
     }
     grammars.sort_by_key(|g| g.name());
     grammars.dedup();
-    assert_eq!(grammars.len(), 20, "{grammars:?}");
+    assert_eq!(grammars.len(), 21, "{grammars:?}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -768,7 +785,7 @@ fn java_instance_initializer_is_unnamed() {
 
 #[test]
 fn else_if_adds_a_decision_and_no_nesting() {
-    let cases: [(Grammar, &str); 25] = [
+    let cases: [(Grammar, &str); 28] = [
         (
             Grammar::Bash,
             "f() {\n  if a; then b; elif c; then d; fi\n}\n",
@@ -839,6 +856,15 @@ fn else_if_adds_a_decision_and_no_nesting() {
             Grammar::Kotlin,
             "fun f() { if (a) { } else if (b) { if (c) { } } }",
         ),
+        (Grammar::Zig, "fn f() void { if (a) {} else if (b) {} }"),
+        (
+            Grammar::Zig,
+            "fn f() void { const y = if (a) 1 else if (b) 2 else 3; }",
+        ),
+        (
+            Grammar::Zig,
+            "fn f() void { if (a) {} else if (b) { if (c) {} } }",
+        ),
     ];
     for (i, (grammar, source)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
@@ -890,6 +916,7 @@ fn declarations_without_a_body_are_not_functions() {
     assert!(functions(Grammar::Java, "interface I { void n(); }\n").is_empty());
     assert!(functions(Grammar::Rust, "trait T { fn s(&self); }\n").is_empty());
     assert!(functions(Grammar::Swift, "protocol P { func g() }\n").is_empty());
+    assert!(functions(Grammar::Zig, "extern fn g(a: u8) void;\n").is_empty());
     assert!(functions(Grammar::Dockerfile, "FROM alpine\nRUN true\n").is_empty());
     assert!(
         functions(
@@ -1102,7 +1129,7 @@ fn functions_iterates_lazily_in_location_order() {
 // in location order, expected count).
 #[test]
 fn parameter_forms() {
-    let cases: [(Grammar, &str, usize, u32); 30] = [
+    let cases: [(Grammar, &str, usize, u32); 32] = [
         (Grammar::C, "int f(void) { return 0; }", 0, 0),
         (Grammar::C, "int f(int a, ...) { return 0; }", 0, 2),
         (
@@ -1198,6 +1225,13 @@ fn parameter_forms() {
         ),
         (Grammar::Swift, "let c = { (x: Int, y: Int) in x }", 0, 2),
         (Grammar::Swift, "class S { init(x: Int) {} }", 0, 1),
+        (
+            Grammar::Zig,
+            "fn f(comptime T: type, x: anytype, y: T) void {}",
+            0,
+            3,
+        ),
+        (Grammar::Zig, "test \"t\" {}", 0, 0),
     ];
     for (i, (grammar, source, index, expected)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
@@ -1272,6 +1306,13 @@ fn names_of_special_forms() {
     assert_eq!(
         names(Grammar::C, "int *g(void) { return 0; }\n"),
         some(&["g"])
+    );
+    assert_eq!(
+        names(
+            Grammar::Zig,
+            "const S = struct {\n    x: u8,\n    fn m(self: S) u8 {\n        return self.x;\n    }\n};\ntest \"t\" {}\ntest n {}\ntest {}\n",
+        ),
+        vec![Some("m".to_string()), None, Some("n".to_string()), None]
     );
 }
 

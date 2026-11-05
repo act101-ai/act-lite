@@ -492,6 +492,27 @@ const SWIFT: Row = Row {
     ],
 };
 
+const ZIG: Row = Row {
+    functions: &["function_declaration", "test_declaration"],
+    ifs: &["if_statement", "if_expression"],
+    else_ifs: NONE,
+    multiways: &["switch_expression"],
+    arms: &["switch_case"],
+    loops: &[
+        "while_statement",
+        "while_expression",
+        "for_statement",
+        "for_expression",
+    ],
+    tries: NONE,
+    handlers: NONE,
+    conditionals: &["catch_expression"],
+    logical: &["binary_expression"],
+    operators: &["and", "or"],
+    named: &["parameters", "parameter"],
+    strings: &["string", "multiline_string"],
+};
+
 /// The row of a supported grammar; `None` for the `Data` formats.
 pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
     Some(match grammar {
@@ -513,6 +534,7 @@ pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
         Grammar::Rust => &RUST,
         Grammar::Scala => &SCALA,
         Grammar::Swift => &SWIFT,
+        Grammar::Zig => &ZIG,
         _ => return None,
     })
 }
@@ -723,6 +745,7 @@ impl Ctx<'_> {
                 }
                 _ => true,
             },
+            Grammar::Zig if kind == "function_declaration" => body(),
             _ => true,
         }
     }
@@ -861,6 +884,7 @@ impl Ctx<'_> {
                     && !has_child(node, "guard")
             }
             Grammar::Swift => has_child(node, "default_keyword"),
+            Grammar::Zig => has_child(node, "else"),
             _ => false,
         };
         if default { Role::DefaultArm } else { Role::Arm }
@@ -1086,6 +1110,11 @@ impl Ctx<'_> {
                 }
                 _ => 0,
             },
+            Grammar::Zig => named_children(node)
+                .iter()
+                .filter(|c| c.kind() == "parameters")
+                .map(|l| count_kinds(*l, &["parameter"]))
+                .sum(),
             _ => 0,
         };
         Some(count)
@@ -1260,6 +1289,9 @@ impl Ctx<'_> {
                 "function_declaration" => self.name_field(node),
                 _ => None,
             },
+            Grammar::Zig if kind == "test_declaration" => {
+                self.last_identifier_before(node, &["block"], &[])
+            }
             _ => match kind {
                 "block" | "static_initializer" | "lambda_expression" | "class_static_block"
                 | "arrow_function" | "func_literal" | "anonymous_function" | "lambda"
@@ -1356,6 +1388,7 @@ mod tests {
                 "function_body",
                 "else",
             ],
+            Grammar::Zig => &["block", "else_clause"],
             _ => &[],
         }
     }
