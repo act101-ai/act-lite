@@ -100,6 +100,30 @@ fn nix_extension() {
 }
 
 #[test]
+fn jsonc_extensions() {
+    by_extension(&["jsonc", "code-workspace"], "{\"a\": 1}\n", "JSONC");
+}
+
+#[test]
+fn jsonc_names() {
+    for name in [
+        "tsconfig.json",
+        "tsconfig.app.json",
+        "jsconfig.json",
+        "devcontainer.json",
+        ".devcontainer.json",
+        ".eslintrc.json",
+    ] {
+        assert_discovered(&[(name, "{\"a\": 1}\n")], "JSONC");
+    }
+}
+
+#[test]
+fn mytsconfig_json_stays_json() {
+    assert_discovered(&[("mytsconfig.json", "{\"a\": 1}\n")], "JSON");
+}
+
+#[test]
 fn makefile_name() {
     assert_discovered(&[("Makefile", "all:\n\ttrue\n")], "Make");
 }
@@ -130,6 +154,7 @@ fn near_miss_names_are_refused() {
         "cmakelists.txt",
         "CMakeLists.txt.orig",
         "notes.txt",
+        "tsconfig.json.bak",
     ] {
         let ws = tempfile::tempdir().unwrap();
         std::fs::write(ws.path().join(name), "all:\n").unwrap();

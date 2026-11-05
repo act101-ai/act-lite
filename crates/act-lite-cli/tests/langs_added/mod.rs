@@ -70,10 +70,16 @@ impl Mcp {
     /// with `ACT_CONFIG_DIR` an empty temporary directory, and performs the
     /// `initialize` handshake.
     pub fn start(workspace: &Path) -> Mcp {
+        Mcp::start_with_env(workspace, &[])
+    }
+
+    /// [`Mcp::start`] with each `(name, value)` of `env` also set.
+    pub fn start_with_env(workspace: &Path, env: &[(&str, &str)]) -> Mcp {
         let config = tempfile::tempdir().unwrap();
         let mut child = Command::new(assert_cmd::cargo::cargo_bin("act-lite"))
             .current_dir(workspace)
             .env("ACT_CONFIG_DIR", config.path())
+            .envs(env.iter().copied())
             .arg("--workspace")
             .arg(workspace)
             .args(["mcp", "serve"])
