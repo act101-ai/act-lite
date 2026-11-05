@@ -728,7 +728,7 @@ the reverse; a user with both binaries sees one set of secrets per project.
 ## Claude Code plugin
 
 The `plugin/` directory is a Claude Code plugin that registers the MCP server
-and adds five skills:
+and adds six skills:
 
 - `define-work` turns a request into an approved design before code is
   written: repo recon, one question at a time, three fresh reads of the
@@ -739,6 +739,9 @@ and adds five skills:
   reports it.
 - `diagnose-defect` finds the root cause of a defect and fixes it with a test
   that failed first.
+- `review-change` reviews a diff, branch or pull request for code health: the
+  structural problems in the changed functions and the duplication that
+  touches the change, as a report with no edit.
 
 Put `act-lite` on your `PATH`, then:
 
