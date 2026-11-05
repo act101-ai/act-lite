@@ -24,6 +24,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tree-sitter",
  "walkdir",
