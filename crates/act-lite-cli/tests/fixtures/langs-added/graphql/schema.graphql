@@ -1,0 +1,17 @@
+type User implements Node {
+  id: ID!
+  name(format: String): String
+}
+enum Role { ADMIN USER }
+input NewUser { name: String! }
+interface Node { id: ID! }
+union Item = User | Post
+scalar Date
+directive @auth on FIELD_DEFINITION
+schema { query: Query }
+extend type User { age: Int }
+query GetUser($id: ID!) {
+  user(id: $id) { ...UserParts }
+}
+fragment UserParts on User { id name }
+{ me { id } }
