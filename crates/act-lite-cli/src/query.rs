@@ -348,7 +348,7 @@ fn grammar_for_file(file: &Path) -> Option<Grammar> {
 ///
 /// The root is canonicalized when it exists, so paths derived from it match
 /// the canonical file paths handed to language servers.
-fn resolve_workspace_root(workspace: Option<&Path>) -> PathBuf {
+pub(crate) fn resolve_workspace_root(workspace: Option<&Path>) -> PathBuf {
     let root = workspace
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
