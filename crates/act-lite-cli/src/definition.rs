@@ -504,7 +504,9 @@ pub(crate) fn range_priority(
 /// Every file under `root` that a walk from `anchor`, a file in `grammar`,
 /// reads ([`Grammar::walk_reads`]), skipping `.git`, `target` and
 /// `node_modules`. Unreadable directories contribute nothing. A symlink is
-/// followed only while its target stays inside `root`.
+/// followed only while its target stays inside `root`, and each directory is
+/// entered once, by its canonical path. Files over
+/// [`act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES`] are skipped.
 pub(crate) fn collect_workspace_paths(
     root: &Path,
     anchor: &Path,
@@ -512,12 +514,14 @@ pub(crate) fn collect_workspace_paths(
     paths: &mut Vec<PathBuf>,
 ) {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    collect_paths_inside(root, &canonical_root, anchor, grammar, paths);
+    let mut visited = std::collections::HashSet::from([canonical_root.clone()]);
+    collect_paths_inside(root, &canonical_root, &mut visited, anchor, grammar, paths);
 }
 
 fn collect_paths_inside(
     dir: &Path,
     canonical_root: &Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
     anchor: &Path,
     grammar: Grammar,
     paths: &mut Vec<PathBuf>,
@@ -527,21 +531,26 @@ fn collect_paths_inside(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path
+        let Some(canonical) = path
             .canonicalize()
-            .is_ok_and(|canonical| canonical.starts_with(canonical_root))
-        {
+            .ok()
+            .filter(|canonical| canonical.starts_with(canonical_root))
+        else {
             continue;
-        }
+        };
         if path.is_dir() {
             let skip = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"));
-            if !skip {
-                collect_paths_inside(&path, canonical_root, anchor, grammar, paths);
+            if !skip && visited.insert(canonical) {
+                collect_paths_inside(&path, canonical_root, visited, anchor, grammar, paths);
             }
-        } else if path.is_file() && grammar.walk_reads(anchor, &path) {
+        } else if path.is_file()
+            && grammar.walk_reads(anchor, &path)
+            && std::fs::metadata(&path)
+                .is_ok_and(|meta| meta.len() <= act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES)
+        {
             paths.push(path);
         }
     }
@@ -679,6 +688,27 @@ pub(crate) fn not_found_text(symbol: &str, file: &Path, line: u32, column: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn each_file_is_collected_once_despite_symlinks_back_to_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["a.py", "b.py"] {
+            std::fs::write(dir.path().join(file), "x = 1\n").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for link in ["up", "up2"] {
+            std::os::unix::fs::symlink("..", dir.path().join("sub").join(link)).unwrap();
+        }
+        let mut paths = Vec::new();
+        collect_workspace_paths(
+            dir.path(),
+            &dir.path().join("a.py"),
+            Grammar::Python,
+            &mut paths,
+        );
+        assert_eq!(paths.len(), 2, "{paths:?}");
+    }
 
     #[test]
     fn ruby_singleton_method_is_found_from_its_call_site() {
