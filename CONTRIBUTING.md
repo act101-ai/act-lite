@@ -31,6 +31,10 @@ fails when they differ; `release.yml` refuses a tag that does not match the
 crate version. Bump all three in the same commit, on the branch that goes
 through the pull request (`main` is protected), before the tag.
 
+CI and the release `floor` job regenerate `THIRD-PARTY-LICENSES` with
+`cargo about generate --config about.toml --output-file THIRD-PARTY-LICENSES about.hbs`
+and fail on a difference, so run that command after any dependency change.
+
 A tag is never moved or deleted once it is published. A defect in a release
 is fixed forward: a patch version on a `release/<major>.<minor>` branch cut
 from the tag, or the next release from `main`.
@@ -55,8 +59,9 @@ frontmatter is one YAML mapping of single-line `key: value` pairs between
 `tools`, `color`, `skills`. Quote a value that contains `: ` or starts with a
 quote, `[`, `{`, `#`, `&`, `*`, `!`, `|`, `>`, `%` or `@` (single quotes;
 double an inner single quote). No tabs, flow mappings, anchors, aliases, merge
-keys or tags. Skill names are unique across the marketplace. Check before a
-pull request:
+keys or tags. Skill names are unique across the marketplace. Shipped skills, templates and
+scripts name no model; they describe work by capability tier (`simple`,
+`normal`, `demanding`). Check before a pull request:
 
 ```sh
 for f in plugin/skills/*/SKILL.md; do

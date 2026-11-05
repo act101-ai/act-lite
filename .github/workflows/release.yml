@@ -27,6 +27,14 @@ jobs:
       - run: cargo test --workspace --locked --no-fail-fast
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo deny check
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+      - name: THIRD-PARTY-LICENSES is current
+        shell: bash
+        run: |
+          cargo about generate --config about.toml --output-file THIRD-PARTY-LICENSES about.hbs
+          git diff --exit-code THIRD-PARTY-LICENSES
 
   build:
     name: build (${{ matrix.target }})
