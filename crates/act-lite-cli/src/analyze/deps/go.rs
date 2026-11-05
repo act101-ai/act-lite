@@ -14,17 +14,6 @@ pub struct GoResolver;
 /// Directories whose `go.mod` adds no module path to the map.
 const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
 
-/// Directory names that mark vendored dependencies, as discovery names them.
-const VENDORED_DIRS: [&str; 7] = [
-    "vendor",
-    "third_party",
-    "third-party",
-    "node_modules",
-    "bower_components",
-    "Pods",
-    "Carthage",
-];
-
 /// What is read of one `go.mod`.
 struct GoMod {
     module: String,
@@ -80,7 +69,10 @@ impl Resolver for GoResolver {
         for &(path, dir) in &candidates {
             let rest = import[path.len()..].trim_start_matches('/');
             let package = cx.normalize(dir, rest);
-            if package.as_deref().is_some_and(vendored) {
+            if package
+                .as_deref()
+                .is_some_and(|package| vendored(cx, package))
+            {
                 continue;
             }
             unvendored = true;
@@ -96,7 +88,7 @@ impl Resolver for GoResolver {
                 _ => continue,
             };
             if ignored(&package)
-                || vendored(&package)
+                || vendored(cx, &package)
                 || nearest_module(cx, &package).as_deref() != Some(dir)
             {
                 continue;
@@ -152,9 +144,9 @@ fn ignored(dir: &str) -> bool {
         .any(|part| part == "testdata" || part.starts_with(['_', '.']))
 }
 
-/// Whether `dir` is a vendored directory or inside one.
-fn vendored(dir: &str) -> bool {
-    dir.split('/').any(|part| VENDORED_DIRS.contains(&part))
+/// Whether the directory `dir` is a vendored directory or inside one.
+fn vendored(cx: &mut ResolveCx<'_>, dir: &str) -> bool {
+    cx.vendored(&join(dir, "go.mod"))
 }
 
 /// Reads every `go.mod` of the workspace that can add a module path, once.
@@ -171,7 +163,10 @@ fn build_map(cx: &mut ResolveCx<'_>) {
     let mut modules = Vec::new();
     for file in files {
         let dir = dir_of(&file);
-        if ignored(dir) || vendored(dir) || dir.split('/').any(|part| TEST_DIRS.contains(&part)) {
+        if ignored(dir)
+            || cx.vendored(&file)
+            || dir.split('/').any(|part| TEST_DIRS.contains(&part))
+        {
             continue;
         }
         if let Some(m) = read_mod(cx, &file) {
@@ -189,7 +184,7 @@ fn nearest_module(cx: &mut ResolveCx<'_>, dir: &str) -> Option<String> {
     let mut at = dir;
     loop {
         if !ignored(at)
-            && !vendored(at)
+            && !vendored(cx, at)
             && matches!(cx.probe_file(&join(at, "go.mod")), Probe::File(_))
         {
             return Some(at.to_string());
