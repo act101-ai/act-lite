@@ -554,16 +554,16 @@ fn parameter_errors_are_invalid_requests() {
         (&focus, Some("up"), None),
     ];
     for (focus, direction, max_depth) in cases {
-        let err = GraphAnalyzer::new(&request, focus, direction, max_depth)
-            .err()
-            .expect("an error");
+        let Err(err) = GraphAnalyzer::new(&request, focus, direction, max_depth) else {
+            panic!("an error");
+        };
         assert!(matches!(err, AnalyzeError::InvalidRequest(_)), "{err:?}");
     }
     let css = vec!["src/style.css".to_string()];
     let analyzer = GraphAnalyzer::new(&request, &css, Some("out"), None).unwrap();
-    let err = run(&analyzer, &request, &CancellationToken::new())
-        .err()
-        .expect("an error");
+    let Err(err) = run(&analyzer, &request, &CancellationToken::new()) else {
+        panic!("an error");
+    };
     assert!(matches!(err, AnalyzeError::InvalidRequest(_)), "{err:?}");
 }
 

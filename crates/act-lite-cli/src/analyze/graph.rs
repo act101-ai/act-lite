@@ -76,11 +76,17 @@ impl FromStr for Direction {
     }
 }
 
-/// A request error that is neither a path nor the limit. The envelope's
-/// `NotFound` variant holds its message as written and is a request error on
-/// both transports.
+/// A request error in a parameter other than a path or the limit.
 fn request_error(message: String) -> AnalyzeError {
-    AnalyzeError::NotFound(message)
+    AnalyzeError::InvalidRequest(message)
+}
+
+/// The failure of a focus state lock that a panic poisoned.
+fn poisoned() -> AnalyzeError {
+    AnalyzeError::Failed {
+        analysis: GraphAnalyzer::NAME,
+        cause: "focus state poisoned".to_string(),
+    }
 }
 
 /// Reports the dependency edges of a scope, or the edges a traversal from
@@ -242,6 +248,7 @@ fn walk<'g>(
     out: bool,
     max_depth: u32,
     cancel: &CancellationToken,
+    on_visit: &mut dyn FnMut(&str),
 ) -> Result<Walk<'g>, AnalyzeError> {
     let mut walk = Walk {
         reported: BTreeMap::new(),
@@ -261,6 +268,7 @@ fn walk<'g>(
             if cancel.is_cancelled() {
                 return Err(AnalyzeError::Cancelled);
             }
+            on_visit(file);
             let Some((key, edges)) = near.get_key_value(file) else {
                 continue;
             };
@@ -299,14 +307,15 @@ fn walks<'g>(
     direction: Direction,
     max_depth: u32,
     cancel: &CancellationToken,
+    on_visit: &mut dyn FnMut(&str),
 ) -> Result<(Option<Walk<'g>>, Option<Walk<'g>>), AnalyzeError> {
     let out = if direction.follows_out() {
-        Some(walk(out_index, focus, true, max_depth, cancel)?)
+        Some(walk(out_index, focus, true, max_depth, cancel, on_visit)?)
     } else {
         None
     };
     let inward = if direction.follows_in() {
-        Some(walk(in_index, focus, false, max_depth, cancel)?)
+        Some(walk(in_index, focus, false, max_depth, cancel, on_visit)?)
     } else {
         None
     };
@@ -314,8 +323,12 @@ fn walks<'g>(
 }
 
 /// The union of the traversals, with the smaller depth for an edge both
-/// found, and the two limit counts.
-fn combine(out: Option<&Walk<'_>>, inward: Option<&Walk<'_>>) -> Traversal {
+/// found, and the two limit counts. The token is checked before the sort.
+fn combine(
+    out: Option<&Walk<'_>>,
+    inward: Option<&Walk<'_>>,
+    cancel: &CancellationToken,
+) -> Result<Traversal, AnalyzeError> {
     let mut reported: BTreeMap<(&str, &str), (u32, &Edge)> = BTreeMap::new();
     let mut distance: BTreeMap<String, u32> = BTreeMap::new();
     let mut first_edge: BTreeMap<String, Edge> = BTreeMap::new();
@@ -363,20 +376,23 @@ fn combine(out: Option<&Walk<'_>>, inward: Option<&Walk<'_>>) -> Traversal {
             depth,
         })
         .collect();
+    if cancel.is_cancelled() {
+        return Err(AnalyzeError::Cancelled);
+    }
     edges.sort_by(|a, b| {
         a.depth
             .cmp(&b.depth)
             .then_with(|| a.edge.file.as_bytes().cmp(b.edge.file.as_bytes()))
             .then_with(|| a.edge.to.as_bytes().cmp(b.edge.to.as_bytes()))
     });
-    Traversal {
+    Ok(Traversal {
         edges,
         distance,
         first_edge,
         edge_limit_hit: (!cut.is_empty()).then_some(cut.len() as u32),
         file_limit_hit,
         not_followed: out.map(|w| w.not_followed.clone()).unwrap_or_default(),
-    }
+    })
 }
 
 /// The breadth-first traversal of `graph` from the files of `focus`. The
@@ -388,10 +404,25 @@ pub fn traverse(
     max_depth: u32,
     cancel: &CancellationToken,
 ) -> Result<Traversal, AnalyzeError> {
+    traverse_observed(graph, focus, direction, max_depth, cancel, &mut |_| {})
+}
+
+/// As [`traverse`], calling `on_visit` with each file as it is visited,
+/// after the token check.
+fn traverse_observed(
+    graph: &DepGraph,
+    focus: &FocusSet,
+    direction: Direction,
+    max_depth: u32,
+    cancel: &CancellationToken,
+    on_visit: &mut dyn FnMut(&str),
+) -> Result<Traversal, AnalyzeError> {
     let out_index = index(graph, true);
     let in_index = index(graph, false);
-    let (out, inward) = walks(&out_index, &in_index, focus, direction, max_depth, cancel)?;
-    Ok(combine(out.as_ref(), inward.as_ref()))
+    let (out, inward) = walks(
+        &out_index, &in_index, focus, direction, max_depth, cancel, on_visit,
+    )?;
+    combine(out.as_ref(), inward.as_ref(), cancel)
 }
 
 impl Analyzer for GraphAnalyzer {
@@ -456,6 +487,7 @@ impl Analyzer for GraphAnalyzer {
                 self.direction,
                 self.max_depth,
                 cancel,
+                &mut |_| {},
             )?;
             let read: HashSet<&str> = out.as_ref().map_or_else(HashSet::new, |w| {
                 w.distance
@@ -478,7 +510,7 @@ impl Analyzer for GraphAnalyzer {
                             || (u.family == Family::Rust && u.kind == RelationshipKind::Include)))
             };
             let unresolved = graph.unresolved(&relevant);
-            let traversal = combine(out.as_ref(), inward.as_ref());
+            let traversal = combine(out.as_ref(), inward.as_ref(), cancel)?;
             let limits_hit: Vec<LimitHit> = traversal
                 .edge_limit_hit
                 .map(|n| LimitHit {
@@ -496,9 +528,7 @@ impl Analyzer for GraphAnalyzer {
                 .into_iter()
                 .map(|t| GraphFinding::new(t.edge, Some(t.depth)))
                 .collect();
-            if let Ok(mut slot) = self.focus_set.lock() {
-                *slot = Some(set);
-            }
+            *self.focus_set.lock().map_err(|_| poisoned())? = Some(set);
             (findings, unresolved, limits_hit, traversal.not_followed)
         };
         let files: BTreeSet<&str> = findings
@@ -534,7 +564,7 @@ impl Analyzer for GraphAnalyzer {
         read: &ReadOutcome,
         analysis: &mut Analysis<GraphFinding>,
     ) -> Result<(), AnalyzeError> {
-        let Some(mut set) = self.focus_set.lock().ok().and_then(|mut slot| slot.take()) else {
+        let Some(mut set) = self.focus_set.lock().map_err(|_| poisoned())?.take() else {
             return Ok(());
         };
         set.settle(read);
