@@ -7,9 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
+use act_lite_core::registry::LanguageCategory;
 use act_lite_parser::function_model::{self, Function, Metrics};
 use act_lite_parser::{Grammar, SourceFile};
-use act_lite_core::registry::LanguageCategory;
 use serde::Deserialize;
 
 fn parse(grammar: Grammar, source: &str) -> SourceFile {
@@ -307,7 +307,10 @@ fn a9_rust_generic_function() {
 
 #[test]
 fn a9_go_generic_function() {
-    let fs = functions(Grammar::Go, "package p\n\nfunc Map[T any](x T) T {\n\treturn x\n}\n");
+    let fs = functions(
+        Grammar::Go,
+        "package p\n\nfunc Map[T any](x T) T {\n\treturn x\n}\n",
+    );
     assert_eq!(fs.len(), 1);
     assert_eq!(fs[0].name.as_deref(), Some("Map"));
     assert_eq!(fs[0].range.to_string(), "3:1-5:2");
@@ -330,36 +333,85 @@ fn a9_java_instance_initializer() {
 #[test]
 fn else_if_adds_a_decision_and_no_nesting() {
     let cases: [(Grammar, &str); 25] = [
-        (Grammar::Bash, "f() {\n  if a; then b; elif c; then d; fi\n}\n"),
-        (Grammar::Bash, "f() {\n  if a; then b; else if c; then d; fi; fi\n}\n"),
+        (
+            Grammar::Bash,
+            "f() {\n  if a; then b; elif c; then d; fi\n}\n",
+        ),
+        (
+            Grammar::Bash,
+            "f() {\n  if a; then b; else if c; then d; fi; fi\n}\n",
+        ),
         (Grammar::C, "void f() { if (a) {} else if (b) {} }"),
         (Grammar::Cpp, "void f() { if (a) {} else if (b) {} }"),
-        (Grammar::CSharp, "class C { void F() { if (a) {} else if (b) {} } }"),
+        (
+            Grammar::CSharp,
+            "class C { void F() { if (a) {} else if (b) {} } }",
+        ),
         (Grammar::Dart, "void f() { if (a) {} else if (b) {} }"),
-        (Grammar::Elixir, "def f do\n  if a do\n    1\n  else\n    if b do\n      2\n    end\n  end\nend\n"),
+        (
+            Grammar::Elixir,
+            "def f do\n  if a do\n    1\n  else\n    if b do\n      2\n    end\n  end\nend\n",
+        ),
         (Grammar::Go, "package p\nfunc f() { if a {} else if b {} }"),
-        (Grammar::Java, "class C { void f() { if (a) {} else if (b) {} } }"),
-        (Grammar::JavaScript, "function f() { if (a) {} else if (b) {} }"),
+        (
+            Grammar::Java,
+            "class C { void f() { if (a) {} else if (b) {} } }",
+        ),
+        (
+            Grammar::JavaScript,
+            "function f() { if (a) {} else if (b) {} }",
+        ),
         (Grammar::Jsx, "function f() { if (a) {} else if (b) {} }"),
         (Grammar::Kotlin, "fun f() { if (a) { } else if (b) { } }"),
-        (Grammar::Lua, "function f()\n  if a then elseif b then end\nend\n"),
-        (Grammar::Php, "<?php function f() { if ($a) {} elseif ($b) {} }"),
-        (Grammar::Php, "<?php function f() { if ($a) {} else if ($b) {} }"),
-        (Grammar::Python, "def f():\n    if a:\n        pass\n    elif b:\n        pass\n"),
+        (
+            Grammar::Lua,
+            "function f()\n  if a then elseif b then end\nend\n",
+        ),
+        (
+            Grammar::Php,
+            "<?php function f() { if ($a) {} elseif ($b) {} }",
+        ),
+        (
+            Grammar::Php,
+            "<?php function f() { if ($a) {} else if ($b) {} }",
+        ),
+        (
+            Grammar::Python,
+            "def f():\n    if a:\n        pass\n    elif b:\n        pass\n",
+        ),
         (Grammar::Ruby, "def f\n  if a\n  elsif b\n  end\nend\n"),
-        (Grammar::Ruby, "def f\n  if a\n  else\n    if b\n    end\n  end\nend\n"),
+        (
+            Grammar::Ruby,
+            "def f\n  if a\n  else\n    if b\n    end\n  end\nend\n",
+        ),
         (Grammar::Rust, "fn f() { if a {} else if b {} }"),
-        (Grammar::Scala, "object O { def f() = { if (a) 1 else if (b) 2 } }"),
+        (
+            Grammar::Scala,
+            "object O { def f() = { if (a) 1 else if (b) 2 } }",
+        ),
         (Grammar::Swift, "func f() { if a { } else if b { } }"),
-        (Grammar::TypeScript, "function f() { if (a) {} else if (b) {} }"),
+        (
+            Grammar::TypeScript,
+            "function f() { if (a) {} else if (b) {} }",
+        ),
         (Grammar::Tsx, "function f() { if (a) {} else if (b) {} }"),
-        (Grammar::CSharp, "class C { void F() { if (a) {} else if (b) { if (c) {} } } }"),
-        (Grammar::Kotlin, "fun f() { if (a) { } else if (b) { if (c) { } } }"),
+        (
+            Grammar::CSharp,
+            "class C { void F() { if (a) {} else if (b) { if (c) {} } } }",
+        ),
+        (
+            Grammar::Kotlin,
+            "fun f() { if (a) { } else if (b) { if (c) { } } }",
+        ),
     ];
     for (i, (grammar, source)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
         assert_eq!(fs.len(), 1, "{grammar:?} case {i}: {fs:#?}");
-        let expected = if source.contains("(c)") { (2, 4) } else { (1, 3) };
+        let expected = if source.contains("(c)") {
+            (2, 4)
+        } else {
+            (1, 3)
+        };
         assert_eq!(
             (fs[0].metrics.nesting, fs[0].metrics.complexity),
             expected,
@@ -405,7 +457,13 @@ fn declarations_without_a_body_are_not_functions() {
     assert!(functions(Grammar::Rust, "trait T { fn s(&self); }\n").is_empty());
     assert!(functions(Grammar::Swift, "protocol P { func g() }\n").is_empty());
     assert!(functions(Grammar::Dockerfile, "FROM alpine\nRUN true\n").is_empty());
-    assert!(functions(Grammar::HclTerraform, "resource \"a\" \"b\" {\n  x = 1\n}\n").is_empty());
+    assert!(
+        functions(
+            Grammar::HclTerraform,
+            "resource \"a\" \"b\" {\n  x = 1\n}\n"
+        )
+        .is_empty()
+    );
 }
 
 // (7) The 10 Data formats are not supported and have no functions.
@@ -484,13 +542,28 @@ fn identifier_token(grammar: Grammar, source: &str, kind: &str, text: &str) -> b
 fn identifier_tokens() {
     let yes: [(Grammar, &str, &str, &str); 14] = [
         (Grammar::Rust, "fn f(s: S) { s.x; }", "identifier", "f"),
-        (Grammar::Rust, "fn f(s: S) { s.x; }", "field_identifier", "x"),
+        (
+            Grammar::Rust,
+            "fn f(s: S) { s.x; }",
+            "field_identifier",
+            "x",
+        ),
         (Grammar::Rust, "fn f(s: S) { s.x; }", "type_identifier", "S"),
         (Grammar::JavaScript, "a.b;", "property_identifier", "b"),
         (Grammar::Kotlin, "fun f() {}", "simple_identifier", "f"),
-        (Grammar::Go, "package p\nvar x int", "type_identifier", "int"),
+        (
+            Grammar::Go,
+            "package p\nvar x int",
+            "type_identifier",
+            "int",
+        ),
         (Grammar::Ruby, "A = @b + @@c + $d", "constant", "A"),
-        (Grammar::Ruby, "A = @b + @@c + $d", "instance_variable", "@b"),
+        (
+            Grammar::Ruby,
+            "A = @b + @@c + $d",
+            "instance_variable",
+            "@b",
+        ),
         (Grammar::Ruby, "A = @b + @@c + $d", "class_variable", "@@c"),
         (Grammar::Ruby, "A = @b + @@c + $d", "global_variable", "$d"),
         (Grammar::Elixir, "Foo.bar(x)", "alias", "Foo"),
@@ -505,15 +578,35 @@ fn identifier_tokens() {
         );
     }
     let no: [(Grammar, &str, &str, &str); 9] = [
-        (Grammar::Go, "package p\nimport _ \"fmt\"", "blank_identifier", "_"),
-        (Grammar::Scala, "object O { val a = b && c }", "operator_identifier", "&&"),
+        (
+            Grammar::Go,
+            "package p\nimport _ \"fmt\"",
+            "blank_identifier",
+            "_",
+        ),
+        (
+            Grammar::Scala,
+            "object O { val a = b && c }",
+            "operator_identifier",
+            "&&",
+        ),
         (Grammar::Elixir, "def f do\n  1\nend", "identifier", "def"),
         (Grammar::Elixir, "if a do\n  1\nend", "identifier", "if"),
-        (Grammar::Elixir, "defmodule M do\nend", "identifier", "defmodule"),
+        (
+            Grammar::Elixir,
+            "defmodule M do\nend",
+            "identifier",
+            "defmodule",
+        ),
         (Grammar::Elixir, "alias Foo.Bar", "identifier", "alias"),
         (Grammar::Rust, "fn f(x: u8) {}", "primitive_type", "u8"),
         (Grammar::Bash, "echo hi", "word", "hi"),
-        (Grammar::Cpp, "int x = a::b;", "qualified_identifier", "a::b"),
+        (
+            Grammar::Cpp,
+            "int x = a::b;",
+            "qualified_identifier",
+            "a::b",
+        ),
     ];
     for (grammar, source, kind, text) in no {
         assert!(
@@ -522,11 +615,33 @@ fn identifier_tokens() {
         );
     }
     let keyword_targets = [
-        "def", "defp", "defmacro", "defmacrop", "defmodule", "if", "unless", "case", "cond",
-        "with", "for", "try", "receive", "fn", "quote", "import", "alias", "require", "use",
+        "def",
+        "defp",
+        "defmacro",
+        "defmacrop",
+        "defmodule",
+        "if",
+        "unless",
+        "case",
+        "cond",
+        "with",
+        "for",
+        "try",
+        "receive",
+        "fn",
+        "quote",
+        "import",
+        "alias",
+        "require",
+        "use",
     ];
     for word in keyword_targets {
-        let source = format!("{word}(x)");
+        // `fn` is a keyword token in call position; after a dot it is an identifier.
+        let source = if word == "fn" {
+            "x.fn(y)".to_string()
+        } else {
+            format!("{word}(x)")
+        };
         assert!(
             !identifier_token(Grammar::Elixir, &source, "identifier", word),
             "Elixir {word}"
@@ -549,4 +664,168 @@ fn functions_iterates_lazily_in_location_order() {
     assert_eq!(closure.range.to_string(), "2:18-2:22");
     assert_eq!(it.next().unwrap().name.as_deref(), Some("d"));
     assert!(it.next().is_none());
+}
+
+// The Parameters column, form by form: (grammar, source, index of the function
+// in location order, expected count).
+#[test]
+fn parameter_forms() {
+    let cases: [(Grammar, &str, usize, u32); 27] = [
+        (Grammar::C, "int f(void) { return 0; }", 0, 0),
+        (Grammar::C, "int f(int a, ...) { return 0; }", 0, 2),
+        (
+            Grammar::Cpp,
+            "int f(int a, int b = 1, ...) { return 0; }",
+            0,
+            3,
+        ),
+        (
+            Grammar::Cpp,
+            "void g() { auto l = [](int x, int y) { return x; }; }",
+            1,
+            2,
+        ),
+        (
+            Grammar::CSharp,
+            "class C { void M(int a, params int[] b) {} }",
+            0,
+            2,
+        ),
+        (
+            Grammar::CSharp,
+            "class C { void M() { F f = x => x; } }",
+            1,
+            1,
+        ),
+        (
+            Grammar::Dart,
+            "int f(int a, [int b = 1]) { return a; }",
+            0,
+            2,
+        ),
+        (Grammar::Elixir, "f = fn a, b -> a end", 0, 2),
+        (Grammar::Elixir, "def g do\n  1\nend", 0, 0),
+        (Grammar::Go, "package p\nfunc f(int, string) {}", 0, 2),
+        (
+            Grammar::Java,
+            "class A { void m() { F f = (x, y) -> x; } }",
+            1,
+            2,
+        ),
+        (
+            Grammar::Java,
+            "class A { void m() { F f = x -> x; } }",
+            1,
+            1,
+        ),
+        (Grammar::JavaScript, "function g(a, {b}, ...c) {}", 0, 3),
+        (
+            Grammar::Kotlin,
+            "class K {\n  var p: Int = 0\n    set(v) { field = v }\n}",
+            0,
+            1,
+        ),
+        (Grammar::Kotlin, "val l = { a: Int, (b, c): P -> a }", 0, 2),
+        (Grammar::Lua, "function f(a, ...) end", 0, 2),
+        (
+            Grammar::Php,
+            "<?php class K { function __construct(private $a, $b, ...$c) {} }",
+            0,
+            3,
+        ),
+        (Grammar::Python, "f = lambda: 1", 0, 0),
+        (Grammar::Python, "f = lambda x, y: x", 0, 2),
+        (Grammar::Ruby, "def f(a, **nil); end", 0, 1),
+        (Grammar::Ruby, "xs.each { |v; w| v }", 0, 1),
+        (Grammar::Rust, "impl S { fn f(&self, a: u8) {} }", 0, 1),
+        (Grammar::Rust, "fn g() { let c = |p, q: u8| p; }", 1, 2),
+        (
+            Grammar::Scala,
+            "object O { val g = (x: Int, y: Int) => x }",
+            0,
+            2,
+        ),
+        (
+            Grammar::Scala,
+            "object O { val g = (x: Int) => x; def h(a: Int)(b: Int) = a }",
+            1,
+            2,
+        ),
+        (Grammar::Swift, "let c = { (x: Int, y: Int) in x }", 0, 2),
+        (Grammar::Swift, "class S { init(x: Int) {} }", 0, 1),
+    ];
+    for (i, (grammar, source, index, expected)) in cases.iter().enumerate() {
+        let fs = functions(*grammar, source);
+        assert_eq!(
+            fs.get(*index).and_then(|f| f.metrics.parameters),
+            Some(*expected),
+            "{grammar:?} case {i}: {fs:#?}"
+        );
+    }
+}
+
+// The name rule's exceptions and keyword names.
+#[test]
+fn names_of_special_forms() {
+    let names = |grammar: Grammar, source: &str| -> Vec<Option<String>> {
+        functions(grammar, source)
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    };
+    let some = |names: &[&str]| -> Vec<Option<String>> {
+        names.iter().map(|n| Some(n.to_string())).collect()
+    };
+    assert_eq!(
+        names(
+            Grammar::Cpp,
+            "bool Foo::operator==(const Foo& o) const { return true; }\nFoo::~Foo() {}\nFoo::operator int() const { return 1; }\n",
+        ),
+        some(&["operator==", "~Foo", "operator int() const"])
+    );
+    assert_eq!(
+        names(
+            Grammar::CSharp,
+            "class C {\n  public static C operator +(C a, C b) => a;\n  public C(int x) {}\n}\n",
+        ),
+        vec![None, Some("C".to_string())]
+    );
+    assert_eq!(
+        names(
+            Grammar::Dart,
+            "class C {\n  bool operator ==(Object o) => true;\n  C.other(int x) {}\n  set v(int x) {}\n}\n",
+        ),
+        vec![None, Some("other".to_string()), Some("v".to_string())]
+    );
+    assert_eq!(
+        names(
+            Grammar::Kotlin,
+            "class K(x: Int) {\n  constructor(y: String) : this(1) { }\n  init { }\n  val p: Int\n    get() { return 1 }\n}\n",
+        ),
+        some(&["constructor", "init", "get"])
+    );
+    assert_eq!(
+        names(
+            Grammar::Swift,
+            "class S {\n  init() {}\n  deinit {}\n  var v: Int = 0 { willSet {} didSet {} }\n  var w: Int { get { 1 } set {} }\n}\n",
+        ),
+        some(&["init", "deinit", "willSet", "didSet", "get", "set"])
+    );
+    assert_eq!(
+        names(
+            Grammar::Lua,
+            "local function f() end\nlocal g = function() end\n"
+        ),
+        vec![Some("f".to_string()), None]
+    );
+    assert_eq!(names(Grammar::Ruby, "def x=(v); end\n"), some(&["x"]));
+    assert_eq!(
+        names(Grammar::JavaScript, "class K { #p() {} }\n"),
+        some(&["#p"])
+    );
+    assert_eq!(names(Grammar::Bash, "function g { :; }\n"), some(&["g"]));
+    assert_eq!(
+        names(Grammar::C, "int *g(void) { return 0; }\n"),
+        some(&["g"])
+    );
 }
