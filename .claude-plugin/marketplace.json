@@ -10,7 +10,7 @@
     {
       "name": "act-lite",
       "description": "Navigation-only, AST-aware code queries for AI agents across 30 languages: skeletons, symbols, repository outlines, definitions, references and callers over MCP.",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "author": {
         "name": "Kage Martin",
         "url": "https://github.com/act101-ai"
