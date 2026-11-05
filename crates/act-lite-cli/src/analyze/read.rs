@@ -8,6 +8,7 @@ use act_lite_core::CompactRange;
 use act_lite_parser::{Grammar, SourceFile};
 use std::io::Read;
 use tokio_util::sync::CancellationToken;
+use tree_sitter::Node;
 
 /// The largest file that is read, in bytes.
 pub const MAX_FILE_BYTES: u64 = act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES;
@@ -24,7 +25,7 @@ pub enum ReadResult {
     Parsed {
         parsed: Parsed,
         parse_failures: Vec<ParseFailure>,
-        test_exclusion: Option<ExcludedEntry>,
+        test_exclusions: Vec<ExcludedEntry>,
     },
     Skipped(Skip),
     /// A file whose own attribute `#![cfg(test)]` makes it test code.
@@ -32,20 +33,70 @@ pub enum ReadResult {
 }
 
 /// Reads and parses one file.
-pub fn read_file(file: &Candidate, _include_tests: bool) -> Result<ReadResult, AnalyzeError> {
+pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, AnalyzeError> {
     let content = match read_content(file) {
         Ok(content) => content,
         Err(skip) => return Ok(ReadResult::Skipped(skip)),
     };
-    let source = parse(file, content)?;
+    let mut source = parse(file, content)?;
+    let mut test_exclusions = Vec::new();
+    if !include_tests {
+        let found = test_regions(&source);
+        if found.whole_file {
+            return Ok(ReadResult::TestFile(ExcludedEntry {
+                path: file.rel.clone(),
+                range: None,
+            }));
+        }
+        if !found.regions.is_empty() {
+            test_exclusions = found
+                .regions
+                .iter()
+                .map(|region| ExcludedEntry {
+                    path: file.rel.clone(),
+                    range: Some(region.range.clone()),
+                })
+                .collect();
+            source = parse(file, blank(source.content(), &found.regions))?;
+        }
+    }
+    let parse_failures = first_error(&source)
+        .map(|range| ParseFailure {
+            file: file.rel.clone(),
+            range,
+        })
+        .into_iter()
+        .collect();
     Ok(ReadResult::Parsed {
         parsed: Parsed {
             rel: file.rel.clone(),
             source,
         },
-        parse_failures: Vec::new(),
-        test_exclusion: None,
+        parse_failures,
+        test_exclusions,
     })
+}
+
+/// The range of the first ERROR or MISSING node in document order.
+fn first_error(source: &SourceFile) -> Option<CompactRange> {
+    fn find(node: Node) -> Option<Node> {
+        if !node.has_error() {
+            return None;
+        }
+        if node.is_error() || node.is_missing() {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        node.children(&mut cursor).find_map(find)
+    }
+    let node = find(source.tree().root_node())?;
+    let (start, end) = (node.start_position(), node.end_position());
+    Some(CompactRange::new(
+        start.row as u32 + 1,
+        start.column as u32 + 1,
+        end.row as u32 + 1,
+        end.column as u32 + 1,
+    ))
 }
 
 fn skip(file: &Candidate, kind: SkipKind, reason: String) -> Skip {
@@ -132,13 +183,13 @@ mod tests {
 
     fn parsed(
         result: Result<ReadResult, AnalyzeError>,
-    ) -> (Parsed, Vec<ParseFailure>, Option<ExcludedEntry>) {
+    ) -> (Parsed, Vec<ParseFailure>, Vec<ExcludedEntry>) {
         match result {
             Ok(ReadResult::Parsed {
                 parsed,
                 parse_failures,
-                test_exclusion,
-            }) => (parsed, parse_failures, test_exclusion),
+                test_exclusions,
+            }) => (parsed, parse_failures, test_exclusions),
             _ => panic!("expected a parsed file"),
         }
     }
@@ -173,7 +224,7 @@ mod tests {
             parsed(read_file(&candidate(dir.path(), "src/ok.rs"), false));
         assert_eq!(p.rel, "src/ok.rs");
         assert_eq!(p.source.content().len(), 8_388_608);
-        assert!(failures.is_empty() && exclusion.is_none());
+        assert!(failures.is_empty() && exclusion.is_empty());
     }
 
     #[test]
@@ -221,5 +272,84 @@ mod tests {
         let skip = skipped(read_file(&candidate(dir.path(), "gone.rs"), false));
         assert_eq!(skip.file.kind, SkipKind::Unreadable);
         assert!(!skip.file.reason.contains(dir.path().to_str().unwrap()));
+    }
+
+    const LIB: &str = "fn add(a: i32, b: i32) -> i32 {\n    let sum = a + b;\n    if sum > 100 {\n        return 100;\n    }\n    sum\n}\n\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n";
+
+    fn has_mod_tests(p: &Parsed) -> bool {
+        p.source.content().contains("mod tests")
+    }
+
+    #[test]
+    fn syntax_error_is_one_parse_failure_and_the_file_is_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let content =
+            "fn broken() {\n    let a = 1;\n    let b = 2;\n    let c = ;\n    a + b\n}\n";
+        write(dir.path(), "src/broken.rs", content.as_bytes());
+        let (p, failures, _) = parsed(read_file(&candidate(dir.path(), "src/broken.rs"), false));
+        assert_eq!(p.rel, "src/broken.rs");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].file, "src/broken.rs");
+        assert_eq!(failures[0].range.start_line(), 4);
+        assert_eq!(failures[0].range.end_line(), 4);
+    }
+
+    #[test]
+    fn test_module_is_blanked_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/lib.rs", LIB.as_bytes());
+        let (p, failures, exclusion) =
+            parsed(read_file(&candidate(dir.path(), "src/lib.rs"), false));
+        assert!(failures.is_empty());
+        assert_eq!(exclusion.len(), 1);
+        assert_eq!(exclusion[0].path, "src/lib.rs");
+        assert_eq!(
+            exclusion[0].range.as_ref().unwrap().to_string(),
+            "10:1-14:2"
+        );
+        assert!(!has_mod_tests(&p));
+        assert_eq!(p.source.content().lines().count(), LIB.lines().count());
+        assert!(p.source.content().starts_with("fn add"));
+    }
+
+    #[test]
+    fn tests_are_kept_when_included() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/lib.rs", LIB.as_bytes());
+        let (p, _, exclusion) = parsed(read_file(&candidate(dir.path(), "src/lib.rs"), true));
+        assert!(exclusion.is_empty());
+        assert_eq!(p.source.content(), LIB);
+    }
+
+    #[test]
+    fn syntax_error_inside_a_test_module_is_not_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let content =
+            "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let c = ;\n    }\n}\n";
+        write(dir.path(), "a.rs", content.as_bytes());
+        let (_, failures, exclusion) = parsed(read_file(&candidate(dir.path(), "a.rs"), false));
+        assert!(failures.is_empty());
+        assert_eq!(exclusion[0].range.as_ref().unwrap().to_string(), "2:1-7:2");
+    }
+
+    #[test]
+    fn inner_cfg_test_file_is_a_whole_file_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "t.rs", b"#![cfg(test)]\nfn t() {}\n");
+        match read_file(&candidate(dir.path(), "t.rs"), false) {
+            Ok(ReadResult::TestFile(entry)) => {
+                assert_eq!(entry.path, "t.rs");
+                assert!(entry.range.is_none());
+            }
+            _ => panic!("expected a test file"),
+        }
+    }
+
+    #[test]
+    fn inner_cfg_test_file_is_parsed_when_tests_are_included() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "t.rs", b"#![cfg(test)]\nfn t() {}\n");
+        let (_, _, exclusion) = parsed(read_file(&candidate(dir.path(), "t.rs"), true));
+        assert!(exclusion.is_empty());
     }
 }
