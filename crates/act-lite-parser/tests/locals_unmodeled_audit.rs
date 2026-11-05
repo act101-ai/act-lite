@@ -19,6 +19,7 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Java",
     "Jsx",
     "Json",
+    "Jsonc",
     "Kotlin",
     "Lua",
     "Make",

@@ -7,10 +7,10 @@ use crate::language::LanguageSupport;
 use crate::languages::{
     BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport,
     DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
-    JavaScriptSupport, JavaSupport, JsonSupport, JsxSupport, KotlinSupport, LuaSupport,
-    MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport, PythonSupport,
-    RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport, SwiftSupport, TomlSupport,
-    TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
+    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, KotlinSupport,
+    LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport,
+    PythonSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport, SwiftSupport,
+    TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
 };
 
 /// Supported language grammars.
@@ -53,6 +53,8 @@ pub enum Grammar {
     Jsx,
     /// JSON (data format)
     Json,
+    /// JSONC — JSON with comments
+    Jsonc,
     /// Kotlin
     Kotlin,
     /// Lua
@@ -114,6 +116,7 @@ impl Grammar {
             Grammar::JavaScript => "JavaScript",
             Grammar::Jsx => "JSX",
             Grammar::Json => "JSON",
+            Grammar::Jsonc => "JSONC",
             Grammar::Kotlin => "Kotlin",
             Grammar::Lua => "Lua",
             Grammar::Make => "Make",
@@ -159,7 +162,7 @@ impl Grammar {
             Grammar::Java => "java",
             Grammar::JavaScript => "javascript",
             Grammar::Jsx => "jsx",
-            Grammar::Json => "json",
+            Grammar::Json | Grammar::Jsonc => "json",
             Grammar::Kotlin => "kotlin",
             Grammar::Lua => "lua",
             Grammar::Make => "make",
@@ -206,6 +209,7 @@ impl Grammar {
             Grammar::JavaScript => &JavaScriptSupport,
             Grammar::Jsx => &JsxSupport,
             Grammar::Json => &JsonSupport,
+            Grammar::Jsonc => &JsoncSupport,
             Grammar::Kotlin => &KotlinSupport,
             Grammar::Lua => &LuaSupport,
             Grammar::Make => &MakeSupport,
@@ -295,8 +299,10 @@ impl Grammar {
     ///
     /// The single source for the filename conventions that extension routing
     /// cannot express: `Dockerfile` (case-insensitive; no extension), the
-    /// three makefile names GNU Make reads by default, and `CMakeLists.txt`
-    /// (both case-sensitive). Returns `None` when the name matches no
+    /// three makefile names GNU Make reads by default, `CMakeLists.txt`, and
+    /// the JSONC configuration names (all case-sensitive; `tsconfig.*.json`
+    /// and `jsconfig.*.json` need one or more characters for `*`). Returns
+    /// `None` when the name matches no
     /// convention; callers fall back to `from_extension`. Routers beyond the
     /// parser layer (MCP) must route through this so the convention list
     /// cannot drift.
@@ -307,6 +313,16 @@ impl Grammar {
         match name {
             "Makefile" | "makefile" | "GNUmakefile" => Some(Grammar::Make),
             "CMakeLists.txt" => Some(Grammar::CMake),
+            "tsconfig.json" | "jsconfig.json" | "devcontainer.json" | ".devcontainer.json"
+            | ".eslintrc.json" => Some(Grammar::Jsonc),
+            _ if ["tsconfig.", "jsconfig."].iter().any(|prefix| {
+                name.strip_prefix(prefix)
+                    .and_then(|rest| rest.strip_suffix(".json"))
+                    .is_some_and(|middle| !middle.is_empty())
+            }) =>
+            {
+                Some(Grammar::Jsonc)
+            }
             _ => None,
         }
     }
@@ -323,6 +339,28 @@ impl Grammar {
                     .and_then(|ext| ext.to_str())
                     .and_then(Grammar::from_extension)
             })
+    }
+
+    /// Whether a cross-file walk (`references`, `definition`) from `anchor`,
+    /// a file of this grammar, reads the file at `path`. Each grammar walks
+    /// its own files, except JSON and JSONC: from a JSON file, or a JSONC
+    /// file routed by its name, the walk reads the JSON files and the JSONC
+    /// files routed by name; from any other JSONC file it reads every JSON
+    /// and JSONC file.
+    pub fn walk_reads(&self, anchor: &std::path::Path, path: &std::path::Path) -> bool {
+        let named_jsonc = |p: &std::path::Path| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(Grammar::from_filename)
+                == Some(Grammar::Jsonc)
+        };
+        match (self, Grammar::from_path(path)) {
+            (Grammar::Json | Grammar::Jsonc, Some(Grammar::Json)) => true,
+            (Grammar::Json | Grammar::Jsonc, Some(Grammar::Jsonc)) => {
+                named_jsonc(path) || (*self == Grammar::Jsonc && !named_jsonc(anchor))
+            }
+            (_, other) => other == Some(*self),
+        }
     }
 
     /// Detects grammar from file extension.
@@ -350,6 +388,7 @@ impl Grammar {
             "js" | "mjs" | "cjs" => Some(Grammar::JavaScript),
             "jsx" => Some(Grammar::Jsx),
             "json" => Some(Grammar::Json),
+            "jsonc" | "code-workspace" => Some(Grammar::Jsonc),
             "kt" | "kts" => Some(Grammar::Kotlin),
             "lua" => Some(Grammar::Lua),
             "mk" | "mak" => Some(Grammar::Make),
@@ -581,6 +620,82 @@ mod tests {
     }
 
     #[test]
+    fn jsonc_name_query_dir_and_category() {
+        assert_eq!(Grammar::Jsonc.name(), "JSONC");
+        assert_eq!(Grammar::Jsonc.query_dir(), "json");
+        assert!(matches!(
+            Grammar::Jsonc.category(),
+            act_lite_core::registry::LanguageCategory::Data
+        ));
+    }
+
+    #[test]
+    fn jsonc_extensions() {
+        assert_eq!(Grammar::from_extension("jsonc"), Some(Grammar::Jsonc));
+        assert_eq!(
+            Grammar::from_extension("code-workspace"),
+            Some(Grammar::Jsonc)
+        );
+    }
+
+    #[test]
+    fn from_filename_jsonc_conventions() {
+        for name in [
+            "tsconfig.json",
+            "jsconfig.json",
+            "tsconfig.app.json",
+            "jsconfig.base.json",
+            "tsconfig.a.b.json",
+            "devcontainer.json",
+            ".devcontainer.json",
+            ".eslintrc.json",
+        ] {
+            assert_eq!(Grammar::from_filename(name), Some(Grammar::Jsonc), "{name}");
+        }
+    }
+
+    #[test]
+    fn from_path_jsonc_near_misses() {
+        for (name, grammar) in [
+            ("mytsconfig.json", Some(Grammar::Json)),
+            ("tsconfig..json", Some(Grammar::Json)),
+            ("tsconfig.json.bak", None),
+            ("TSCONFIG.json", Some(Grammar::Json)),
+            ("package.json", Some(Grammar::Json)),
+        ] {
+            assert_eq!(
+                Grammar::from_path(std::path::Path::new(name)),
+                grammar,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn walks_share_json_and_jsonc_asymmetrically() {
+        use std::path::Path;
+        let reads = |anchor: &str, path: &str| {
+            let grammar = Grammar::from_path(Path::new(anchor)).unwrap();
+            grammar.walk_reads(Path::new(anchor), Path::new(path))
+        };
+        for anchor in ["package.json", "tsconfig.json", ".eslintrc.json"] {
+            assert!(reads(anchor, "b.json"), "{anchor}");
+            assert!(reads(anchor, "jsconfig.json"), "{anchor}");
+            assert!(!reads(anchor, "x.jsonc"), "{anchor}");
+            assert!(!reads(anchor, "a.code-workspace"), "{anchor}");
+            assert!(!reads(anchor, "a.yaml"), "{anchor}");
+        }
+        for anchor in ["x.jsonc", "a.code-workspace"] {
+            for path in ["b.json", "tsconfig.json", "y.jsonc", "b.code-workspace"] {
+                assert!(reads(anchor, path), "{anchor} {path}");
+            }
+            assert!(!reads(anchor, "a.yaml"), "{anchor}");
+        }
+        assert!(reads("a.yaml", "b.yml"));
+        assert!(!reads("a.yaml", "b.json"));
+    }
+
+    #[test]
     fn javascript_name() {
         assert_eq!(Grammar::JavaScript.name(), "JavaScript");
     }
@@ -790,7 +905,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            36,
+            37,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

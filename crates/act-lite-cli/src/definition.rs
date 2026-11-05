@@ -104,7 +104,7 @@ fn is_data_name_leaf(node: Node<'_>, grammar: Grammar, source: &str) -> bool {
                         .is_some_and(|name| name_text(name, grammar, source) == "id")
             })
         }
-        (Grammar::Json, "string_content") => node
+        (Grammar::Json | Grammar::Jsonc, "string_content") => node
             .parent()
             .and_then(|string| string.parent().map(|pair| (string, pair)))
             .is_some_and(|(string, pair)| {
@@ -221,7 +221,7 @@ fn declaration_name<'a>(node: Node<'a>, grammar: Grammar, source: &str) -> Optio
             }
             _ => None,
         },
-        Grammar::Json => match kind {
+        Grammar::Json | Grammar::Jsonc => match kind {
             "pair" => first_named_chain(node.child_by_field_name("key")?, "string_content"),
             _ => None,
         },
@@ -408,17 +408,24 @@ pub(crate) fn range_priority(
     }
 }
 
-/// Every file under `root` in `grammar`, skipping `.git`, `target` and
+/// Every file under `root` that a walk from `anchor`, a file in `grammar`,
+/// reads ([`Grammar::walk_reads`]), skipping `.git`, `target` and
 /// `node_modules`. Unreadable directories contribute nothing. A symlink is
 /// followed only while its target stays inside `root`.
-pub(crate) fn collect_workspace_paths(root: &Path, grammar: Grammar, paths: &mut Vec<PathBuf>) {
+pub(crate) fn collect_workspace_paths(
+    root: &Path,
+    anchor: &Path,
+    grammar: Grammar,
+    paths: &mut Vec<PathBuf>,
+) {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    collect_paths_inside(root, &canonical_root, grammar, paths);
+    collect_paths_inside(root, &canonical_root, anchor, grammar, paths);
 }
 
 fn collect_paths_inside(
     dir: &Path,
     canonical_root: &Path,
+    anchor: &Path,
     grammar: Grammar,
     paths: &mut Vec<PathBuf>,
 ) {
@@ -439,9 +446,9 @@ fn collect_paths_inside(
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"));
             if !skip {
-                collect_paths_inside(&path, canonical_root, grammar, paths);
+                collect_paths_inside(&path, canonical_root, anchor, grammar, paths);
             }
-        } else if path.is_file() && Grammar::from_path(&path) == Some(grammar) {
+        } else if path.is_file() && grammar.walk_reads(anchor, &path) {
             paths.push(path);
         }
     }
@@ -480,7 +487,7 @@ pub(crate) fn resolve_definition(
     let path = source.path();
     let mut candidates = collect_definition_ranges_in_source(source, &symbol_name);
     let mut workspace_paths = Vec::new();
-    collect_workspace_paths(root, source.grammar(), &mut workspace_paths);
+    collect_workspace_paths(root, path, source.grammar(), &mut workspace_paths);
     for other in workspace_paths {
         if other == path {
             continue;
