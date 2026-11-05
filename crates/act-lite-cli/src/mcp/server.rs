@@ -474,7 +474,7 @@ impl ActLiteServer {
         let location = act_lite_core::Location::new(path.clone(), position.0, position.1);
 
         let mut lsp_error = None;
-        if let Some(client) = self.lsp_pool.get_installed_client(grammar).await {
+        if let Some(client) = self.lsp_pool.get_query_client(grammar).await {
             match act_lite_lsp::query_references(client.as_ref(), &path, &location).await {
                 Ok(refs) => {
                     let response = serde_json::json!({
@@ -554,10 +554,16 @@ impl ActLiteServer {
         }
         let json = serde_json::to_string(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(success_with_hint(
-            json,
-            "Name-level baseline — a same-name symbol in an unrelated scope can appear. Install the language server for binding-level answers.",
-        ))
+        let note = "Name-level baseline — a same-name symbol in an unrelated scope can appear.";
+        let install = if self.enable_lsp {
+            crate::query::lsp_install_hint_once(grammar, &self.lsp_pool)
+        } else {
+            None
+        };
+        Ok(match install {
+            Some(install) => success_with_hint(json, &format!("{note} {install}")),
+            None => success_with_hint(json, note),
+        })
     }
 
     #[tool]
@@ -576,7 +582,7 @@ impl ActLiteServer {
         }
         let client = self
             .lsp_pool
-            .get_installed_client(grammar)
+            .get_query_client(grammar)
             .await
             .ok_or_else(|| {
                 McpError::invalid_request(
