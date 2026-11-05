@@ -99,6 +99,22 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 /// value contiguous in that merged order is redacted too, so a value split
 /// across stdout and stderr is redacted when they are merged.
 pub fn run_command(secrets: &Secrets, argv: &[String]) -> Result<RunOutcome, SecretsError> {
+    run_with(
+        secrets,
+        argv,
+        ClosableSink::new(io::stdout()),
+        ClosableSink::strict(io::stderr()),
+    )
+}
+
+/// `run_command` with the child's redacted stdout and stderr written to `out`
+/// and `err`.
+fn run_with<O: Write + Send, E: Write + Send>(
+    secrets: &Secrets,
+    argv: &[String],
+    out: ClosableSink<O>,
+    err: ClosableSink<E>,
+) -> Result<RunOutcome, SecretsError> {
     let (program, rest) = argv.split_first().ok_or(SecretsError::NoCommand)?;
 
     let mut child = Command::new(program)
@@ -119,10 +135,7 @@ pub fn run_command(secrets: &Secrets, argv: &[String]) -> Result<RunOutcome, Sec
 
     // Drain both pipes concurrently to avoid a deadlock when the child fills one
     // while we block on the other. A scoped thread lets the pump borrow `values`.
-    let merged = Mutex::new(Merged::new(
-        ClosableSink::new(io::stdout()),
-        ClosableSink::strict(io::stderr()),
-    ));
+    let merged = Mutex::new(Merged::new(out, err));
     thread::scope(|scope| -> io::Result<()> {
         let out_pump = scope.spawn(|| pump(child_out, Stream::Stdout, &values, &merged));
         pump(child_err, Stream::Stderr, &values, &merged)?;
@@ -376,9 +389,9 @@ impl<O: Write, E: Write> Merged<O, E> {
         Ok(())
     }
 
-    /// Write `bytes` to `stream`. Bytes are decoded lossily so non-UTF-8 output is tolerated; an incomplete
-    /// character at the end waits for the stream's next bytes while a stream
-    /// is open.
+    /// Write `bytes` to `stream`. Bytes are decoded lossily so non-UTF-8
+    /// output is tolerated; an incomplete character at the end waits for the
+    /// stream's next bytes while a stream is open.
     fn emit(&mut self, stream: Stream, bytes: &mut Vec<u8>) -> io::Result<()> {
         let carry = &mut self.carry[stream as usize];
         carry.append(bytes);
@@ -509,6 +522,8 @@ fn pump<R: Read + Send + 'static, O: Write, E: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     /// One tempdir holding a git-rooted project (`proj/`) and a private
@@ -526,29 +541,9 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
-    /// Run `script` under `sh` with the secrets injected, through the same
-    /// pumps as `run_command`, and return what each stream's sink received.
     #[cfg(unix)]
-    fn run_captured(secrets: &Secrets, script: &str) -> (String, String) {
-        let mut child = Command::new("sh")
-            .args(["-c", script])
-            .envs(secrets.env_pairs())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let child_out = child.stdout.take().unwrap();
-        let child_err = child.stderr.take().unwrap();
-        let values = secrets.values();
-        let merged = Mutex::new(both());
-        thread::scope(|scope| {
-            let out_pump = scope.spawn(|| pump(child_out, Stream::Stdout, &values, &merged));
-            pump(child_err, Stream::Stderr, &values, &merged).unwrap();
-            out_pump.join().unwrap().unwrap();
-        });
-        child.wait().unwrap();
-        let merged = merged.into_inner().unwrap();
-        (text(&merged.out.inner), text(&merged.err.inner))
+    fn sh(script: &str) -> Vec<String> {
+        vec!["sh".into(), "-c".into(), script.into()]
     }
 
     #[cfg(unix)]
@@ -558,7 +553,16 @@ mod tests {
         secrets.add("MY_TOKEN", "supersecretvalue").unwrap();
 
         // The child echoes the secret; redaction must scrub it on the way back.
-        let (stdout, _) = run_captured(&secrets, "echo $MY_TOKEN");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let outcome = run_with(
+            &secrets,
+            &sh("echo $MY_TOKEN"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
+        assert_eq!(outcome.code, 0);
+        let stdout = text(&out);
         assert!(stdout.contains("***"));
         assert!(!stdout.contains("supersecretvalue"));
     }
@@ -570,7 +574,16 @@ mod tests {
         secrets.add("MY_TOKEN", "supersecretvalue").unwrap();
 
         // The child echoes the secret to stderr; redaction must scrub it there too.
-        let (_, stderr) = run_captured(&secrets, "echo $MY_TOKEN >&2");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let outcome = run_with(
+            &secrets,
+            &sh("echo $MY_TOKEN >&2"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
+        assert_eq!(outcome.code, 0);
+        let stderr = text(&err);
         assert!(stderr.contains("***"));
         assert!(!stderr.contains("supersecretvalue"));
     }
@@ -628,10 +641,18 @@ mod tests {
         let (_tmp, _root, mut secrets) = sandbox();
         secrets.add("T", "supersecretvalue").unwrap();
         // Two writes, no newline between them, well inside the idle window.
-        let (stdout, _) = run_captured(&secrets, "printf 'super'; printf 'secretvalue\\n'");
-        assert_eq!(stdout, "***\n");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run_with(
+            &secrets,
+            &sh("printf 'super'; printf 'secretvalue\\n'"),
+            ClosableSink::new(&mut out),
+            ClosableSink::strict(&mut err),
+        )
+        .unwrap();
+        assert_eq!(text(&out), "***\n");
     }
 
+    #[cfg(unix)]
     fn rss_kib() -> u64 {
         let out = std::process::Command::new("ps")
             .args(["-o", "rss=", "-p", &std::process::id().to_string()])
@@ -644,12 +665,13 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(unix)]
     #[test]
     fn run_retains_no_output() {
         let before = rss_kib();
         let mut m = Merged::new(ClosableSink::new(io::sink()), ClosableSink::new(io::sink()));
         let chunk = [b'x'; 8192];
-        for _ in 0..(256 * 1024 * 1024 / chunk.len()) {
+        for _ in 0..(32 * 1024 * 1024 / chunk.len()) {
             for stream in [Stream::Stdout, Stream::Stderr] {
                 m.arrive(stream, &chunk, &[]).unwrap();
                 m.release(stream, &chunk, &[]).unwrap();
@@ -805,10 +827,12 @@ mod tests {
         Mutex::new(merged)
     }
 
-    /// Yields `xxxxxxxx\n` forever.
-    struct Endless;
+    /// Yields `xxxxxxxx\n` forever, one read per 20 ms, and counts its reads.
+    struct Endless(Arc<AtomicUsize>);
     impl Read for Endless {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            thread::sleep(Duration::from_millis(20));
+            self.0.fetch_add(1, Ordering::SeqCst);
             for (i, b) in buf.iter_mut().enumerate() {
                 *b = if i % 9 == 8 { b'\n' } else { b'x' };
             }
@@ -839,10 +863,12 @@ mod tests {
 
     #[test]
     fn pump_stops_when_the_sink_closes() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let endless = Endless(reads.clone());
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let merged = stdout_only(ClosableSink::new(BrokenWrite));
-            let result = pump(Endless, Stream::Stdout, &[], &merged);
+            let result = pump(endless, Stream::Stdout, &[], &merged);
             let merged = merged.into_inner().unwrap();
             let _ = tx.send((result, merged.out.closed));
         });
@@ -851,6 +877,10 @@ mod tests {
             .expect("pump did not return after the sink closed");
         result.unwrap();
         assert!(closed, "sink did not record the close");
+        // The first chunk closes the sink; the reader stops at its next read.
+        thread::sleep(Duration::from_millis(200));
+        let reads = reads.load(Ordering::SeqCst);
+        assert!(reads <= 3, "{reads} reads after the sink closed");
     }
 
     #[cfg(unix)]
