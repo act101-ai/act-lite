@@ -294,7 +294,7 @@ fn a7_every_language_over_and_under() {
             ));
         }
         let not_applicable = if lang == "bash" {
-            json!([{"language":"Bash","rules":["long_parameter_list"]}])
+            json!([{"language":"Bash","rules":["long_parameter_list"],"rules_total":1}])
         } else {
             json!([])
         };
@@ -410,7 +410,7 @@ fn skipped_bash_file_is_listed_as_not_applicable() {
     assert_eq!(out["details"]["functions"], 1);
     assert_eq!(
         out["details"]["not_applicable"],
-        json!([{"language":"Bash","rules":["long_parameter_list"]}])
+        json!([{"language":"Bash","rules":["long_parameter_list"],"rules_total":1}])
     );
     assert_eq!(out["details"]["not_applicable_total"], 1);
 }
