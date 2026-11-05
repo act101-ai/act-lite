@@ -8,13 +8,13 @@
 use super::deps::{self, DepGraph, Family, Step, UnresolvedRel};
 use super::envelope::{AnalyzeError, Finding, LimitHit, Location};
 use super::focus::{FocusSet, check_focus, focus_files};
-use super::graph::{Direction, MAX_MAX_DEPTH, Traversal, traverse};
+use super::graph::{Direction, MAX_MAX_DEPTH, Traversal, insert_focus, traverse};
 use super::read::{FileSource, ReadOutcome};
 use super::run::{Analysis, Analyzer, Request, RunContext};
 use act_lite_parser::Grammar;
 use act_lite_parser::deps::RelationshipKind;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -23,8 +23,6 @@ use tokio_util::sync::CancellationToken;
 
 /// The most steps of a chain.
 const MAX_CHAIN: usize = 20;
-/// The most entries of each focus list in `details`.
-const MAX_FOCUS: usize = 30;
 
 /// A request error in a parameter other than a path or the limit.
 fn request_error(message: String) -> AnalyzeError {
@@ -239,45 +237,6 @@ impl Analyzer for ImpactAnalyzer {
         }
         Ok(())
     }
-}
-
-/// The focus keys of `details`, empty without a focus set.
-fn insert_focus(details: &mut Map<String, Value>, set: Option<&FocusSet>) {
-    let (paths, files, not_analyzed, files_not_analyzed): (
-        &[String],
-        usize,
-        &[String],
-        Vec<Value>,
-    ) = match set {
-        None => (&[], 0, &[], Vec::new()),
-        Some(set) => (
-            &set.paths,
-            set.files.len(),
-            &set.paths_not_analyzed,
-            set.files
-                .iter()
-                .filter(|f| !f.analyzed)
-                .map(|f| json!({"file": f.rel, "reason": f.reason}))
-                .collect(),
-        ),
-    };
-    let capped = |list: &[String]| json!(list.iter().take(MAX_FOCUS).collect::<Vec<_>>());
-    details.insert("focus".to_string(), capped(paths));
-    details.insert("focus_total".to_string(), json!(paths.len()));
-    details.insert("focus_files".to_string(), json!(files));
-    details.insert("focus_not_analyzed".to_string(), capped(not_analyzed));
-    details.insert(
-        "focus_not_analyzed_total".to_string(),
-        json!(not_analyzed.len()),
-    );
-    details.insert(
-        "focus_files_not_analyzed_total".to_string(),
-        json!(files_not_analyzed.len()),
-    );
-    details.insert(
-        "focus_files_not_analyzed".to_string(),
-        Value::Array(files_not_analyzed.into_iter().take(MAX_FOCUS).collect()),
-    );
 }
 
 #[cfg(test)]
