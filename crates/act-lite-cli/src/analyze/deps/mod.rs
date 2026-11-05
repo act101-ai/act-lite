@@ -15,6 +15,7 @@ pub mod go;
 pub mod js;
 pub mod python;
 pub mod rust;
+mod toml;
 
 use super::discovery::{Skip, walk_workspace};
 use super::envelope::{AnalyzeError, Unresolved};
