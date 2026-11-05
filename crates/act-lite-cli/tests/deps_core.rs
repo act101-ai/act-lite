@@ -374,6 +374,7 @@ fn common_details_add_up() {
         json!({"total": 6, "resolved": 4, "external": 1, "unresolved": 1})
     );
     assert_eq!(details["kinds"], json!(["import", "reexport"]));
+    assert_eq!(details["kinds_total"], json!(2));
     assert_eq!(
         details["resolution_inputs"],
         json!([
