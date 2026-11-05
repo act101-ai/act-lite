@@ -465,3 +465,104 @@ fn the_plugin_and_marketplace_descriptions_say_forty_languages() {
         assert!(!text.contains("30 languages"), "{rel}");
     }
 }
+
+#[test]
+fn hidden_paths_are_seen_by_definition_and_outline_not_by_references() {
+    let ws = tempfile::tempdir().unwrap();
+    for (rel, content) in [
+        ("package.json", "{\"name\": 1}\n"),
+        (".eslintrc.json", "{\"name\": 2}\n"),
+        (".devcontainer/devcontainer.json", "{\"a\": 1}\n"),
+        (".Rprofile", "x <- 1\nonly_here <- 2\n"),
+        ("use.R", "only_here + 1\n"),
+    ] {
+        let path = ws.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    let output = cli(
+        ws.path(),
+        &[
+            "query",
+            "references",
+            "name",
+            "--file",
+            "package.json",
+            "--line",
+            "1",
+            "--column",
+            "3",
+        ],
+    );
+    let references: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = references["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files.len(), 1, "{references}");
+    assert!(files[0].ends_with("package.json"), "{references}");
+    let output = cli(
+        ws.path(),
+        &[
+            "query",
+            "definition",
+            "only_here",
+            "--file",
+            "use.R",
+            "--line",
+            "1",
+            "--column",
+            "1",
+        ],
+    );
+    let definition: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        definition["definition"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with(".Rprofile"),
+        "{definition}"
+    );
+    let output = cli(ws.path(), &["query", "repo-outline"]);
+    let outline: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let paths: Vec<&str> = outline["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    for hidden in [
+        ".eslintrc.json",
+        ".devcontainer/devcontainer.json",
+        ".Rprofile",
+    ] {
+        assert!(paths.contains(&hidden), "{hidden} missing: {paths:?}");
+    }
+}
+
+#[test]
+fn imports_are_in_query_skeleton_and_not_in_mcp_skeleton() {
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::copy(fixture("zig/point.zig"), ws.path().join("point.zig")).unwrap();
+    let output = cli(ws.path(), &["query", "skeleton", "point.zig"]);
+    let skeleton: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let kinds = |value: &Value| -> Vec<String> {
+        value["declarations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(
+        kinds(&skeleton).contains(&"import".to_string()),
+        "{skeleton}"
+    );
+    let mut mcp = Mcp::start(ws.path());
+    let result = mcp.call("skeleton", json!({"file": "point.zig"})).unwrap();
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Point"), "{text}");
+    assert!(!text.to_lowercase().contains("import"), "{text}");
+}
