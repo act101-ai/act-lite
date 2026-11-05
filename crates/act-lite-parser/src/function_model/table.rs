@@ -682,7 +682,21 @@ impl Ctx<'_> {
             },
             Grammar::Swift => match kind {
                 "function_declaration" | "init_declaration" | "deinit_declaration" => body(),
-                "subscript_declaration" => has_child(node, "computed_property"),
+                "subscript_declaration" => children(node)
+                    .into_iter()
+                    .find(|c| c.kind() == "computed_property")
+                    .is_some_and(|p| {
+                        let accessors: Vec<Node> = children(p)
+                            .into_iter()
+                            .filter(|c| {
+                                matches!(
+                                    c.kind(),
+                                    "computed_getter" | "computed_setter" | "computed_modify"
+                                )
+                            })
+                            .collect();
+                        accessors.is_empty() || accessors.iter().any(|a| has_child(*a, "{"))
+                    }),
                 "computed_getter" | "computed_setter" | "computed_modify" | "willset_clause"
                 | "didset_clause" => has_child(node, "{"),
                 "computed_property" => {
