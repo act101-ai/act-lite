@@ -439,7 +439,7 @@ fn targets_prerequisites_and_variable_uses_are_name_matches() {
     assert_eq!(sites("dep", "3"), [(1, 6), (3, 1)].into_iter().collect());
     assert_eq!(
         sites("V", "5"),
-        [(5, 1), (6, 8), (6, 13)].into_iter().collect()
+        [(5, 1), (6, 7), (6, 12)].into_iter().collect()
     );
 }
 
