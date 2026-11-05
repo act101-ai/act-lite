@@ -203,6 +203,7 @@ fn the_ts_fixture() {
         json!({
             "relationships": {"total": 12, "resolved": 8, "external": 2, "unresolved": 2},
             "kinds": ["dynamic_import", "import", "reexport", "require", "type_import"],
+            "kinds_total": 5,
             "resolution_inputs": [
                 {"file": "package.json", "kind": "package.json"},
                 {"file": "tsconfig.json", "kind": "tsconfig"}
