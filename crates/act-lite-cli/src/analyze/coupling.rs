@@ -114,12 +114,9 @@ impl Analyzer for CouplingAnalyzer {
     }
 }
 
-/// The common dependency details, the formulas and the edge count. The
-/// envelope needs a total beside each list, so `kinds` gets one.
+/// The common dependency details, the formulas and the edge count.
 fn details(graph: &DepGraph) -> Map<String, Value> {
     let mut details = graph.common_details();
-    let kinds = details["kinds"].as_array().map_or(0, Vec::len);
-    details.insert("kinds_total".to_string(), json!(kinds));
     details.insert(
         "formulas".to_string(),
         json!({

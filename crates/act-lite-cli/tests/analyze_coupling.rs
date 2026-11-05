@@ -111,6 +111,10 @@ fn the_ts_fixture_gives_seven_items_in_order() {
     let details = &out["details"];
     assert_eq!(details["edges"], 8);
     assert_eq!(
+        details["kinds_total"],
+        details["kinds"].as_array().unwrap().len()
+    );
+    assert_eq!(
         details["formulas"],
         json!({
             "fan_in": "distinct analyzed files with an edge to the file",
