@@ -567,6 +567,7 @@ mod tests {
         out
     }
 
+    #[cfg(unix)]
     fn skipped(d: &Discovered) -> Vec<(&str, SkipKind, Option<Grammar>)> {
         d.skipped
             .iter()
