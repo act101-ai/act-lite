@@ -452,6 +452,16 @@ fn table_kinds(grammar: Grammar) -> &'static [&'static str] {
             "catch_expression",
             "binary_expression",
         ],
+        Grammar::R => &[
+            "function_definition",
+            "parameters",
+            "parameter",
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "repeat_statement",
+            "binary_operator",
+        ],
         _ => &[],
     }
 }
@@ -482,9 +492,9 @@ fn node_kinds_are_the_table_kinds_and_exist_in_the_grammar() {
 }
 
 #[test]
-fn twenty_one_languages_are_supported() {
+fn twenty_two_languages_are_supported() {
     let names: Vec<&str> = supported().iter().map(|g| g.name()).collect();
-    assert_eq!(names.len(), 21, "{names:?}");
+    assert_eq!(names.len(), 22, "{names:?}");
     for grammar in Grammar::all() {
         assert_eq!(
             function_model::supports(grammar),
@@ -518,7 +528,7 @@ impl From<&Function> for Expected {
     }
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 21] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -533,6 +543,7 @@ const FIXTURE_LANGUAGES: [(&str, &str); 21] = [
     ("lua", "lua"),
     ("php", "php"),
     ("python", "py"),
+    ("r", "R"),
     ("ruby", "rb"),
     ("rust", "rs"),
     ("scala", "scala"),
@@ -577,7 +588,7 @@ fn over_and_under_fixtures_match_their_expected_values() {
     }
     grammars.sort_by_key(|g| g.name());
     grammars.dedup();
-    assert_eq!(grammars.len(), 21, "{grammars:?}");
+    assert_eq!(grammars.len(), 22, "{grammars:?}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -785,7 +796,7 @@ fn java_instance_initializer_is_unnamed() {
 
 #[test]
 fn else_if_adds_a_decision_and_no_nesting() {
-    let cases: [(Grammar, &str); 28] = [
+    let cases: [(Grammar, &str); 31] = [
         (
             Grammar::Bash,
             "f() {\n  if a; then b; elif c; then d; fi\n}\n",
@@ -864,6 +875,15 @@ fn else_if_adds_a_decision_and_no_nesting() {
         (
             Grammar::Zig,
             "fn f() void { if (a) {} else if (b) { if (c) {} } }",
+        ),
+        (Grammar::R, "f <- function() { if (a) {} else if (b) {} }"),
+        (
+            Grammar::R,
+            "f <- function() {\n  if (a) {} else {\n    if (b) {}\n  }\n}\n",
+        ),
+        (
+            Grammar::R,
+            "f <- function() { if (a) {} else if (b) { if (c) {} } }",
         ),
     ];
     for (i, (grammar, source)) in cases.iter().enumerate() {
@@ -1129,7 +1149,7 @@ fn functions_iterates_lazily_in_location_order() {
 // in location order, expected count).
 #[test]
 fn parameter_forms() {
-    let cases: [(Grammar, &str, usize, u32); 32] = [
+    let cases: [(Grammar, &str, usize, u32); 35] = [
         (Grammar::C, "int f(void) { return 0; }", 0, 0),
         (Grammar::C, "int f(int a, ...) { return 0; }", 0, 2),
         (
@@ -1232,6 +1252,9 @@ fn parameter_forms() {
             3,
         ),
         (Grammar::Zig, "test \"t\" {}", 0, 0),
+        (Grammar::R, "f <- function(x, k = 2, ...) x", 0, 3),
+        (Grammar::R, "f <- function() 1", 0, 0),
+        (Grammar::R, "lapply(v, function(y) y)", 0, 1),
     ];
     for (i, (grammar, source, index, expected)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
@@ -1313,6 +1336,22 @@ fn names_of_special_forms() {
             "const S = struct {\n    x: u8,\n    fn m(self: S) u8 {\n        return self.x;\n    }\n};\ntest \"t\" {}\ntest n {}\ntest {}\n",
         ),
         vec![Some("m".to_string()), None, Some("n".to_string()), None]
+    );
+    assert_eq!(
+        names(
+            Grammar::R,
+            "f <- function(x) x\ng = function() 1\nh <<- function() 2\n\"s\" <- function() 3\n`b q` <- function() 4\nlapply(1, function(y) y)\nk <- \\(x) x\nobj$m <- function() 5\n",
+        ),
+        vec![
+            Some("f".to_string()),
+            Some("g".to_string()),
+            Some("h".to_string()),
+            Some("s".to_string()),
+            Some("`b q`".to_string()),
+            None,
+            Some("k".to_string()),
+            None,
+        ]
     );
 }
 

@@ -105,6 +105,21 @@ fn zig_extension() {
 }
 
 #[test]
+fn r_upper_case_extension() {
+    by_extension(&["R"], "a <- 1\n", "R");
+}
+
+#[test]
+fn r_lower_case_extension() {
+    by_extension(&["r"], "a <- 1\n", "R");
+}
+
+#[test]
+fn rprofile_name() {
+    assert_discovered(&[(".Rprofile", "options(digits = 4)\n")], "R");
+}
+
+#[test]
 fn jsonc_extensions() {
     by_extension(&["jsonc", "code-workspace"], "{\"a\": 1}\n", "JSONC");
 }

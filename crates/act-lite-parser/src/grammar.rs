@@ -9,8 +9,8 @@ use crate::languages::{
     DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
     JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, KotlinSupport,
     LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport,
-    PythonSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport, SwiftSupport,
-    TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport, ZigSupport,
+    PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport,
+    SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport, ZigSupport,
 };
 
 /// Supported language grammars.
@@ -71,6 +71,8 @@ pub enum Grammar {
     Protobuf,
     /// Python
     Python,
+    /// R
+    R,
     /// Ruby
     Ruby,
     /// Rust
@@ -127,6 +129,7 @@ impl Grammar {
             Grammar::Php => "PHP",
             Grammar::Protobuf => "Protocol Buffers",
             Grammar::Python => "Python",
+            Grammar::R => "R",
             Grammar::Ruby => "Ruby",
             Grammar::Rust => "Rust",
             Grammar::Scala => "Scala",
@@ -174,6 +177,7 @@ impl Grammar {
             Grammar::Php => "php",
             Grammar::Protobuf => "protobuf",
             Grammar::Python => "python",
+            Grammar::R => "r",
             Grammar::Ruby => "ruby",
             Grammar::Rust => "rust",
             Grammar::Scala => "scala",
@@ -222,6 +226,7 @@ impl Grammar {
             Grammar::Php => &PhpSupport,
             Grammar::Protobuf => &ProtobufSupport,
             Grammar::Python => &PythonSupport,
+            Grammar::R => &RSupport,
             Grammar::Ruby => &RubySupport,
             Grammar::Rust => &RustSupport,
             Grammar::Scala => &ScalaSupport,
@@ -304,8 +309,8 @@ impl Grammar {
     ///
     /// The single source for the filename conventions that extension routing
     /// cannot express: `Dockerfile` (case-insensitive; no extension), the
-    /// three makefile names GNU Make reads by default, `CMakeLists.txt`, and
-    /// the JSONC configuration names (all case-sensitive; `tsconfig.*.json`
+    /// three makefile names GNU Make reads by default, `CMakeLists.txt`,
+    /// `.Rprofile`, and the JSONC configuration names (all case-sensitive; `tsconfig.*.json`
     /// and `jsconfig.*.json` need one or more characters for `*`). Returns
     /// `None` when the name matches no
     /// convention; callers fall back to `from_extension`. Routers beyond the
@@ -318,6 +323,7 @@ impl Grammar {
         match name {
             "Makefile" | "makefile" | "GNUmakefile" => Some(Grammar::Make),
             "CMakeLists.txt" => Some(Grammar::CMake),
+            ".Rprofile" => Some(Grammar::R),
             "tsconfig.json" | "jsconfig.json" | "devcontainer.json" | ".devcontainer.json"
             | ".eslintrc.json" => Some(Grammar::Jsonc),
             _ if ["tsconfig.", "jsconfig."].iter().any(|prefix| {
@@ -402,6 +408,7 @@ impl Grammar {
             "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "php8" => Some(Grammar::Php),
             "proto" => Some(Grammar::Protobuf),
             "py" | "pyi" | "pyw" => Some(Grammar::Python),
+            "R" | "r" => Some(Grammar::R),
             "rb" | "rake" | "gemspec" | "ru" | "erb" => Some(Grammar::Ruby),
             "rs" => Some(Grammar::Rust),
             "scala" | "sc" => Some(Grammar::Scala),
@@ -633,6 +640,25 @@ mod tests {
         assert!(matches!(
             Grammar::Zig.category(),
             act_lite_core::registry::LanguageCategory::Systems
+        ));
+    }
+
+    #[test]
+    fn r_extensions_file_name_query_dir_and_category() {
+        assert_eq!(Grammar::from_extension("R"), Some(Grammar::R));
+        assert_eq!(Grammar::from_extension("r"), Some(Grammar::R));
+        assert_eq!(Grammar::from_filename(".Rprofile"), Some(Grammar::R));
+        assert_eq!(
+            Grammar::from_path(std::path::Path::new("pkg/.Rprofile")),
+            Some(Grammar::R)
+        );
+        assert_eq!(Grammar::from_filename(".rprofile"), None);
+        assert_eq!(Grammar::from_filename("Rprofile"), None);
+        assert_eq!(Grammar::R.name(), "R");
+        assert_eq!(Grammar::R.query_dir(), "r");
+        assert!(matches!(
+            Grammar::R.category(),
+            act_lite_core::registry::LanguageCategory::Dynamic
         ));
     }
 
@@ -922,7 +948,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            38,
+            39,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

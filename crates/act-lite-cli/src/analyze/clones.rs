@@ -826,6 +826,7 @@ fn literal_kinds(grammar: Grammar) -> &'static [&'static str] {
             "integer",
             "float",
         ],
+        Grammar::R => &["string", "integer", "float", "complex"],
         _ => &[],
     }
 }
@@ -877,7 +878,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(covered, 21);
+        assert_eq!(covered, 22);
         assert!(missing.is_empty(), "{missing:#?}");
     }
 

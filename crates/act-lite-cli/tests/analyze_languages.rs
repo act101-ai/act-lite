@@ -11,6 +11,16 @@ use std::path::Path;
 
 const ANALYZERS: [&str; 3] = ["patterns", "hotspots", "clones"];
 
+/// One R function with ten `if`s: complexity 11.
+fn r_branchy() -> String {
+    let mut source = String::from("f <- function(x) {\n");
+    for _ in 0..10 {
+        source.push_str("  if (x > 0) { x <- 0 }\n");
+    }
+    source.push_str("  x\n}\n");
+    source
+}
+
 /// One `fn` and one `test "t"` block with ten `if`s: complexity 11.
 fn zig_with_a_test() -> String {
     let mut source =
@@ -25,7 +35,9 @@ fn zig_with_a_test() -> String {
 fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     for (rel, content) in files {
-        std::fs::write(dir.path().join(rel), content).unwrap();
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
     }
     dir
 }
@@ -100,5 +112,38 @@ fn empty_zig_container_is_a_parse_failure() {
             "{analyzer}: {out}"
         );
         assert_eq!(out["complete"], false, "{analyzer}: {out}");
+    }
+}
+
+#[test]
+fn r_testthat_files_are_tests_and_package_sources_are_not() {
+    let source = r_branchy();
+    let ws = workspace(&[
+        ("tests/testthat/test-scale.R", &source),
+        ("R/test_x.R", &source),
+    ]);
+    let mut mcp = Mcp::start(ws.path());
+    for analyzer in ANALYZERS {
+        let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+        assert_eq!(
+            out["excluded"]["tests"],
+            json!([{"path": "tests/testthat/test-scale.R"}]),
+            "{analyzer}: {out}"
+        );
+        assert_eq!(out["coverage"]["analyzed_files"], 1, "{analyzer}: {out}");
+        match analyzer {
+            "patterns" => assert_eq!(
+                out["findings"],
+                json!([{"file": "R/test_x.R", "range": "1:6-13:2", "rule": "excessive_branching",
+                        "function": "f", "metric": "complexity", "value": 11, "threshold": 10,
+                        "metrics": {"lines": 13, "nesting": 1, "complexity": 11, "parameters": 1}}]),
+                "{out}"
+            ),
+            "hotspots" => {
+                assert_eq!(out["findings"][0]["file"], "R/test_x.R", "{out}");
+                assert_eq!(out["findings"][0]["top_functions"][0]["function"], "f");
+            }
+            _ => assert_eq!(out["findings"], json!([]), "{out}"),
+        }
     }
 }

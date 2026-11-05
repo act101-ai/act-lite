@@ -28,6 +28,7 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Php",
     "Protobuf",
     "Python",
+    "R",
     "Ruby",
     "Scala",
     "Sql",

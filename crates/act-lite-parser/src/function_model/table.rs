@@ -513,6 +513,22 @@ const ZIG: Row = Row {
     strings: &["string", "multiline_string"],
 };
 
+const R: Row = Row {
+    functions: &["function_definition"],
+    ifs: &["if_statement"],
+    else_ifs: NONE,
+    multiways: NONE,
+    arms: NONE,
+    loops: &["for_statement", "while_statement", "repeat_statement"],
+    tries: NONE,
+    handlers: NONE,
+    conditionals: NONE,
+    logical: &["binary_operator"],
+    operators: &["&&", "||"],
+    named: &["parameters", "parameter"],
+    strings: &["string"],
+};
+
 /// The row of a supported grammar; `None` for the `Data` formats.
 pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
     Some(match grammar {
@@ -530,6 +546,7 @@ pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
         Grammar::Lua => &LUA,
         Grammar::Php => &PHP,
         Grammar::Python => &PYTHON,
+        Grammar::R => &R,
         Grammar::Ruby => &RUBY,
         Grammar::Rust => &RUST,
         Grammar::Scala => &SCALA,
@@ -1115,6 +1132,7 @@ impl Ctx<'_> {
                 .filter(|c| c.kind() == "parameters")
                 .map(|l| count_kinds(*l, &["parameter"]))
                 .sum(),
+            Grammar::R => field("parameters").map_or(0, |l| count_kinds(l, &["parameter"])),
             _ => 0,
         };
         Some(count)
@@ -1292,6 +1310,7 @@ impl Ctx<'_> {
             Grammar::Zig if kind == "test_declaration" => {
                 self.last_identifier_before(node, &["block"], &[])
             }
+            Grammar::R => self.r_assigned_name(node),
             _ => match kind {
                 "block" | "static_initializer" | "lambda_expression" | "class_static_block"
                 | "arrow_function" | "func_literal" | "anonymous_function" | "lambda"
@@ -1299,6 +1318,27 @@ impl Ctx<'_> {
                 _ => self.name_field(node),
             },
         }
+    }
+
+    /// The name an R function takes from the `<-`, `=` or `<<-` assignment
+    /// whose right side it is: the identifier as written, or a string's
+    /// content. Its own `name` field is the `function` keyword.
+    fn r_assigned_name(&self, node: Node) -> Option<String> {
+        let assignment = node
+            .parent()
+            .filter(|p| p.kind() == "binary_operator")
+            .filter(|p| p.child_by_field_name("rhs") == Some(node))
+            .filter(|p| {
+                p.child_by_field_name("operator")
+                    .is_some_and(|o| matches!(text(o, self.source), "<-" | "=" | "<<-"))
+            })?;
+        let lhs = assignment.child_by_field_name("lhs")?;
+        let name = match lhs.kind() {
+            "identifier" => lhs,
+            "string" => lhs.child_by_field_name("content")?,
+            _ => return None,
+        };
+        Some(text(name, self.source).to_string())
     }
 
     /// The text of the first identifier token of the `name` field.
@@ -1389,6 +1429,7 @@ mod tests {
                 "else",
             ],
             Grammar::Zig => &["block", "else_clause"],
+            Grammar::R => &["identifier", "string"],
             _ => &[],
         }
     }

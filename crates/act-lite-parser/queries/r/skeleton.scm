@@ -1,0 +1,5 @@
+; Functions assigned at file level
+(program
+  (binary_operator
+    lhs: (identifier) @name
+    rhs: (function_definition)) @function)
