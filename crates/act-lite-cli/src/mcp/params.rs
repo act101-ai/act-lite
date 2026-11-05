@@ -1,8 +1,12 @@
 //! MCP tool parameter structs and shared response helpers.
 
+use crate::analyze::discovery::Includes;
+use crate::analyze::envelope::{AnalyzeError, Excluded, Incomplete, MAX_EVIDENCE_ENTRIES};
+use crate::analyze::run::Request;
 use rmcp::model::{CallToolResult, ContentBlock};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Parameters for the skeleton tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -235,4 +239,175 @@ pub struct CallersParams {
     pub symbol: String,
     /// File path containing the symbol — required to locate it for the language server
     pub file: String,
+}
+
+/// The parameters every analyzer takes. An analyzer's own parameter struct
+/// embeds this one with `#[serde(flatten)]`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AnalyzeParams {
+    /// Files or directories to analyze, relative to the workspace root. Default: the root.
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub paths: Vec<String>,
+    /// Analyze only files that match at least one of these globs
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub include: Vec<String>,
+    /// Leave out files that match any of these globs
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub exclude: Vec<String>,
+    /// Analyze test files and embedded test code. Default: false.
+    #[serde(default)]
+    pub include_tests: bool,
+    /// Analyze generated files and directories. Default: false.
+    #[serde(default)]
+    pub include_generated: bool,
+    /// Analyze vendored directories. Default: false.
+    #[serde(default)]
+    pub include_vendored: bool,
+    /// Analyze ignored paths. Default: false.
+    #[serde(default)]
+    pub include_ignored: bool,
+    /// The most findings to return, 0 to 1000. Default: 100.
+    #[serde(
+        default = "default_analyze_limit",
+        deserialize_with = "deserialize_u32_lax"
+    )]
+    pub limit: u32,
+}
+
+/// Parameters for the analyze_fixture tool.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FixtureParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+}
+
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+impl AnalyzeParams {
+    /// The checked request for the workspace `root`.
+    pub fn request(&self, root: &Path) -> Result<Request, AnalyzeError> {
+        Request::new(
+            root,
+            &self.paths,
+            &self.include,
+            &self.exclude,
+            Includes {
+                tests: self.include_tests,
+                generated: self.include_generated,
+                vendored: self.include_vendored,
+                ignored: self.include_ignored,
+            },
+            self.limit,
+        )
+    }
+}
+
+fn default_analyze_limit() -> u32 {
+    100
+}
+
+/// Like [`deserialize_string_vec_lax`], with an absent or null array read as
+/// empty.
+fn deserialize_string_vec_or_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserialize_string_vec_lax(deserializer).map(Option::unwrap_or_default)
+}
+
+/// The hint shown with an analyzer's result: how to narrow a truncated
+/// result, and the counts of any cut evidence list; else `usual`.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+pub fn analyze_hint(
+    total: u64,
+    truncated: bool,
+    excluded: &Excluded,
+    incomplete: &Incomplete,
+    usual: &str,
+) -> String {
+    let mut parts = Vec::new();
+    if truncated {
+        parts.push(format!(
+            "The result holds {total} findings in total and is cut to `limit`. Narrow it with `paths`, `include` or `exclude`, or change `limit` (0 to 1000)."
+        ));
+    }
+    if excluded.truncated {
+        let c = &excluded.counts;
+        parts.push(format!(
+            "The `excluded` lists are cut at {MAX_EVIDENCE_ENTRIES} entries each; the counts are tests {}, generated {}, vendored {}, ignored {}.",
+            c.tests, c.generated, c.vendored, c.ignored
+        ));
+    }
+    if incomplete.truncated {
+        let c = &incomplete.counts;
+        parts.push(format!(
+            "The `incomplete` lists are cut at {MAX_EVIDENCE_ENTRIES} entries each; the counts are skipped_files {}, parse_failures {}, unresolved {}, limits_hit {}.",
+            c.skipped_files, c.parse_failures, c.unresolved, c.limits_hit
+        ));
+    }
+    if parts.is_empty() {
+        usual.to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyze::envelope::{ExcludedEntry, ExcludedKind, Exclusion, SkipKind, SkippedFile};
+
+    fn excluded(tests: usize) -> Excluded {
+        Excluded::new(
+            (0..tests)
+                .map(|i| Exclusion {
+                    kind: ExcludedKind::Tests,
+                    entry: ExcludedEntry {
+                        path: format!("tests/t{i:03}.rs"),
+                        range: None,
+                    },
+                })
+                .collect(),
+        )
+    }
+
+    fn incomplete(skipped: usize) -> Incomplete {
+        let skipped = (0..skipped)
+            .map(|i| SkippedFile {
+                file: format!("s{i:03}.rs"),
+                kind: SkipKind::Unreadable,
+                reason: "no access".to_string(),
+            })
+            .collect();
+        Incomplete::new(skipped, Vec::new(), Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn untruncated_result_gets_the_usual_hint() {
+        let hint = analyze_hint(3, false, &excluded(100), &incomplete(100), "usual");
+        assert_eq!(hint, "usual");
+    }
+
+    #[test]
+    fn truncated_result_names_the_narrowing_parameters_and_total() {
+        let hint = analyze_hint(3, true, &excluded(0), &incomplete(0), "usual");
+        for word in ["`paths`", "`include`", "`exclude`", "`limit`", "3 findings"] {
+            assert!(hint.contains(word), "{word}: {hint}");
+        }
+        assert!(!hint.contains("usual"), "{hint}");
+    }
+
+    #[test]
+    fn cut_evidence_lists_give_their_counts() {
+        let hint = analyze_hint(0, false, &excluded(101), &incomplete(102), "usual");
+        assert!(
+            hint.contains("tests 101, generated 0, vendored 0, ignored 0"),
+            "{hint}"
+        );
+        assert!(
+            hint.contains("skipped_files 102, parse_failures 0, unresolved 0, limits_hit 0"),
+            "{hint}"
+        );
+        assert!(!hint.contains("`limit`"), "{hint}");
+    }
 }

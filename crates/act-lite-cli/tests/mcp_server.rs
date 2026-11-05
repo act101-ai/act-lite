@@ -58,19 +58,22 @@ async fn tools_list_is_exactly_the_eight() {
         .map(|t| t.name.to_string())
         .collect();
     names.sort();
-    assert_eq!(
-        names,
-        [
-            "callers",
-            "definition",
-            "references",
-            "repo_outline",
-            "skeleton",
-            "status",
-            "symbols",
-            "symbols_batch",
-        ]
-    );
+    // Builds with debug assertions also serve the test analyzer.
+    let mut want = vec![
+        "callers",
+        "definition",
+        "references",
+        "repo_outline",
+        "skeleton",
+        "status",
+        "symbols",
+        "symbols_batch",
+    ];
+    if cfg!(debug_assertions) {
+        want.push("analyze_fixture");
+        want.sort();
+    }
+    assert_eq!(names, want);
     client.cancel().await.expect("client must cancel");
 }
 

@@ -11,10 +11,13 @@ use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
+use tokio_util::sync::CancellationToken;
 
 use super::catalog::TOOLS;
 use super::params::*;
 use super::path_error::enrich_not_found_error;
+use crate::analyze::envelope::AnalyzeError;
+use crate::analyze::run::{Analyzer, run};
 use crate::definition;
 
 /// MCP server exposing act-lite's navigation queries.
@@ -74,6 +77,10 @@ impl ActLiteServer {
     /// catalog entry fails construction here.
     fn tool_router() -> ToolRouter<Self> {
         let mut router = Self::uncatalogued_tool_router();
+        #[cfg(debug_assertions)]
+        {
+            router += Self::fixture_tool_router();
+        }
         for route in router.map.values_mut() {
             let entry = TOOLS
                 .iter()
@@ -87,6 +94,47 @@ impl ActLiteServer {
             route.attr.description = Some(std::borrow::Cow::Borrowed(entry.description));
         }
         router
+    }
+
+    /// Runs `analyzer` on the request `params` describe, on a blocking thread
+    /// so that the serve loop keeps reading messages. `ct` is the request's
+    /// cancellation token. A request error is `invalid_params`, a failure
+    /// `internal_error`. The first content block is the result JSON, the
+    /// second the hint.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    async fn run_analyzer<A: Analyzer + 'static>(
+        &self,
+        analyzer: A,
+        params: AnalyzeParams,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        let root = self.root.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let request = params.request(&root)?;
+            let envelope = run(&analyzer, &request, &ct)?;
+            let json = serde_json::to_string(&envelope).map_err(|e| AnalyzeError::Failed {
+                analysis: A::NAME,
+                cause: e.to_string(),
+            })?;
+            let hint = analyze_hint(
+                envelope.total,
+                envelope.truncated,
+                &envelope.excluded,
+                &envelope.incomplete,
+                A::HINT,
+            );
+            Ok::<_, AnalyzeError>((json, hint))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("{} failed: {e}", A::NAME), None))?;
+        let (json, hint) = outcome.map_err(|e| {
+            if e.is_invalid_params() {
+                McpError::invalid_params(e.to_string(), None)
+            } else {
+                McpError::internal_error(e.to_string(), None)
+            }
+        })?;
+        Ok(success_with_hint(json, &hint))
     }
 
     /// Resolves a tool's `file` argument to an existing single source file in
@@ -650,6 +698,25 @@ impl ActLiteServer {
             json,
             "Use `references` to find all usages of this symbol. Use `callers` to inspect call sites.",
         ))
+    }
+}
+
+/// The test analyzer's tool, served only by builds with debug assertions.
+#[cfg(debug_assertions)]
+#[tool_router(router = fixture_tool_router)]
+impl ActLiteServer {
+    #[tool]
+    async fn analyze_fixture(
+        &self,
+        params: Parameters<FixtureParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer(
+            crate::analyze::fixture::FixtureAnalyzer,
+            params.0.shared,
+            ct,
+        )
+        .await
     }
 }
 
