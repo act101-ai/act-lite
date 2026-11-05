@@ -1,16 +1,98 @@
 //! Glob patterns matched against workspace-relative paths.
+enum Segment {
+    AnyDirs,
+    Name(Vec<char>),
+}
 
 /// A compiled include or exclude pattern.
-pub struct Glob;
+///
+/// `*` and `?` stay inside one path component. A component `**` matches zero
+/// or more components. Every other character matches itself. A pattern
+/// without `/` matches the file name at any depth.
+pub struct Glob {
+    segments: Option<Vec<Segment>>,
+}
 
 impl Glob {
-    pub fn new(_pattern: &str) -> Glob {
-        Glob
+    pub fn new(pattern: &str) -> Glob {
+        if pattern.ends_with('/') {
+            return Glob { segments: None };
+        }
+        let mut segments = Vec::new();
+        if !pattern.contains('/') {
+            segments.push(Segment::AnyDirs);
+        }
+        segments.extend(pattern.split('/').map(|part| {
+            if part == "**" {
+                Segment::AnyDirs
+            } else {
+                Segment::Name(part.chars().collect())
+            }
+        }));
+        Glob {
+            segments: Some(segments),
+        }
     }
 
-    pub fn is_match(&self, _path: &str) -> bool {
-        false
+    pub fn is_match(&self, path: &str) -> bool {
+        let Some(segments) = &self.segments else {
+            return false;
+        };
+        let parts: Vec<&str> = path.split('/').collect();
+        // reach[j]: the segments consumed so far match the first j components.
+        let mut reach = vec![false; parts.len() + 1];
+        reach[0] = true;
+        for segment in segments {
+            let mut next = vec![false; parts.len() + 1];
+            match segment {
+                Segment::AnyDirs => {
+                    let mut open = false;
+                    for j in 0..=parts.len() {
+                        open |= reach[j];
+                        next[j] = open;
+                    }
+                }
+                Segment::Name(name) => {
+                    for j in 0..parts.len() {
+                        next[j + 1] = reach[j] && name_matches(name, parts[j]);
+                    }
+                }
+            }
+            reach = next;
+        }
+        reach[parts.len()]
     }
+}
+
+fn name_matches(pattern: &[char], name: &str) -> bool {
+    let name: Vec<char> = name.chars().collect();
+    let (mut p, mut n) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some('?') => {
+                p += 1;
+                n += 1;
+            }
+            Some(&c) if c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((sp, sn)) => {
+                    p = sp + 1;
+                    n = sn + 1;
+                    star = Some((sp, sn + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 #[cfg(test)]
