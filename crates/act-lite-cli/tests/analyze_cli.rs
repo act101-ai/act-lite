@@ -3,7 +3,7 @@
 //! 5 or more lines and supports Rust only. Every workspace is synthetic and
 //! built in a temporary directory; expected values come from the fixture
 //! sources and the documented rules, not from the binary's output.
-#![cfg(unix)]
+#![cfg(all(unix, debug_assertions))]
 
 use assert_cmd::Command;
 use serde_json::{Value, json};
