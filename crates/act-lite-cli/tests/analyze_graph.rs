@@ -277,7 +277,7 @@ fn request_errors_in_their_order() {
     let ws = tempfile::tempdir().unwrap();
     ts(ws.path());
     let root = ws.path();
-    let err = |r: Result<Value, String>| r.err().expect("an error");
+    let err = |r: Result<Value, String>| r.expect_err("an error");
     assert_eq!(
         err(graph(root, &[], &["src/a.ts"], None, Some(0))),
         "max_depth must be between 1 and 1000, got 0"
