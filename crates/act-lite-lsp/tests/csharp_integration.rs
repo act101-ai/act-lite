@@ -5,6 +5,8 @@ use act_lite_parser::Grammar;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+include!("common/helper.rs");
+
 #[tokio::test]
 async fn csharp_server_config_is_valid() {
     let config = ServerConfig::csharp(PathBuf::from("/workspace"));
@@ -14,8 +16,10 @@ async fn csharp_server_config_is_valid() {
 }
 
 #[tokio::test]
-async fn csharp_pool_returns_none_without_omnisharp() {
-    // This test verifies graceful behavior when OmniSharp is not installed
+async fn csharp_pool_starts_omnisharp() {
+    if !require_server("OmniSharp") {
+        return;
+    }
     let dir = TempDir::new().unwrap();
 
     // Create minimal .csproj file
@@ -41,24 +45,14 @@ public class Calculator
     std::fs::write(dir.path().join("Program.cs"), cs_content).unwrap();
 
     let pool = LspPool::new(dir.path().to_path_buf());
-    let client = pool.get_client(Grammar::CSharp).await;
-
-    // Result depends on whether OmniSharp is installed
-    // We just verify it doesn't panic
-    match client {
-        Some(_) => {
-            // OmniSharp is available - this is fine
-        }
-        None => {
-            // OmniSharp not installed - this is expected in CI environments
-        }
-    }
+    let client = pool.get_installed_client(Grammar::CSharp).await;
+    assert!(client.is_some(), "OmniSharp did not start");
 }
 
 #[tokio::test]
 async fn csharp_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
-    let client = pool.get_client(Grammar::CSharp).await;
+    let client = pool.get_installed_client(Grammar::CSharp).await;
     assert!(client.is_none());
 }
 
@@ -100,15 +94,17 @@ csharp_new_line_before_open_brace = all
 
 #[tokio::test]
 async fn csharp_multiple_client_requests() {
+    if !require_server("OmniSharp") {
+        return;
+    }
     let dir = TempDir::new().unwrap();
     let pool = LspPool::new(dir.path().to_path_buf());
 
     // Multiple requests should be handled correctly
-    let client1 = pool.get_client(Grammar::CSharp).await;
-    let client2 = pool.get_client(Grammar::CSharp).await;
+    let client1 = pool.get_installed_client(Grammar::CSharp).await;
+    let client2 = pool.get_installed_client(Grammar::CSharp).await;
 
-    // Both should return the same result (either Some or None)
-    assert_eq!(client1.is_some(), client2.is_some());
+    assert!(client1.is_some() && client2.is_some());
 }
 
 #[tokio::test]
@@ -123,18 +119,18 @@ async fn csharp_pool_shutdown() {
 
 #[tokio::test]
 async fn csharp_pool_client_count() {
+    if !require_server("OmniSharp") {
+        return;
+    }
     let dir = TempDir::new().unwrap();
     let pool = LspPool::new(dir.path().to_path_buf());
 
     // Initially should have 0 clients
     assert_eq!(pool.client_count().await, 0);
 
-    // After attempting to get client (may fail if OmniSharp not installed)
-    let _client = pool.get_client(Grammar::CSharp).await;
+    let _client = pool.get_installed_client(Grammar::CSharp).await;
 
-    // Count should still be valid (0 or 1)
-    let count = pool.client_count().await;
-    assert!(count <= 1);
+    assert_eq!(pool.client_count().await, 1);
 }
 
 #[tokio::test]

@@ -67,7 +67,7 @@ async fn php_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
 
     // Should return None for disabled pool
-    let client = pool.get_client(Grammar::Php).await;
+    let client = pool.get_installed_client(Grammar::Php).await;
     assert!(client.is_none());
 }
 
