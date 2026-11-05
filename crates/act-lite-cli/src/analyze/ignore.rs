@@ -1,9 +1,10 @@
 //! Ignore rules from `.gitignore` files and `.git/info/exclude`.
 
-use super::classify::is_regular_file;
+use super::classify::open_regular;
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -109,11 +110,21 @@ impl IgnoreRules {
     /// regular file (a symlink among others) or that cannot be read adds no
     /// pattern; a pattern that is not valid is skipped.
     fn add(&mut self, dir: &Path, file: &Path) {
-        if !is_regular_file(file) {
+        let Ok(handle) = open_regular(file) else {
             return;
-        }
+        };
         let mut builder = GitignoreBuilder::new(dir);
-        let _ = builder.add(file);
+        for (i, line) in BufReader::new(handle).lines().enumerate() {
+            let Ok(line) = line else {
+                break;
+            };
+            let line = if i == 0 {
+                line.trim_start_matches('\u{feff}')
+            } else {
+                &line
+            };
+            let _ = builder.add_line(Some(file.to_path_buf()), line);
+        }
         if let Ok(set) = builder.build()
             && !set.is_empty()
         {

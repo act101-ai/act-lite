@@ -1,6 +1,6 @@
 //! Classification of vendored, generated and test files and directories.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -31,17 +31,35 @@ pub(crate) fn is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
 }
 
+/// Opens `path` for reading. On unix a symlink as the last component is not
+/// followed and a FIFO is not waited on.
+pub(crate) fn open_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    options.open(path)
+}
+
+/// Opens `path` for reading when the opened file is a regular file.
+pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+    let file = open_no_follow(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    Ok(file)
+}
+
 const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 
 /// Whether `dir` holds a `CACHEDIR.TAG` file that starts with the cache
 /// directory signature.
 pub fn is_generated_dir(dir: &Path) -> bool {
-    let tag = dir.join("CACHEDIR.TAG");
-    if !is_regular_file(&tag) {
-        return false;
-    }
     let mut head = Vec::new();
-    File::open(tag)
+    open_regular(&dir.join("CACHEDIR.TAG"))
         .and_then(|f| {
             f.take(CACHEDIR_SIGNATURE.len() as u64)
                 .read_to_end(&mut head)
@@ -126,11 +144,8 @@ fn is_generated_marker_line(line: &str) -> bool {
 /// Whether the first lines of the file at `path` carry a generated-file
 /// marker in a comment. Only a regular file is read.
 pub fn has_generated_header(path: &Path) -> io::Result<bool> {
-    if !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Ok(false);
-    }
     let mut head = Vec::new();
-    File::open(path)?
+    open_regular(path)?
         .take(HEADER_BYTES)
         .read_to_end(&mut head)?;
     let head = String::from_utf8_lossy(&head);
