@@ -5,11 +5,12 @@ use strum::IntoEnumIterator;
 
 use crate::language::LanguageSupport;
 use crate::languages::{
-    BashSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport, DockerfileSupport,
-    ElixirSupport, GoSupport, HclTerraformSupport, HtmlSupport, JavaScriptSupport, JavaSupport,
-    JsonSupport, JsxSupport, KotlinSupport, LuaSupport, MarkdownSupport, PhpSupport, PythonSupport,
+    BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport,
+    DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
+    JavaScriptSupport, JavaSupport, JsonSupport, JsxSupport, KotlinSupport, LuaSupport,
+    MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport, PythonSupport,
     RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport, SwiftSupport, TomlSupport,
-    TsxSupport, TypeScriptSupport, YamlSupport,
+    TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
 };
 
 /// Supported language grammars.
@@ -22,6 +23,8 @@ pub enum Grammar {
     Bash,
     /// C
     C,
+    /// CMake build descriptions
+    CMake,
     /// C++
     Cpp,
     /// C#
@@ -36,6 +39,8 @@ pub enum Grammar {
     Elixir,
     /// Go
     Go,
+    /// GraphQL schemas and operations
+    GraphQl,
     /// HCL/Terraform
     HclTerraform,
     /// HTML (HyperText Markup Language)
@@ -52,10 +57,16 @@ pub enum Grammar {
     Kotlin,
     /// Lua
     Lua,
+    /// Make (GNU Make makefiles)
+    Make,
     /// Markdown
     Markdown,
+    /// Nix expression language
+    Nix,
     /// PHP
     Php,
+    /// Protocol Buffers
+    Protobuf,
     /// Python
     Python,
     /// Ruby
@@ -76,6 +87,8 @@ pub enum Grammar {
     Tsx,
     /// TypeScript
     TypeScript,
+    /// XML (data format)
+    Xml,
     /// YAML
     Yaml,
 }
@@ -86,6 +99,7 @@ impl Grammar {
         match self {
             Grammar::Bash => "Bash",
             Grammar::C => "C",
+            Grammar::CMake => "CMake",
             Grammar::Cpp => "C++",
             Grammar::CSharp => "C#",
             Grammar::Css => "CSS",
@@ -93,6 +107,7 @@ impl Grammar {
             Grammar::Dockerfile => "Dockerfile",
             Grammar::Elixir => "Elixir",
             Grammar::Go => "Go",
+            Grammar::GraphQl => "GraphQL",
             Grammar::HclTerraform => "HCL/Terraform",
             Grammar::Html => "HTML",
             Grammar::Java => "Java",
@@ -101,8 +116,11 @@ impl Grammar {
             Grammar::Json => "JSON",
             Grammar::Kotlin => "Kotlin",
             Grammar::Lua => "Lua",
+            Grammar::Make => "Make",
             Grammar::Markdown => "Markdown",
+            Grammar::Nix => "Nix",
             Grammar::Php => "PHP",
+            Grammar::Protobuf => "Protocol Buffers",
             Grammar::Python => "Python",
             Grammar::Ruby => "Ruby",
             Grammar::Rust => "Rust",
@@ -113,6 +131,7 @@ impl Grammar {
             Grammar::Toml => "TOML",
             Grammar::Tsx => "TSX",
             Grammar::TypeScript => "TypeScript",
+            Grammar::Xml => "XML",
             Grammar::Yaml => "YAML",
         }
     }
@@ -126,6 +145,7 @@ impl Grammar {
         match self {
             Grammar::Bash => "bash",
             Grammar::C => "c",
+            Grammar::CMake => "cmake",
             Grammar::Cpp => "cpp",
             Grammar::CSharp => "csharp",
             Grammar::Css => "css",
@@ -133,6 +153,7 @@ impl Grammar {
             Grammar::Dockerfile => "dockerfile",
             Grammar::Elixir => "elixir",
             Grammar::Go => "go",
+            Grammar::GraphQl => "graphql",
             Grammar::HclTerraform => "hcl_terraform",
             Grammar::Html => "html",
             Grammar::Java => "java",
@@ -141,8 +162,11 @@ impl Grammar {
             Grammar::Json => "json",
             Grammar::Kotlin => "kotlin",
             Grammar::Lua => "lua",
+            Grammar::Make => "make",
             Grammar::Markdown => "markdown",
+            Grammar::Nix => "nix",
             Grammar::Php => "php",
+            Grammar::Protobuf => "protobuf",
             Grammar::Python => "python",
             Grammar::Ruby => "ruby",
             Grammar::Rust => "rust",
@@ -153,6 +177,7 @@ impl Grammar {
             Grammar::Toml => "toml",
             Grammar::Tsx => "tsx",
             Grammar::TypeScript => "typescript",
+            Grammar::Xml => "xml",
             Grammar::Yaml => "yaml",
         }
     }
@@ -166,6 +191,7 @@ impl Grammar {
         match self {
             Grammar::Bash => &BashSupport,
             Grammar::C => &CSupport,
+            Grammar::CMake => &CMakeSupport,
             Grammar::Cpp => &CppSupport,
             Grammar::CSharp => &CSharpSupport,
             Grammar::Css => &CssSupport,
@@ -173,6 +199,7 @@ impl Grammar {
             Grammar::Dockerfile => &DockerfileSupport,
             Grammar::Elixir => &ElixirSupport,
             Grammar::Go => &GoSupport,
+            Grammar::GraphQl => &GraphQlSupport,
             Grammar::HclTerraform => &HclTerraformSupport,
             Grammar::Html => &HtmlSupport,
             Grammar::Java => &JavaSupport,
@@ -181,8 +208,11 @@ impl Grammar {
             Grammar::Json => &JsonSupport,
             Grammar::Kotlin => &KotlinSupport,
             Grammar::Lua => &LuaSupport,
+            Grammar::Make => &MakeSupport,
             Grammar::Markdown => &MarkdownSupport,
+            Grammar::Nix => &NixSupport,
             Grammar::Php => &PhpSupport,
+            Grammar::Protobuf => &ProtobufSupport,
             Grammar::Python => &PythonSupport,
             Grammar::Ruby => &RubySupport,
             Grammar::Rust => &RustSupport,
@@ -193,6 +223,7 @@ impl Grammar {
             Grammar::Toml => &TomlSupport,
             Grammar::Tsx => &TsxSupport,
             Grammar::TypeScript => &TypeScriptSupport,
+            Grammar::Xml => &XmlSupport,
             Grammar::Yaml => &YamlSupport,
         }
     }
@@ -263,15 +294,21 @@ impl Grammar {
     /// Detects grammar from a conventional file NAME (no extension required).
     ///
     /// The single source for the filename conventions that extension routing
-    /// cannot express: `Dockerfile` (case-insensitive; no extension).
-    /// Returns `None` when the name matches no convention; callers fall back
-    /// to `from_extension`. Routers beyond the parser layer (MCP) must route
-    /// through this so the convention list cannot drift.
+    /// cannot express: `Dockerfile` (case-insensitive; no extension), the
+    /// three makefile names GNU Make reads by default, and `CMakeLists.txt`
+    /// (both case-sensitive). Returns `None` when the name matches no
+    /// convention; callers fall back to `from_extension`. Routers beyond the
+    /// parser layer (MCP) must route through this so the convention list
+    /// cannot drift.
     pub fn from_filename(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("dockerfile") {
             return Some(Grammar::Dockerfile);
         }
-        None
+        match name {
+            "Makefile" | "makefile" | "GNUmakefile" => Some(Grammar::Make),
+            "CMakeLists.txt" => Some(Grammar::CMake),
+            _ => None,
+        }
     }
 
     /// The grammar `SourceFile::load` routes `path` to: filename conventions
@@ -295,6 +332,7 @@ impl Grammar {
         match ext {
             "sh" | "bash" => Some(Grammar::Bash),
             "c" | "h" => Some(Grammar::C),
+            "cmake" => Some(Grammar::CMake),
             "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Some(Grammar::Cpp),
             "cs" | "csx" => Some(Grammar::CSharp),
             "css" => Some(Grammar::Css),
@@ -302,6 +340,7 @@ impl Grammar {
             "dockerfile" => Some(Grammar::Dockerfile),
             "ex" | "exs" | "leex" => Some(Grammar::Elixir),
             "go" => Some(Grammar::Go),
+            "graphql" | "graphqls" | "gql" => Some(Grammar::GraphQl),
             "hcl" | "tf" => Some(Grammar::HclTerraform),
             // `.conf` stays with Nginx — it is ambiguous with HOCON, Apache,
             // and many others. Use the explicit `.hocon` extension to opt
@@ -313,8 +352,11 @@ impl Grammar {
             "json" => Some(Grammar::Json),
             "kt" | "kts" => Some(Grammar::Kotlin),
             "lua" => Some(Grammar::Lua),
+            "mk" | "mak" => Some(Grammar::Make),
             "md" | "markdown" | "mdown" | "mkd" | "mkdn" => Some(Grammar::Markdown),
+            "nix" => Some(Grammar::Nix),
             "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "php8" => Some(Grammar::Php),
+            "proto" => Some(Grammar::Protobuf),
             "py" | "pyi" | "pyw" => Some(Grammar::Python),
             "rb" | "rake" | "gemspec" | "ru" | "erb" => Some(Grammar::Ruby),
             "rs" => Some(Grammar::Rust),
@@ -325,6 +367,9 @@ impl Grammar {
             "toml" => Some(Grammar::Toml),
             "tsx" => Some(Grammar::Tsx),
             "ts" | "mts" | "cts" => Some(Grammar::TypeScript),
+            "xml" | "xsd" | "xsl" | "xslt" | "svg" | "plist" => Some(Grammar::Xml),
+            "csproj" | "fsproj" | "vbproj" | "props" | "targets" => Some(Grammar::Xml),
+            "resx" | "xaml" => Some(Grammar::Xml),
             "yaml" | "yml" => Some(Grammar::Yaml),
             _ => None,
         }
@@ -431,15 +476,108 @@ mod tests {
         assert_eq!(Grammar::from_filename("foo"), None);
         assert_eq!(Grammar::from_filename("BUILD.bak"), None);
         assert_eq!(Grammar::from_filename("README"), None);
-        // Makefile is NOT a convention the parser routes by name (and it has
-        // no extension routing either) — pins the non-expansion.
-        assert_eq!(Grammar::from_filename("Makefile"), None);
         // The Kconfig family is case-SENSITIVE: lowercase `kconfig` is not a
         // convention filename (only the `.kconfig` EXTENSION routes, via
         // from_extension). Same shape for the other family forms.
         assert_eq!(Grammar::from_filename("kconfig"), None);
         assert_eq!(Grammar::from_filename("DEFCONFIG"), None);
         assert_eq!(Grammar::from_filename("KCONFIG.arch"), None);
+    }
+
+    #[test]
+    fn from_filename_make_and_cmake_conventions() {
+        assert_eq!(Grammar::from_filename("Makefile"), Some(Grammar::Make));
+        assert_eq!(Grammar::from_filename("makefile"), Some(Grammar::Make));
+        assert_eq!(Grammar::from_filename("GNUmakefile"), Some(Grammar::Make));
+        assert_eq!(
+            Grammar::from_filename("CMakeLists.txt"),
+            Some(Grammar::CMake)
+        );
+    }
+
+    #[test]
+    fn from_path_refuses_near_miss_build_file_names() {
+        for name in [
+            "Makefile.bak",
+            "makefile.txt",
+            "MAKEFILE",
+            "BSDmakefile",
+            "Makefile.am",
+            "cmakelists.txt",
+            "CMakeLists.txt.orig",
+            "notes.txt",
+        ] {
+            assert_eq!(
+                Grammar::from_path(std::path::Path::new(name)),
+                None,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn added_grammar_names_and_query_dirs() {
+        for (grammar, name, dir) in [
+            (Grammar::Xml, "XML", "xml"),
+            (Grammar::GraphQl, "GraphQL", "graphql"),
+            (Grammar::Protobuf, "Protocol Buffers", "protobuf"),
+            (Grammar::Make, "Make", "make"),
+            (Grammar::CMake, "CMake", "cmake"),
+            (Grammar::Nix, "Nix", "nix"),
+        ] {
+            assert_eq!(grammar.name(), name);
+            assert_eq!(grammar.query_dir(), dir);
+            assert!(
+                matches!(
+                    grammar.category(),
+                    act_lite_core::registry::LanguageCategory::Data
+                ),
+                "{grammar:?} is a Data grammar"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_extensions() {
+        for ext in [
+            "xml", "xsd", "xsl", "xslt", "svg", "plist", "csproj", "fsproj", "vbproj", "props",
+            "targets", "resx", "xaml",
+        ] {
+            assert_eq!(Grammar::from_extension(ext), Some(Grammar::Xml), "{ext}");
+        }
+        assert_eq!(Grammar::from_extension("dtd"), None);
+    }
+
+    #[test]
+    fn graphql_extensions() {
+        for ext in ["graphql", "graphqls", "gql"] {
+            assert_eq!(
+                Grammar::from_extension(ext),
+                Some(Grammar::GraphQl),
+                "{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn protobuf_extension() {
+        assert_eq!(Grammar::from_extension("proto"), Some(Grammar::Protobuf));
+    }
+
+    #[test]
+    fn make_extensions() {
+        assert_eq!(Grammar::from_extension("mk"), Some(Grammar::Make));
+        assert_eq!(Grammar::from_extension("mak"), Some(Grammar::Make));
+    }
+
+    #[test]
+    fn cmake_extension() {
+        assert_eq!(Grammar::from_extension("cmake"), Some(Grammar::CMake));
+    }
+
+    #[test]
+    fn nix_extension() {
+        assert_eq!(Grammar::from_extension("nix"), Some(Grammar::Nix));
     }
 
     #[test]
@@ -652,7 +790,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            30,
+            36,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();
