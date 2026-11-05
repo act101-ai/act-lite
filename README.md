@@ -398,9 +398,11 @@ U+FFFD. A FIFO, socket or device file is not opened by discovery.
 
 ## Resource bounds and cancellation
 
-- **Per file:** a file larger than 8 MiB (8,388,608 bytes) is not read. It is
-  in `skipped_files` with kind `size_limit`, so the result is incomplete, not
-  silently partial.
+- **Per file:** a file in a language the analyzer supports that is larger
+  than 8 MiB (8,388,608 bytes) is not read. It is in `skipped_files` with
+  kind `size_limit`, so the result is incomplete, not silently partial. A
+  file in a language the analyzer does not support is counted in
+  `coverage.languages` and never read, whatever its size.
 - **Scope:** there is no file-count limit and no repository-size limit. No
   analyzer stops or refuses because the scope holds many files.
 - **Time and memory:** there is no hard time cap and no hard memory cap. An
