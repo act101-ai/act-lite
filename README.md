@@ -93,6 +93,10 @@ Global flags:
   The `references` fallback searches every same-language file under it.
 - `--disable-lsp` (or `ACT_LITE_DISABLE_LSP=1`) — never start a language server.
 
+`ACT_LITE_DISABLE_LSP` and `ACT_LITE_INSTALL_LSP` take `1`, `true`, `yes`,
+`on`, `y` or `t` (any case) as on, and `0`, `false`, `no`, `off`, `n` or `f`
+as off.
+
 `references` uses a language server when one is available. Without one it
 falls back to a name-level tree-sitter search over files of the same
 language, and the output says so with `"source": "tree-sitter"`. `callers`,
@@ -101,7 +105,10 @@ the error names the server binary, its install command and its homepage.
 
 act-lite installs a language server only when `ACT_LITE_INSTALL_LSP=1` is
 set. Then a query that would use a missing server runs the server's install
-command (below) through `sh -c`, and stops it after 10 minutes. Without
+command (below) through `sh -c`; after 10 minutes it kills the shell and
+every process the shell started. When the install fails, the hint says that
+the command ran and why the server is still unavailable; the next `act-lite`
+command or MCP server process runs the install again. Without
 `ACT_LITE_INSTALL_LSP=1`, act-lite runs nothing: install the server yourself
 and put it on your `PATH`.
 
@@ -109,8 +116,9 @@ Once per session — one `act-lite` command, or one `act-lite mcp serve`
 process — the first `references` answer that falls back because its server
 is not installed carries a hint with the server binary, its install command
 and its homepage. The CLI prints it as one `hint:` line on stderr and leaves
-the JSON unchanged; the MCP server adds it to the tool result. With
-`--disable-lsp` or `ACT_LITE_DISABLE_LSP=1` there is no hint.
+the JSON unchanged; the MCP server adds it to the tool result, after the
+name-level note that every fallback result carries. With
+`--disable-lsp` or `ACT_LITE_DISABLE_LSP=1` there is no install hint.
 
 | Server | Languages | Install command | Homepage |
 | --- | --- | --- | --- |
