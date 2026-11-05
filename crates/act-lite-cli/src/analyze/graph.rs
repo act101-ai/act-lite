@@ -28,7 +28,7 @@ pub const DEFAULT_MAX_DEPTH: u32 = 1;
 /// The largest `max_depth` a request can give.
 pub const MAX_MAX_DEPTH: u32 = 1000;
 /// The most entries of each focus list in `details`.
-const MAX_FOCUS: usize = 30;
+pub(crate) const MAX_FOCUS: usize = 30;
 /// The most entries of `details.not_followed`.
 const MAX_NOT_FOLLOWED: usize = 100;
 /// The most focus files the no-focus error lists.
@@ -409,7 +409,7 @@ pub fn traverse(
 
 /// As [`traverse`], calling `on_visit` with each file as it is visited,
 /// after the token check.
-fn traverse_observed(
+pub(crate) fn traverse_observed(
     graph: &DepGraph,
     focus: &FocusSet,
     direction: Direction,
@@ -579,7 +579,7 @@ impl Analyzer for GraphAnalyzer {
 }
 
 /// The focus keys of `details`, empty without a focus set.
-fn insert_focus(details: &mut Map<String, Value>, set: Option<&FocusSet>) {
+pub(crate) fn insert_focus(details: &mut Map<String, Value>, set: Option<&FocusSet>) {
     let (paths, files, not_analyzed, files_not_analyzed): (
         &[String],
         usize,
