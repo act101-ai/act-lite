@@ -8,3 +8,7 @@ pub mod envelope;
 pub mod glob;
 pub mod ignore;
 pub mod read;
+pub mod run;
+
+#[cfg(debug_assertions)]
+pub mod fixture;
