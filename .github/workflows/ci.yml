@@ -54,6 +54,7 @@ jobs:
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml)' && echo "deny=true" >> "$GITHUB_OUTPUT" || echo "deny=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml)$' && echo "msrv=true" >> "$GITHUB_OUTPUT" || echo "msrv=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml|about\.(toml|hbs))$' && echo "licenses=true" >> "$GITHUB_OUTPUT" || echo "licenses=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^install\.sh$' && echo "installer=true" >> "$GITHUB_OUTPUT" || echo "installer=false" >> "$GITHUB_OUTPUT"
           echo "rust: ${pkgs:-none}"
       - name: cargo fmt --check
@@ -75,6 +76,16 @@ jobs:
       - name: cargo deny check
         if: steps.scope.outputs.deny == 'true'
         run: cargo deny check
+      - uses: taiki-e/install-action@v2
+        if: steps.scope.outputs.licenses == 'true' && runner.os == 'Linux'
+        with:
+          tool: cargo-about@0.9.3
+      - name: THIRD-PARTY-LICENSES is current
+        if: steps.scope.outputs.licenses == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo about generate --config about.toml --output-file THIRD-PARTY-LICENSES about.hbs
+          git diff --exit-code THIRD-PARTY-LICENSES
       - name: read minimum rust version
         id: msrv
         if: steps.scope.outputs.msrv == 'true'
