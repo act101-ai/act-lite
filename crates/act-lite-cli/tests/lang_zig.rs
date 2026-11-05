@@ -350,7 +350,7 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 
 #[test]
 fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
-    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\n";
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\n";
     assert_eq!(
         skeleton_pairs(source),
         pair_set(&[
@@ -358,10 +358,12 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("import", "b"),
             ("import", "c"),
             ("import", "d"),
-            ("import", "e")
+            ("import", "e"),
+            ("import", "m"),
+            ("constant", "n")
         ])
     );
-    assert!(symbol_pairs(source).is_empty());
+    assert_eq!(symbol_pairs(source), pair_set(&[("constant", "n")]));
 }
 
 #[test]
