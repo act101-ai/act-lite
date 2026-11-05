@@ -104,7 +104,7 @@ impl Analyzer for CyclesAnalyzer {
         for (c, members) in components.iter().enumerate() {
             cyclic_files += members.len();
             let subject = members[0];
-            let path = witness(&out, &edges, &component_of, c, subject, cancel)?;
+            let path = witness(&out, &edges, members, cancel)?;
             let edges_total = members
                 .iter()
                 .flat_map(|&m| &out[m])
@@ -222,32 +222,33 @@ fn components(
     Ok(found)
 }
 
-/// The steps of the shortest cycle through `subject` inside component `c`:
-/// a breadth-first search that visits targets in byte order and stops at the
-/// first edge back to the subject.
-fn witness(
+/// The steps of the shortest cycle through the first of `members`, one
+/// component in ascending node order. `out[n]` lists node `n`'s targets in
+/// byte order, each with the index of its edge in `edges`. A breadth-first
+/// search inside the component stops at the first edge back to that file; its
+/// buffers are sized to the component, not to the graph.
+pub fn witness(
     out: &[Vec<(usize, usize)>],
     edges: &[&Edge],
-    component_of: &[usize],
-    c: usize,
-    subject: usize,
+    members: &[usize],
     cancel: &CancellationToken,
 ) -> Result<Vec<Step>, AnalyzeError> {
-    let mut reached_by: Vec<Option<(usize, usize)>> = vec![None; out.len()];
-    let mut seen = vec![false; out.len()];
-    seen[subject] = true;
-    let mut queue = VecDeque::from([subject]);
-    while let Some(node) = queue.pop_front() {
+    let local = |node: usize| members.binary_search(&node).ok();
+    let mut reached_by: Vec<Option<(usize, usize)>> = vec![None; members.len()];
+    let mut seen = vec![false; members.len()];
+    seen[0] = true;
+    let mut queue = VecDeque::from([0usize]);
+    while let Some(at_local) = queue.pop_front() {
         if cancel.is_cancelled() {
             return Err(AnalyzeError::Cancelled);
         }
-        for &(to, edge) in &out[node] {
-            if component_of[to] != c {
+        for &(to, edge) in &out[members[at_local]] {
+            let Some(to_local) = local(to) else {
                 continue;
-            }
-            if to == subject {
+            };
+            if to_local == 0 {
                 let mut steps = vec![edges[edge].step()];
-                let mut at = node;
+                let mut at = at_local;
                 while let Some((from, via)) = reached_by[at] {
                     steps.push(edges[via].step());
                     at = from;
@@ -255,10 +256,10 @@ fn witness(
                 steps.reverse();
                 return Ok(steps);
             }
-            if !seen[to] {
-                seen[to] = true;
-                reached_by[to] = Some((node, edge));
-                queue.push_back(to);
+            if !seen[to_local] {
+                seen[to_local] = true;
+                reached_by[to_local] = Some((at_local, edge));
+                queue.push_back(to_local);
             }
         }
     }
