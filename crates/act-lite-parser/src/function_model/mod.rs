@@ -155,8 +155,19 @@ impl Functions<'_> {
             nesting = nesting.max(depth);
             complexity += ctx.logical_operators(n);
 
-            if n.child_count() == 0 || ctx.is_string(n) {
+            if n.child_count() == 0 {
                 mark(n.start_position().row, n.end_position().row);
+            } else if ctx.is_string(n) {
+                // Every line of a string counts, except the lines of a
+                // function nested in it; its own tokens there mark their lines.
+                let nested = nested_functions(ctx, n);
+                for row in n.start_position().row..=n.end_position().row {
+                    let inside =
+                        |f: &Node| (f.start_position().row..=f.end_position().row).contains(&row);
+                    if !nested.iter().any(inside) {
+                        mark(row, row);
+                    }
+                }
             }
             if n.child_count() == 0 {
                 continue;
@@ -204,4 +215,19 @@ impl Functions<'_> {
         let last = gap.rfind(|c: char| !c.is_whitespace())?;
         Some((self.row_of(from + first), self.row_of(from + last)))
     }
+}
+
+/// The outermost functions inside `node`.
+fn nested_functions<'t>(ctx: &Ctx, node: Node<'t>) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    let mut cursor = node.walk();
+    let mut stack: Vec<Node> = node.children(&mut cursor).collect();
+    while let Some(n) = stack.pop() {
+        if ctx.is_function(n) {
+            found.push(n);
+        } else {
+            stack.extend(n.children(&mut cursor));
+        }
+    }
+    found
 }
