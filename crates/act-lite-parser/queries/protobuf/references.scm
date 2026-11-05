@@ -7,5 +7,3 @@
 (enum_name (identifier) @reference)
 (service_name (identifier) @reference)
 (rpc_name (identifier) @reference)
-(enum_field . (identifier) @reference)
-(field . (type) . (identifier) @reference)
