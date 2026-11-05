@@ -1,18 +1,21 @@
 # act-lite
 
-act-lite is an open-source, navigation-only code engine for AI agents from
-act101. It parses source files with tree-sitter and answers structural
-questions without reading whole files: a file's skeleton, its symbols, a
-repository outline, where a symbol is defined, and where it is used. It does
-not edit code. It also sequesters a project's secrets out of the working
+act-lite is an open-source code engine for AI agents from act101. It parses
+source files with tree-sitter and answers structural questions without reading
+whole files: a file's skeleton, its symbols, a repository outline, where a
+symbol is defined, and where it is used. It also measures code health:
+functions over size, nesting, branching or parameter thresholds, the files
+where complexity concentrates, and duplicated code. It does not edit code. It also sequesters a project's secrets out of the working
 tree and runs commands with them injected and redacted (`act-lite env`); the
 only file it writes is the project's `.env`, and only the value tokens of the
 lines it sequesters.
 
-act-lite ships one binary, `act-lite`, with three commands:
+act-lite ships one binary, `act-lite`, with four commands:
 
 - `act-lite query` runs one query and prints JSON.
-- `act-lite mcp serve` serves the same queries as MCP tools over stdio.
+- `act-lite analyze` runs one code-health analysis and prints JSON.
+- `act-lite mcp serve` serves the same queries and analyses as MCP tools over
+  stdio.
 - `act-lite env` sequesters secrets, lists them by name, and runs commands
   with them injected and their output redacted.
 
@@ -168,8 +171,10 @@ act-lite mcp serve                    # workspace: nearest git root, else the cu
 act-lite --workspace /path/to/repo mcp serve
 ```
 
-The server exposes eight tools: `status`, `skeleton`, `symbols`,
-`symbols_batch`, `repo_outline`, `references`, `callers`, `definition`.
+The server exposes eleven tools: `status`, `skeleton`, `symbols`,
+`symbols_batch`, `repo_outline`, `references`, `callers`, `definition`, and
+the analyzers `analyze_patterns`, `analyze_hotspots` and `analyze_clones`
+(see [Code-health analyzers](#code-health-analyzers)).
 `status` lists the 30 languages and, for each language server, whether it is
 `ready` or `not_installed`.
 
@@ -366,6 +371,167 @@ omit `source`. `evidence.language_servers` has one
 `{ "language", "server", "state", "reason"? }` entry per language whose server
 the analyzer can use; `state` is `used`, `disabled`, `not_installed` or
 `failed` (with `reason`). An analyzer that uses no language server has `[]`.
+
+## Code-health analyzers
+
+Three analyzers measure code health: `analyze_patterns`
+(`act-lite analyze patterns`), `analyze_hotspots`
+(`act-lite analyze hotspots`) and `analyze_clones`
+(`act-lite analyze clones`). Each returns the result described under
+[Analysis results](#analysis-results), with `details` always present.
+
+**Languages.** The three analyzers support 20 programming languages: Bash, C,
+C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Kotlin, Lua, PHP, Python,
+Ruby, Rust, Scala, Swift, TSX and TypeScript. They do not support the 10 data
+and markup formats: CSS, Dockerfile, HCL/Terraform, HTML, JSON, Markdown, SCSS,
+SQL, TOML and YAML. Those files are listed in `coverage.languages` with
+`supported: false`; a scope that holds only such files gives `unsupported`, and
+a mixed scope is not made incomplete by them. A Bash function declares no
+parameters (it reads `$1`, `$2`, …), so for Bash `parameters` is `null`, the
+`long_parameter_list` rule is never evaluated, and `patterns` says so in
+`details.not_applicable`.
+
+**Functions.** `patterns` and `hotspots` measure functions. A function is a
+function construct of its language that has a body: named functions, methods,
+constructors, accessors, and anonymous functions (lambdas, closures, Ruby
+blocks). A declaration without a body (a C prototype, a Java interface method,
+a Rust trait method signature) is not a function. A function nested in another
+is a separate function, and each function is measured on its own body: its
+code minus the functions nested in it. Top-level code outside any function (a
+script body, a module's statements) is not measured, so a script with no
+function gives `no_findings`; `details.functions` says how many functions were
+measured. `function` is the function's name, or `null` for an anonymous
+function; `range` is the function's own range. Blocks passed to calls (Ruby
+`do … end`, Kotlin trailing lambdas) are functions, with `"function": null`.
+Each clause of an Elixir multi-clause `def` is a separate function.
+
+**Metrics.**
+
+| Metric | Definition |
+|---|---|
+| `lines` | The lines on which a token of the function's own body (its header included) starts, ends or spans. Blank lines, comment-only lines and lines that hold only nested-function code do not count. A multi-line string counts every line it spans, except a Python docstring, whose lines do not count. |
+| `nesting` | The deepest chain of nesting constructs (if, multi-way, loop, try) in the function's own body. An `if` in the else position of another `if` does not add a level. Arms, handlers, conditional expressions and logical operators do not nest. |
+| `complexity` | Cyclomatic complexity: 1 + the decision points in the function's own body. Each if and else-if, each arm that is not a default arm, each loop, each exception handler, each conditional expression and each logical-operator occurrence (`&&`, `\|\|`, `and`, `or`, `??` and their language forms) is one decision point. |
+| `parameters` | The declared parameters. A receiver (`self`, `this`, a Go method receiver) does not count; a destructured parameter, a parameter with a default value and a variadic parameter each count 1. `null` for Bash. |
+
+Constructs not modeled: Python comprehension `for` and `if` clauses and the
+compound logical assignments `&&=`, `||=`, `??=` are not decision points.
+Scala placeholder lambdas (`_ + 1`) and partial-function literals are not
+functions; their code belongs to the enclosing function. A multi-label case
+counts by the grammar's shape: C# `case 1: case 2:` is two decision points,
+Java `case 1, 2 ->` is one. An Elixir `rescue` block and a Scala `catch`
+clause count once each, whatever the number of clauses in them. Loops without
+a condition (Rust `loop`, Go `for {}`) count as one decision point, like every
+loop. An exhaustive multi-way construct with no default arm (a Rust `match`, a
+Kotlin `when` on a sealed type) counts every arm, one more than McCabe's
+n − 1. Dart collection `if` and `for` elements, Elixir `with … else` clauses,
+optional chaining (`?.`) and C# `and` / `or` patterns are not decision points.
+
+**`analyze_patterns`.** A rule is exceeded when the metric is strictly greater
+than its threshold. The thresholds are fixed:
+
+| `rule` | `metric` | `threshold` |
+|---|---|---|
+| `oversized_function` | `lines` | 50 |
+| `deep_nesting` | `nesting` | 4 |
+| `excessive_branching` | `complexity` | 10 |
+| `long_parameter_list` | `parameters` | 5 |
+
+There is one finding per function per exceeded rule: `file`, `range`, `rule`,
+`function`, `metric`, `value`, `threshold`, and `metrics` with all four values
+of the function. Findings are in location order, then by `rule`. `details`
+gives `thresholds`, `counts_by_rule` (the findings per rule before the
+`limit` cut), `functions`, and `not_applicable` (one entry per supported
+language with a rule that does not apply: Bash, `long_parameter_list`). The
+analyzer has exactly these four rules: it does not check language-version
+upgrades, deprecated APIs or porting readiness. A finding states a measured
+value over a fixed threshold, not a verdict.
+
+**`analyze_hotspots`.** For each function, score = complexity × lines; for
+each file, score = the sum of its functions' scores. Each analyzed file with at
+least one function is one item: `file` (no `range`), `score`, `functions`,
+`complexity` and `lines` (the sums the score uses), and `top_functions`, at
+most 5 functions by score (each with `function`, `range`, `score` and its four
+metrics), with `top_functions_total`. Items are ranked by `score`, highest
+first, then by path. A file without a function is not an item, so
+`no_findings` means that no analyzed file has a function. `details` states the
+formula and the definitions of its inputs, and `dependency_information` is
+`false`: the ranking uses no dependency data. A hotspot is a place to start
+investigating, not a verdict.
+
+**`analyze_clones`.** A clone class is a set of two or more syntax subtrees in
+one language with the same normalized form.
+
+- *Exact* matching compares the syntax tree, ignoring formatting and comments.
+- *Renamed* matching also renames identifiers consistently by first appearance
+  (the same name maps to the same placeholder inside a subtree, different
+  names to different placeholders) and abstracts each string, character,
+  numeric and symbol literal; `true`, `false`, `null`, `nil` and `None` are
+  kept. A class is `exact` when all members have the same exact form, else
+  `renamed`, with `variants` the number of exact forms.
+- The literal kinds abstracted are, per language: Bash `string`, `raw_string`,
+  `ansi_c_string`, `translated_string`, `number`; C and C++ `string_literal`,
+  `raw_string_literal` (C++), `concatenated_string`, `char_literal`,
+  `number_literal`, `user_defined_literal` (C++); C# `string_literal`,
+  `verbatim_string_literal`, `raw_string_literal`,
+  `interpolated_string_expression`, `character_literal`, `integer_literal`,
+  `real_literal`; Dart `string_literal`, `symbol_literal`,
+  `decimal_integer_literal`, `hex_integer_literal`,
+  `decimal_floating_point_literal`; Elixir `string`, `charlist`, `sigil`,
+  `char`, `integer`, `float`, `atom`, `quoted_atom`; Go
+  `interpreted_string_literal`, `raw_string_literal`, `rune_literal`,
+  `int_literal`, `float_literal`, `imaginary_literal`; Java `string_literal`,
+  `character_literal`, `decimal_integer_literal`, `hex_integer_literal`,
+  `octal_integer_literal`, `binary_integer_literal`,
+  `decimal_floating_point_literal`, `hex_floating_point_literal`; JavaScript,
+  JSX, TypeScript and TSX `string`, `template_string`, `number`, `regex`;
+  Kotlin `string_literal`, `character_literal`, `integer_literal`,
+  `long_literal`, `hex_literal`, `bin_literal`, `unsigned_literal`,
+  `real_literal`; Lua `string`, `number`; PHP `string`, `encapsed_string`,
+  `heredoc`, `nowdoc`, `integer`, `float`; Python `string`,
+  `concatenated_string`, `integer`, `float`; Ruby `string`, `chained_string`,
+  `heredoc_body`, `character`, `simple_symbol`, `delimited_symbol`,
+  `hash_key_symbol`, `regex`, `integer`, `float`, `rational`, `complex`; Rust
+  `string_literal`, `raw_string_literal`, `char_literal`, `integer_literal`,
+  `float_literal`; Scala `string`, `interpolated_string`,
+  `character_literal`, `integer_literal`, `floating_point_literal`; Swift
+  `line_string_literal`, `multi_line_string_literal`, `raw_string_literal`,
+  `regex_literal`, `integer_literal`, `hex_literal`, `oct_literal`,
+  `bin_literal`, `real_literal`. A string with an embedded expression is not
+  abstracted; its identifiers are renamed.
+- A candidate has at least 50 tokens of its normalized form (a literal counts
+  1). The file's root node and subtrees that hold a syntax error are not
+  candidates.
+- Only the outermost duplication is reported: a class whose every member lies
+  inside a member of a reported class is not reported again. When two
+  functions are clones, their bodies and statements are not listed again.
+- Members in different languages never match. JavaScript and JSX are
+  different languages, and so are TypeScript and TSX: byte-identical code in
+  a `.js` and a `.jsx` file is no clone.
+- A finding gives the first member's `file` and `range`, `kind`, `language`,
+  `tokens` (the normalized size), `members` (at most 20, each with `file`,
+  `range` and `variant`) with `members_total`, and `variants`. The largest
+  duplication comes first: `tokens`, then `members_total`, highest first.
+- `focus` (`--focus <PATH>`, repeatable): report only the classes that have a
+  member in a file at or below a focus path. Classes are still built from the
+  whole scope, so a change is compared with the rest of the repository; with
+  `focus`, the members in focus files are listed first. A focus path must
+  exist, be inside the workspace root and be at or below a `PATH` argument
+  (`focus path is not inside the requested paths: <path>`); it is checked
+  after the paths and `--limit`. `details.focus_not_analyzed` lists the focus
+  paths under which no file was analyzed.
+
+Not reported: two subtrees that differ by an inserted, removed or reordered
+statement, however similar they look; and a run of statements that is
+duplicated but is not the whole of one syntax node on both sides.
+
+A clone class shows that code has the same syntax tree, apart from formatting, comments and, for renamed clones, identifier names and literal values. It does not show that the members behave the same, that they can share one function, or that extracting them is safe.
+
+**Bounds.** These analyzers read every in-scope file of up to 8 MiB and have
+no hard time or memory cap; cancel a run to bound its time. They have no
+analysis bound that stops early, so `incomplete.limits_hit` is always empty.
+They use no language server: `evidence` is
+`{"sources":["tree-sitter"],"language_servers":[]}`.
 
 ## Repository discovery
 

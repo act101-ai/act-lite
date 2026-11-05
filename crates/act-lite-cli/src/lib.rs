@@ -1,8 +1,8 @@
-//! act-lite: navigation-only code queries and sequestered secrets for AI agents.
+//! act-lite: code queries, code-health analysis and sequestered secrets for AI agents.
 //!
-//! The `act-lite` binary exposes the `query`, `mcp serve` and `env` commands;
-//! this library holds their argument parsing, output formatting, query
-//! runners, the MCP server and the `env` dispatch.
+//! The `act-lite` binary exposes the `query`, `analyze`, `mcp serve` and `env`
+//! commands; this library holds their argument parsing, output formatting,
+//! query runners, analyzers, the MCP server and the `env` dispatch.
 
 #![cfg_attr(not(test), deny(clippy::print_stdout))]
 

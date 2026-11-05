@@ -505,3 +505,84 @@ fn running_analyses_do_not_block_the_serve_loop() {
         "an analysis finished before status was answered"
     );
 }
+
+// ---- the code-health analyzers: patterns, hotspots, clones ----
+
+impl Session {
+    /// `tools/call` of the tool `name`.
+    fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
+        self.request("tools/call", json!({"name": name, "arguments": arguments}))
+    }
+}
+
+/// The stderr message of a CLI request error of `analyze <analyzer>`.
+fn cli_error_of(ws: &Path, analyzer: &str, args: &[&str]) -> String {
+    let config = TempDir::new().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .arg("--workspace")
+        .arg(ws)
+        .args(["analyze", analyzer])
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&out.stderr).unwrap();
+    v["error"]["message"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn code_health_tools_answer_over_mcp() {
+    let ws = TempDir::new().unwrap();
+    write(
+        ws.path(),
+        "src/p.rs",
+        "fn p(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) {}\n",
+    );
+    let mut session = Session::start(ws.path());
+    for (tool, analysis, status) in [
+        ("analyze_patterns", "patterns", "findings"),
+        ("analyze_hotspots", "hotspots", "findings"),
+        ("analyze_clones", "clones", "no_findings"),
+    ] {
+        let reply = session.call_tool(tool, json!({}));
+        let content = reply["result"]["content"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{tool}: {reply}"));
+        assert_eq!(content.len(), 2, "{reply}");
+        let v: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(v["analysis"], analysis, "{v}");
+        assert_eq!(v["status"], status, "{tool}: {v}");
+    }
+}
+
+#[test]
+fn clones_focus_errors_over_mcp_match_the_cli() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("ws");
+    write(&root, "a.py", "def f():\n    return 1\n");
+    write(&root, "sub/s.py", "def g():\n    return 2\n");
+    write(tmp.path(), "x.py", "def h():\n    return 3\n");
+    let mut session = Session::start(&root);
+    for (arguments, args) in [
+        (json!({"focus": ["nope.py"]}), vec!["--focus", "nope.py"]),
+        (json!({"focus": ["../x.py"]}), vec!["--focus", "../x.py"]),
+        (
+            json!({"paths": ["sub"], "focus": ["a.py"]}),
+            vec!["sub", "--focus", "a.py"],
+        ),
+        (
+            json!({"focus": "[\"nope.py\"]"}),
+            vec!["--focus", "nope.py"],
+        ),
+    ] {
+        let reply = session.call_tool("analyze_clones", arguments.clone());
+        let error = &reply["error"];
+        assert_eq!(error["code"], INVALID_PARAMS, "{arguments}: {reply}");
+        assert_eq!(
+            error["message"].as_str().unwrap(),
+            cli_error_of(&root, "clones", &args),
+            "{arguments}"
+        );
+    }
+}
