@@ -173,6 +173,103 @@ The server exposes eight tools: `status`, `skeleton`, `symbols`,
 `status` lists the 30 languages and, for each language server, whether it is
 `ready` or `not_installed`.
 
+## Analysis results
+
+Every analyzer returns one JSON object. These top-level keys are always
+present, in this order, including empty lists and zero counts:
+
+| Key | Meaning |
+|---|---|
+| `analysis` | The analyzer name, for example `patterns`. |
+| `status` | `findings`, `no_findings`, `unsupported` or `incomplete` (below). |
+| `complete` | `true` if and only if every count in `incomplete.counts` is 0. |
+| `findings` | The returned findings, in the order below, cut to `limit`. |
+| `total` | The number of findings before the cut. |
+| `limit` | The effective limit. |
+| `truncated` | `true` if and only if `total` is more than the length of `findings`. |
+| `coverage` | `analyzed_files`; `languages`, a list of `{ "language", "files", "supported" }`; `unrecognized_files`. |
+| `excluded` | `tests`, `generated`, `vendored`, `ignored` (lists of `{ "path", "range"? }`), `counts` (the same four keys), `truncated`. |
+| `incomplete` | `skipped_files`, `parse_failures`, `unresolved`, `limits_hit` (lists), `counts` (the same four keys), `truncated`. |
+| `evidence` | `sources` (list of strings), `language_servers` (list). |
+
+An analyzer can add one more top-level key, `details` (an object), for
+example a ranking formula and its weights. It holds no per-file data.
+
+**Status.** The status is derived from the other keys. The rules are checked
+in this order:
+
+1. `unsupported`: `total` is 0, `complete` is `true`, and
+   `coverage.analyzed_files` is 0. Every recognized file in scope is in a
+   language the analyzer does not support, and no file in a supported
+   language was removed by a file-level step (`--include` or `--exclude`, or
+   exclusion as a test file, a generated file name or a generated header).
+   When such a file was removed, the request is the empty-scope error, which
+   names the include options. Example: `analyze patterns Cargo.toml`.
+2. `findings`: `total` is 1 or more, whether `complete` is `true` or `false`.
+   With `complete: false`, more findings can exist in the missing evidence.
+3. `incomplete`: `total` is 0 and `complete` is `false`.
+4. `no_findings`: `total` is 0, `complete` is `true`, and
+   `coverage.analyzed_files` is 1 or more.
+
+Missing evidence is never a clean result: `no_findings` requires complete
+evidence. Files in an unsupported language beside supported files do not make
+a result incomplete; they appear in `coverage.languages` with
+`supported: false`.
+
+**Incomplete evidence.**
+
+- `skipped_files`: `{ "file", "kind", "reason" }`. `kind` is `size_limit`,
+  `not_utf8`, `unreadable`, `symlink_outside_workspace` or `walk_error`.
+- `parse_failures`: `{ "file", "range" }`, the first syntax error in the
+  file. The file is still analyzed on the recovered tree.
+- `unresolved`: `{ "file", "range", "kind", "target", "reason" }`, a
+  relationship that the analysis needs and could not resolve.
+- `limits_hit`: `{ "limit", "value", "detail" }`, an analysis bound (a
+  request parameter) that stopped the analysis early.
+
+**Locations.** `file` and `path` are relative to the workspace root, with `/`
+separators and no leading `./`. A directory ends with `/`; the root is `"."`.
+An invalid UTF-8 sequence in a name is written as U+FFFD. `range` is
+`"L:C-L:C"`: lines are 1-indexed, columns are 1-indexed UTF-8 byte offsets,
+the start is inclusive and the end is exclusive. An item that concerns a whole
+file has no `range`.
+
+**Order.** Every list has one total order, so the same request on the same
+files gives byte-identical output.
+
+- Paths compare as byte strings: `a-b/x.rs` sorts before `a/b.rs`.
+- Location order: `file`, then start line, start column, end line, end
+  column. An item without `range` sorts first.
+- `findings`: location order, unless the analyzer defines a rank (for example
+  a score, descending), with location order to break ties. Each analyzer
+  names a last key that makes the order total.
+- `coverage.languages` and `evidence.language_servers`: by `language`.
+  `excluded` lists: by `path`, then `range`. `skipped_files`: by `file`, then
+  `kind`. `parse_failures`: by `file`. `unresolved`: by `file`, `range`,
+  `kind`, then `target`. `limits_hit`: by `limit`, then `value`.
+  `evidence.sources`: byte order.
+- A non-integer number is rounded half to even to 3 decimal places and has no
+  trailing zeros. An integral value is an integer.
+
+**Bounds.** `limit` is 0 to 1000 (default 100). Another value is an error:
+`limit must be between 0 and 1000, got <n>`. `limit: 0` returns only the
+counts. Each list in `excluded` and `incomplete` holds at most 100 entries;
+`counts` gives the full totals, and that object's `truncated` is `true` when
+a list was cut. A list inside a finding or inside `details` has a fixed
+maximum and a sibling integer `<name>_total` with its full length. To narrow a
+result, give paths, `--include`, `--exclude` or a smaller `--limit`.
+
+**Evidence.** `evidence.sources` lists every instrument that produced part of
+the result: `"tree-sitter"`, or `"lsp:<binary>"` (for example
+`"lsp:rust-analyzer"`). It is sorted, has no duplicates, and is `[]` when no
+file was analyzed. When it has more than one value, every finding and every
+analyzer-specific relationship object (for example a dependency edge)
+carries `"source"` with one value from the list. With a single source, items
+omit `source`. `evidence.language_servers` has one
+`{ "language", "server", "state", "reason"? }` entry per language whose server
+the analyzer can use; `state` is `used`, `disabled`, `not_installed` or
+`failed` (with `reason`). An analyzer that uses no language server has `[]`.
+
 ## `act-lite env`
 
 `act-lite env` keeps a project's secrets out of the working tree and out of

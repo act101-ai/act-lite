@@ -54,6 +54,16 @@ impl CompactRange {
         self.start_col
     }
 
+    /// Returns the end line (1-indexed).
+    pub fn end_line(&self) -> u32 {
+        self.end_line
+    }
+
+    /// Returns the end column (1-indexed, exclusive).
+    pub fn end_col(&self) -> u32 {
+        self.end_col
+    }
+
     /// Converts this compact range back into a full [`Range`] with the given file path.
     pub fn into_range(self, file: PathBuf) -> Range {
         let start = Location::new(file.clone(), self.start_line, self.start_col);
@@ -184,6 +194,13 @@ mod tests {
         let compact = CompactRange::from(&range);
         let json = serde_json::to_string(&compact).unwrap();
         assert_eq!(json, r#""3:7-10:1""#);
+    }
+
+    #[test]
+    fn compact_range_end_accessors() {
+        let compact: CompactRange = serde_json::from_str(r#""8:1-28:2""#).unwrap();
+        assert_eq!(compact.end_line(), 28);
+        assert_eq!(compact.end_col(), 2);
     }
 
     #[test]
