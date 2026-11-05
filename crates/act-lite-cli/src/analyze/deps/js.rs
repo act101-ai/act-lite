@@ -109,18 +109,6 @@ const DEPENDENCY_TABLES: [&str; 4] = [
 /// Directory names under which a `package.json` adds no workspace package.
 const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
 
-/// Directory names whose `package.json` files are never read: the
-/// vendored directories of discovery.
-const VENDORED_DIRS: [&str; 7] = [
-    "vendor",
-    "third_party",
-    "third-party",
-    "node_modules",
-    "bower_components",
-    "Pods",
-    "Carthage",
-];
-
 /// The most `extends` levels followed; a deeper chain is reported as a
 /// cycle.
 const MAX_EXTENDS_DEPTH: usize = 32;
@@ -226,7 +214,7 @@ fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
         _ => return Found::None,
     };
     let manifest = join(&dir, "package.json");
-    if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
+    if !cx.vendored(&manifest) && is_file(cx, &manifest) {
         match package(cx, &manifest) {
             Ok(PackageInfo {
                 main: Some(main), ..
@@ -378,7 +366,7 @@ fn workspace_package(cx: &mut ResolveCx<'_>, name: &str, spec: &str) -> Option<O
 /// the package itself is probed as a directory, a subpath as a path.
 fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outcome {
     let manifest = join(dir, "package.json");
-    if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
+    if !cx.vendored(&manifest) && is_file(cx, &manifest) {
         match package(cx, &manifest) {
             Ok(info) if info.exports => {
                 return Outcome::Unresolved(format!(
@@ -407,14 +395,14 @@ fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outc
 /// directory is not read.
 fn workspace_names<'c>(cx: &'c mut ResolveCx<'_>) -> &'c BTreeMap<String, Vec<String>> {
     if cx.cache::<JsCache>().names.is_none() {
-        let manifests: Vec<String> = cx
+        let mut manifests: Vec<String> = cx
             .workspace_files()
             .iter()
             .filter(|f| f.rsplit('/').next() == Some("package.json"))
             .filter(|f| !f.split('/').any(|part| TEST_DIRS.contains(&part)))
-            .filter(|f| !in_vendored_dir(f))
             .cloned()
             .collect();
+        manifests.retain(|f| !cx.vendored(f));
         let mut names: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for manifest in manifests {
             if let Ok(PackageInfo {
@@ -437,7 +425,7 @@ fn manifests(cx: &mut ResolveCx<'_>, dir: &str) -> Result<Vec<(String, PackageIn
     let mut out = Vec::new();
     for ancestor in ancestors(dir) {
         let manifest = join(ancestor, "package.json");
-        if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
+        if !cx.vendored(&manifest) && is_file(cx, &manifest) {
             out.push((ancestor.to_string(), package(cx, &manifest)?));
         }
     }
@@ -818,14 +806,6 @@ fn package_name(spec: &str) -> &str {
 fn alias_name(value: &str) -> Option<&str> {
     let at = value.rfind('@').filter(|at| *at > 0)?;
     Some(&value[..at])
-}
-
-/// Whether `path` lies below a vendored directory.
-fn in_vendored_dir(path: &str) -> bool {
-    path.split('/')
-        .rev()
-        .skip(1)
-        .any(|part| VENDORED_DIRS.contains(&part))
 }
 
 fn is_relative(spec: &str) -> bool {
