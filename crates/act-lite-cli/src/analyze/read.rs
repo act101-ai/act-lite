@@ -2,7 +2,7 @@
 //! the removal of embedded test code, one file at a time.
 
 use super::classify::open_no_follow;
-use super::discovery::{Candidate, Skip, in_pruned_dir};
+use super::discovery::{Candidate, Includes, Skip, left_out};
 use super::embedded::{blank, test_regions};
 use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile, rel_path};
 use act_lite_core::CompactRange;
@@ -347,8 +347,11 @@ pub enum SupportError {
     Unreadable(String, String),
     TooLarge(String),
     NotUtf8(String),
-    /// Outside the workspace, or below a pruned directory.
+    /// Outside the workspace, or left out by discovery's directory and
+    /// ignore steps under the request's includes.
     Refused(String),
+    /// A whole-file test (`#![cfg(test)]`) read while tests are excluded.
+    TestFile(String),
     Cancelled,
 }
 
@@ -362,8 +365,9 @@ impl fmt::Display for SupportError {
             }
             SupportError::NotUtf8(path) => write!(f, "{path}: content is not valid UTF-8"),
             SupportError::Refused(path) => {
-                write!(f, "{path}: outside the workspace or in a pruned directory")
+                write!(f, "{path}: outside the workspace or left out by discovery")
             }
+            SupportError::TestFile(path) => write!(f, "{path}: excluded as tests"),
             SupportError::Cancelled => f.write_str("analysis cancelled"),
         }
     }
@@ -377,15 +381,25 @@ pub enum EntryKind {
     Symlink,
 }
 
+/// Where a symlink points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymlinkTarget {
+    /// An existing entry inside the workspace, workspace-relative.
+    Inside(String),
+    /// An existing entry outside the workspace.
+    Outside,
+    /// Nothing: the target does not exist or cannot be resolved.
+    Broken,
+}
+
 /// One entry of a listed directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     /// The name as it is on disk, compared byte for byte.
     pub name: String,
     pub kind: EntryKind,
-    /// For a symlink, its target's workspace-relative path; `None` when the
-    /// target is outside the workspace or does not exist.
-    pub target: Option<String>,
+    /// For a symlink, where it points; `None` for any other entry.
+    pub target: Option<SymlinkTarget>,
 }
 
 /// Reads files that an analysis needs but does not analyze: source files for
@@ -395,16 +409,17 @@ pub struct DirEntry {
 pub struct SupportReader {
     root: PathBuf,
     canonical_root: Option<PathBuf>,
-    include_tests: bool,
+    includes: Includes,
     cancel: CancellationToken,
 }
 
 impl SupportReader {
-    pub fn new(root: &Path, include_tests: bool, cancel: &CancellationToken) -> SupportReader {
+    /// A reader for the workspace `root` under the request's `includes`.
+    pub fn new(root: &Path, includes: &Includes, cancel: &CancellationToken) -> SupportReader {
         SupportReader {
             root: root.to_path_buf(),
             canonical_root: root.canonicalize().ok(),
-            include_tests,
+            includes: *includes,
             cancel: cancel.clone(),
         }
     }
@@ -424,10 +439,10 @@ impl SupportReader {
             rel: written,
             grammar,
         };
-        match read_file(&file, self.include_tests) {
+        match read_file(&file, self.includes.tests) {
             Ok(ReadResult::Parsed { parsed, .. }) => Ok(parsed),
             Ok(ReadResult::Skipped(skip)) => Err(skip_error(rel, skip.file.kind, skip.file.reason)),
-            Ok(ReadResult::TestFile(_)) => Err(SupportError::Refused(rel.to_string())),
+            Ok(ReadResult::TestFile(_)) => Err(SupportError::TestFile(rel.to_string())),
             Err(err) => Err(SupportError::Unreadable(rel.to_string(), err.to_string())),
         }
     }
@@ -453,7 +468,7 @@ impl SupportReader {
                 .file_type()
                 .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
             let (kind, target) = if file_type.is_symlink() {
-                (EntryKind::Symlink, self.inside(&entry.path()))
+                (EntryKind::Symlink, Some(self.target(&entry.path())))
             } else if file_type.is_dir() {
                 (EntryKind::Dir, None)
             } else {
@@ -497,20 +512,39 @@ impl SupportReader {
         else {
             return Err(refused());
         };
-        if unpruned && in_pruned_dir(&self.root, inside) {
-            return Err(refused());
+        if unpruned {
+            let out = left_out(
+                &self.root,
+                inside,
+                path.is_dir(),
+                &self.includes,
+                &self.cancel,
+            )
+            .map_err(|_| SupportError::Cancelled)?;
+            if out {
+                return Err(refused());
+            }
         }
         let written = rel_path(&self.root, &self.root.join(inside), path.is_dir())
             .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
         Ok((path, written))
     }
 
-    /// The workspace-relative target of the symlink at `path`, when it
-    /// exists inside the workspace.
-    fn inside(&self, path: &Path) -> Option<String> {
-        let target = path.canonicalize().ok()?;
-        let inside = target.strip_prefix(self.canonical_root.as_ref()?).ok()?;
-        rel_path(&self.root, &self.root.join(inside), target.is_dir()).ok()
+    /// Where the symlink at `path` points.
+    fn target(&self, path: &Path) -> SymlinkTarget {
+        let Ok(target) = path.canonicalize() else {
+            return SymlinkTarget::Broken;
+        };
+        let inside = self
+            .canonical_root
+            .as_ref()
+            .and_then(|root| target.strip_prefix(root).ok());
+        match inside
+            .and_then(|rel| rel_path(&self.root, &self.root.join(rel), target.is_dir()).ok())
+        {
+            Some(rel) => SymlinkTarget::Inside(rel),
+            None => SymlinkTarget::Outside,
+        }
     }
 }
 

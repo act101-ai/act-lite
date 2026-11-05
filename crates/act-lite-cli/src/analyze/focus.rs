@@ -1,8 +1,9 @@
 //! Focus paths: the files whose connections or dependents an analysis
 //! reports, analyzed or not.
 
-use super::discovery::{Discovered, Scope};
+use super::discovery::{Discovered, Includes, Scope, dir_left_out, rules_for};
 use super::envelope::{AnalyzeError, ExcludedKind, rel_path};
+use super::ignore::IgnoreRules;
 use super::read::ReadOutcome;
 use crate::mcp::path_error::enrich_not_found_error;
 use act_lite_parser::Grammar;
@@ -64,33 +65,48 @@ pub struct FocusFile {
 }
 
 /// The files at or below `focus`: a named file as itself, a directory walked
-/// with discovery's directory pruning below it (`.git` and the directories
-/// discovery excluded). Each file's status is what discovery found;
-/// [`FocusSet::settle`] adds what the read found.
+/// with the discovery steps before the globs under `includes` applied to every
+/// directory below it (so `.git` and the left-out directories are not
+/// entered, also inside a named left-out directory). A `.git` file is not a
+/// focus file. An entry that discovery reports as skipped (a symlink out of
+/// the workspace, an unlistable directory) is a focus file with that skip.
+/// Each file's status is what discovery found; [`FocusSet::settle`] adds what
+/// the read found.
 pub fn focus_files(
     root: &Path,
     focus: &[PathBuf],
     discovered: &Discovered,
+    includes: &Includes,
     supported: &dyn Fn(Grammar) -> bool,
     cancel: &CancellationToken,
 ) -> Result<FocusSet, AnalyzeError> {
     let mut paths = Vec::new();
-    let mut rels = Vec::new();
+    let mut entries = Vec::new();
+    let mut walk = FocusWalk {
+        root,
+        discovered,
+        includes,
+        cancel,
+        out: &mut entries,
+    };
     for path in focus {
         let is_dir = fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
         paths.push(rel_path(root, path, is_dir)?);
         if is_dir {
-            walk(root, path, discovered, cancel, &mut rels)?;
+            walk.dir(path, &rules_for(root, path))?;
         } else {
-            rels.push(rel_path(root, path, false)?);
+            let parent = path.parent().unwrap_or(root);
+            let ignored = !includes.ignored && rules_for(root, parent).is_ignored(path, false);
+            walk.out.push((rel_path(root, path, false)?, ignored));
         }
     }
     sort_dedup(&mut paths);
-    sort_dedup(&mut rels);
-    let files = rels
+    entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    entries.dedup_by(|a, b| a.0 == b.0);
+    let files = entries
         .into_iter()
-        .map(|rel| {
-            let reason = reason(&rel, discovered, supported);
+        .map(|(rel, ignored)| {
+            let reason = reason(&rel, ignored, discovered, supported);
             FocusFile {
                 analyzed: reason.is_none(),
                 rel,
@@ -146,42 +162,64 @@ impl FocusSet {
     }
 }
 
-/// Adds every regular file below `dir`, without entering `.git` or a
-/// directory that discovery excluded.
-fn walk(
-    root: &Path,
-    dir: &Path,
-    discovered: &Discovered,
-    cancel: &CancellationToken,
-    out: &mut Vec<String>,
-) -> Result<(), AnalyzeError> {
-    if cancel.is_cancelled() {
-        return Err(AnalyzeError::Cancelled);
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            let rel = rel_path(root, &path, true)?;
-            let excluded = discovered.excluded.iter().any(|e| e.entry.path == rel);
-            if path.file_name() != Some(OsStr::new(".git")) && !excluded {
-                walk(root, &path, discovered, cancel, out)?;
-            }
-        } else if file_type.is_file() {
-            out.push(rel_path(root, &path, false)?);
-        }
-    }
-    Ok(())
+/// Collects the focus entries below a directory, each with whether an
+/// ignore rule matches it.
+struct FocusWalk<'a> {
+    root: &'a Path,
+    discovered: &'a Discovered,
+    includes: &'a Includes,
+    cancel: &'a CancellationToken,
+    out: &'a mut Vec<(String, bool)>,
 }
 
-/// Why discovery leaves `rel` unanalyzed, or `None` when it is analyzed.
+impl FocusWalk<'_> {
+    fn dir(&mut self, dir: &Path, rules: &IgnoreRules) -> Result<(), AnalyzeError> {
+        if self.cancel.is_cancelled() {
+            return Err(AnalyzeError::Cancelled);
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            self.out.push((rel_path(self.root, dir, true)?, false));
+            return Ok(());
+        };
+        for entry in entries {
+            if self.cancel.is_cancelled() {
+                return Err(AnalyzeError::Cancelled);
+            }
+            let Ok(entry) = entry else {
+                self.out.push((rel_path(self.root, dir, true)?, false));
+                continue;
+            };
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if !dir_left_out(&path, rules, self.includes, self.cancel)? {
+                    self.dir(&path, &rules.child(&path))?;
+                }
+                continue;
+            }
+            if path.file_name() == Some(OsStr::new(".git")) {
+                continue;
+            }
+            let rel = rel_path(self.root, &path, false)?;
+            if file_type.is_symlink() && !self.discovered.skipped.iter().any(|s| s.file.file == rel)
+            {
+                continue;
+            }
+            let ignored = !self.includes.ignored && rules.is_ignored(&path, false);
+            self.out.push((rel, ignored));
+        }
+        Ok(())
+    }
+}
+
+/// Why `rel` is not analyzed, in the order of the discovery steps, or `None`
+/// when discovery passes it to the analysis. `ignored` tells whether an
+/// ignore rule matches it.
 fn reason(
     rel: &str,
+    ignored: bool,
     discovered: &Discovered,
     supported: &dyn Fn(Grammar) -> bool,
 ) -> Option<String> {
@@ -196,8 +234,14 @@ fn reason(
     {
         return Some(format!("excluded as {}", excluded_kind(e.kind)));
     }
+    if ignored {
+        return Some("excluded as ignored".to_string());
+    }
     if let Some(skip) = discovered.skipped.iter().find(|s| under(rel, &s.file.file)) {
         return Some(format!("skipped: {}", skip_kind(skip.file.kind)));
+    }
+    if rel.ends_with('/') {
+        return Some("skipped: walk_error".to_string());
     }
     if Grammar::from_path(Path::new(rel)).is_none() {
         return Some("unrecognized".to_string());

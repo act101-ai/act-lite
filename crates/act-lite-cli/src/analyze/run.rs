@@ -132,7 +132,7 @@ fn run_named<A: Analyzer>(
     let ctx = RunContext {
         root: request.root.clone(),
         discovered: discover(&request.root, &request.scope, &supported, cancel)?,
-        support: SupportReader::new(&request.root, request.scope.includes.tests, cancel),
+        support: SupportReader::new(&request.root, &request.scope.includes, cancel),
     };
     let mut reader = Reader::new(
         &ctx.discovered.files,
