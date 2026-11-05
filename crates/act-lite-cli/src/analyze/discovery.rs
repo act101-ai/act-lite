@@ -261,6 +261,7 @@ impl Walk<'_> {
         };
         let mut listed = true;
         for entry in entries {
+            self.check_cancel()?;
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -1108,5 +1109,25 @@ mod tests {
             let result = discover(dir.path(), &scope, &cancel_on_first_file, &cancel);
             assert!(matches!(result, Err(AnalyzeError::Cancelled)), "{named}");
         }
+    }
+
+    #[test]
+    fn cancellation_is_checked_before_each_directory_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        conv(dir.path());
+        for i in 0..5_000 {
+            write(dir.path(), &format!("f{i}.rs"), b"");
+        }
+        let scope = scope_with(dir.path(), &[], &[], &[], Includes::default()).unwrap();
+        let cancel = CancellationToken::new();
+        let visited = std::cell::Cell::new(0);
+        let cancel_on_first_entry = |_: Grammar| {
+            visited.set(visited.get() + 1);
+            cancel.cancel();
+            false
+        };
+        let result = discover(dir.path(), &scope, &cancel_on_first_entry, &cancel);
+        assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+        assert!(visited.get() < 10, "{} entries visited", visited.get());
     }
 }

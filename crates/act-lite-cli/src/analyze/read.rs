@@ -7,6 +7,7 @@ use super::embedded::{blank, test_regions};
 use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile};
 use act_lite_core::CompactRange;
 use act_lite_parser::{Grammar, SourceFile};
+use std::fs;
 use std::io::Read;
 use tokio_util::sync::CancellationToken;
 use tree_sitter::Node;
@@ -275,6 +276,11 @@ fn skip(file: &Candidate, kind: SkipKind, reason: String) -> Skip {
 /// not read.
 fn read_content(file: &Candidate) -> Result<String, Skip> {
     let unreadable = |reason: String| skip(file, SkipKind::Unreadable, reason);
+    let linked = fs::symlink_metadata(&file.path)
+        .map_err(|err| unreadable(format!("cannot read file: {err}")))?;
+    if !linked.is_file() {
+        return Err(unreadable("not a regular file".to_string()));
+    }
     let handle =
         open_no_follow(&file.path).map_err(|err| unreadable(format!("cannot read file: {err}")))?;
     let meta = handle
@@ -322,7 +328,6 @@ fn parse(file: &Candidate, content: String) -> Result<SourceFile, AnalyzeError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::Path;
 
     fn candidate(root: &Path, rel: &str) -> Candidate {
@@ -455,6 +460,21 @@ mod tests {
             .unwrap();
         let skip = skipped(read_file(&files[0], false));
         assert_eq!(skip.file.kind, SkipKind::Unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_file_is_not_read_before_any_open() {
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "secret.rs", b"fn secret() {}\n");
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.rs", b"fn a() {}\n");
+        let files = discovered(dir.path());
+        fs::remove_file(dir.path().join("a.rs")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.rs"), dir.path().join("a.rs"))
+            .unwrap();
+        let skip = skipped(read_file(&files[0], false));
+        assert_eq!(skip.file.reason, "not a regular file");
     }
 
     #[cfg(unix)]

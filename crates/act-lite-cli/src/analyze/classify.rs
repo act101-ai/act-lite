@@ -44,8 +44,12 @@ pub(crate) fn open_no_follow(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-/// Opens `path` for reading when the opened file is a regular file.
+/// Opens `path` for reading when it is a regular file itself, not a symlink,
+/// before and after the open.
 pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
     let file = open_no_follow(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::other("not a regular file"));
@@ -257,6 +261,19 @@ mod tests {
             fs::write(&tag, &body).unwrap();
             assert!(!is_generated_dir(tmp.path()), "{body:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_refuses_a_symlink_to_a_regular_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        fs::write(&target, SIGNATURE).unwrap();
+        let link = tmp.path().join("CACHEDIR.TAG");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(open_regular(&link).is_err());
+        assert!(!is_generated_dir(tmp.path()));
+        assert!(open_regular(&target).is_ok());
     }
 
     #[test]
