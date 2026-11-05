@@ -19,9 +19,13 @@ pub struct TestRegions {
     pub regions: Vec<TestRegion>,
 }
 
-/// Finds the test code of a Rust file; every other grammar has none.
+/// Finds the test code of a Rust or Zig file; every other grammar has none.
 pub fn test_regions(source: &SourceFile) -> TestRegions {
     let mut found = TestRegions::default();
+    if source.grammar() == Grammar::Zig {
+        collect_zig(source.tree().root_node(), &mut found.regions);
+        return found;
+    }
     if source.grammar() != Grammar::Rust {
         return found;
     }
@@ -77,6 +81,18 @@ fn collect(parent: Node, content: &str, regions: &mut Vec<TestRegion>) {
                 is_cfg_test_item = false;
                 collect(node, content, regions);
             }
+        }
+    }
+}
+
+/// One region per Zig `test_declaration`, from `test` to its closing `}`.
+fn collect_zig(parent: Node, regions: &mut Vec<TestRegion>) {
+    let mut cursor = parent.walk();
+    for node in parent.named_children(&mut cursor) {
+        if node.kind() == "test_declaration" {
+            regions.push(region(node.start_position(), node.start_byte(), node));
+        } else {
+            collect_zig(node, regions);
         }
     }
 }
@@ -284,6 +300,37 @@ mod tests {
         for file in [go, py, ts] {
             assert_eq!(test_regions(&file), TestRegions::default());
         }
+    }
+
+    #[test]
+    fn zig_test_declarations_are_one_region_each() {
+        let content = "const std = @import(\"std\");\n\
+            fn add(a: u8, b: u8) u8 {\n\
+            \x20   return a + b;\n\
+            }\n\
+            test \"n\" {\n\
+            \x20   try std.testing.expect(add(1, 2) == 3);\n\
+            }\n\
+            test add {\n\
+            \x20   _ = add(0, 0);\n\
+            }\n\
+            const S = struct {\n\
+            \x20   x: u8,\n\
+            \x20   test {}\n\
+            };\n";
+        let found = test_regions(&parse(content, Grammar::Zig));
+        assert!(!found.whole_file);
+        assert_eq!(ranges(&found), ["5:1-7:2", "8:1-10:2", "13:5-13:12"]);
+        let starts: Vec<&str> = found
+            .regions
+            .iter()
+            .map(|r| &content[r.bytes.clone()])
+            .collect();
+        assert!(
+            starts
+                .iter()
+                .all(|t| t.starts_with("test") && t.ends_with('}'))
+        );
     }
 
     #[test]

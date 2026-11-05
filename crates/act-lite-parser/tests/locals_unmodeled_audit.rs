@@ -37,6 +37,7 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Tsx",
     "Xml",
     "Yaml",
+    "Zig",
 ];
 
 /// The measured unmodeled set equals the pin in both directions.

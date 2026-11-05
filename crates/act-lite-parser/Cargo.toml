@@ -40,6 +40,7 @@ tree-sitter-proto = "0.6.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-cmake = "0.7.6"
 tree-sitter-nix = "0.3.0"
+tree-sitter-zig = "1.1.2"
 streaming-iterator = "0.1"
 strum = { version = "0.28", features = ["derive"] }
 thiserror.workspace = true

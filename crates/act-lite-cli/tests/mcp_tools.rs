@@ -1122,7 +1122,7 @@ fn unknown_tool_is_an_error() {
 // ---- status ----
 
 /// The languages the README lists.
-const README_LANGUAGES: [&str; 37] = [
+const README_LANGUAGES: [&str; 38] = [
     "Bash",
     "C",
     "C#",
@@ -1160,6 +1160,7 @@ const README_LANGUAGES: [&str; 37] = [
     "TypeScript",
     "XML",
     "YAML",
+    "Zig",
 ];
 
 /// The 15 language-server binaries of `crates/act-lite-lsp/src/servers.rs`.
