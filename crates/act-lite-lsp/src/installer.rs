@@ -131,6 +131,7 @@ async fn run_install_command(
     #[cfg(unix)]
     command.process_group(0);
     let child = command.spawn().map_err(failed)?;
+    #[cfg(unix)]
     let group = child.id();
     let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
         Ok(output) => output.map_err(failed)?,
