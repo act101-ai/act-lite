@@ -121,7 +121,10 @@ fn is_cfg_test(attribute: Option<Node>, content: &str) -> bool {
 /// Whether a parenthesized predicate is `(test)` or `(all(…, test, …))`.
 fn is_test_predicate(arguments: Node, content: &str) -> bool {
     let mut cursor = arguments.walk();
-    let items: Vec<Node> = arguments.named_children(&mut cursor).collect();
+    let items: Vec<Node> = arguments
+        .named_children(&mut cursor)
+        .filter(|n| !is_comment(n.kind()))
+        .collect();
     match items.as_slice() {
         [only] if only.kind() == "identifier" => text(*only, content) == "test",
         [name, list] if name.kind() == "identifier" && list.kind() == "token_tree" => {
@@ -131,9 +134,16 @@ fn is_test_predicate(arguments: Node, content: &str) -> bool {
     }
 }
 
+fn is_comment(kind: &str) -> bool {
+    kind == "line_comment" || kind == "block_comment"
+}
+
 fn list_has_test(list: Node, content: &str) -> bool {
     let mut cursor = list.walk();
-    let items: Vec<Node> = list.named_children(&mut cursor).collect();
+    let items: Vec<Node> = list
+        .named_children(&mut cursor)
+        .filter(|n| !is_comment(n.kind()))
+        .collect();
     items.iter().enumerate().any(|(i, item)| match item.kind() {
         "identifier" => {
             text(*item, content) == "test"
@@ -157,6 +167,16 @@ fn text<'a>(node: Node, content: &'a str) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comments_inside_the_cfg_predicate_are_skipped() {
+        let found = regions("#[cfg(/* c */ test)]\nmod t {}\n");
+        assert_eq!(found.regions.len(), 1, "a comment before `test` is skipped");
+        let found = regions("#[cfg(all(/* c */ test, unix))]\nmod t {}\n");
+        assert_eq!(found.regions.len(), 1, "a comment inside all(…) is skipped");
+        let found = regions("#[cfg(any(/* c */ test, unix))]\nmod t {}\n");
+        assert_eq!(found.regions.len(), 0);
+    }
+
     use super::*;
 
     fn parse(content: &str, grammar: Grammar) -> SourceFile {
