@@ -992,6 +992,7 @@ mod secrets_tests {
     }
 
     /// Every entry name in `dir`, sorted.
+    #[cfg(unix)]
     fn dir_entries(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(dir)
             .unwrap()
