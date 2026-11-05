@@ -3,6 +3,7 @@
 use super::classify::is_regular_file;
 use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -91,13 +92,15 @@ impl IgnoreRules {
         false
     }
 
-    /// Adds `.git/info/exclude` (when `.git` is a directory) and the
-    /// `.gitignore` of the work-tree top `top`.
+    /// Adds `.git/info/exclude` (when `.git` and `info` are directories
+    /// themselves, not symlinks) and the `.gitignore` of the work-tree top
+    /// `top`.
     fn start_work_tree(&mut self, top: &Path) {
         self.in_work_tree = true;
         let git = top.join(".git");
-        if git.is_dir() {
-            self.add(top, &git.join("info").join("exclude"));
+        let info = git.join("info");
+        if is_real_dir(&git) && is_real_dir(&info) {
+            self.add(top, &info.join("exclude"));
         }
         self.add(top, &top.join(".gitignore"));
     }
@@ -120,9 +123,14 @@ impl IgnoreRules {
 }
 
 /// Whether `dir` contains a `.git` entry (a directory, or the file of a
-/// linked worktree).
+/// linked worktree). A `.git` symlink is not followed and does not count.
 fn has_git(dir: &Path) -> bool {
-    dir.join(".git").exists()
+    fs::symlink_metadata(dir.join(".git")).is_ok_and(|meta| !meta.file_type().is_symlink())
+}
+
+/// Whether `path` is a directory itself, not a symlink to one.
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
 }
 
 #[cfg(test)]
@@ -289,6 +297,50 @@ mod tests {
         assert!(sub.is_ignored(&top.join("sub/a.rs"), false));
         assert!(!rules.is_ignored(&top.join("a.rs"), false));
         assert!(!sub.is_ignored(&top.join("a.rs"), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_git_is_not_a_work_tree_top() {
+        let outside = outside_work_tree();
+        write(&outside.path().join("info/exclude"), "*.tmp\n");
+        let tmp = outside_work_tree();
+        let top = tmp.path();
+        std::os::unix::fs::symlink(outside.path(), top.join(".git")).unwrap();
+        write(&top.join(".gitignore"), "*.log\n");
+        let rules = IgnoreRules::for_root(top);
+        assert!(!rules.is_ignored(&top.join("a.tmp"), false));
+        assert!(!rules.is_ignored(&top.join("a.log"), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_symlinked_git_keeps_the_outer_patterns() {
+        let outside = outside_work_tree();
+        write(&outside.path().join("info/exclude"), "*.tmp\n");
+        let tmp = outside_work_tree();
+        let top = tmp.path();
+        fs::create_dir(top.join(".git")).unwrap();
+        write(&top.join(".gitignore"), "*.log\n");
+        let inner = top.join("inner");
+        fs::create_dir(&inner).unwrap();
+        std::os::unix::fs::symlink(outside.path(), inner.join(".git")).unwrap();
+        let rules = IgnoreRules::for_root(top).child(&inner);
+        assert!(!rules.is_ignored(&inner.join("a.tmp"), false));
+        assert!(rules.is_ignored(&inner.join("a.log"), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn info_symlinked_outside_adds_no_pattern() {
+        let outside = outside_work_tree();
+        write(&outside.path().join("exclude"), "*.tmp\n");
+        let tmp = outside_work_tree();
+        let top = tmp.path();
+        fs::create_dir(top.join(".git")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), top.join(".git/info")).unwrap();
+        let rules = IgnoreRules::for_root(top);
+        assert!(!rules.is_ignored(&top.join("a.tmp"), false));
     }
 
     #[test]
