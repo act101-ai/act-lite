@@ -2,7 +2,11 @@
 
 use crate::config::ServerConfig;
 use crate::error::{LspError, Result};
+use std::time::Duration;
 use tracing::{debug, info};
+
+/// Longest an install command may run before it is killed.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Checks if the LSP server command is available on PATH.
 pub fn is_installed(config: &ServerConfig) -> bool {
@@ -40,7 +44,7 @@ pub async fn ensure_installed(config: &ServerConfig, language: &str) -> Result<(
     };
 
     // Execute the install command
-    match run_install_command(&install_cmd).await {
+    match run_install_command(&install_cmd, INSTALL_TIMEOUT).await {
         Ok(()) => {
             // Verify the binary is now available
             if is_installed(config) {
@@ -67,14 +71,18 @@ pub async fn ensure_installed(config: &ServerConfig, language: &str) -> Result<(
 }
 
 /// Runs a shell install command and returns Ok(()) on success or an error string.
-async fn run_install_command(cmd: &str) -> std::result::Result<(), String> {
+/// The shell is killed and an error returned if it runs longer than `limit`.
+async fn run_install_command(cmd: &str, limit: Duration) -> std::result::Result<(), String> {
     debug!("Running install command: {}", cmd);
 
-    let output = tokio::process::Command::new("sh")
+    let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
-        .output()
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(limit, child)
         .await
+        .map_err(|_| format!("timed out after {} s", limit.as_secs()))?
         .map_err(|e| format!("failed to execute shell: {}", e))?;
 
     if output.status.success() {
@@ -99,6 +107,20 @@ async fn run_install_command(cmd: &str) -> std::result::Result<(), String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn install_command_times_out() {
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_install_command("sleep 60", Duration::from_secs(1)),
+        )
+        .await;
+        let err = result
+            .expect("run_install_command did not return within 2 s")
+            .unwrap_err();
+        assert!(err.contains("timed out"), "unexpected error: {err}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
     #[test]
     fn test_is_installed_known_binary() {
         // `sh` should always be available on Unix
