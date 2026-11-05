@@ -375,6 +375,18 @@ fn a4_python_complexity_gives_no_finding() {
     assert_eq!(findings_of("src/classify.py", src), Vec::<Value>::new());
 }
 
+#[test]
+fn dart_accessor_with_a_comment_before_its_body_is_measured() {
+    let src = format!(
+        "int get top /* note */ {{\n{}  return 0;\n}}\n",
+        "  if (a) return 1;\n".repeat(10)
+    );
+    assert_eq!(
+        reported(&findings_of("src/top.dart", &src)),
+        [(json!("top"), json!("excessive_branching"), json!(11))]
+    );
+}
+
 /// The `(function, rule, value)` of each finding.
 fn reported(found: &[Value]) -> Vec<(Value, Value, Value)> {
     found
