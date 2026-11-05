@@ -79,6 +79,8 @@ request.
    - Keep each refuted finding with its evidence for the report.
    - The stage passes when no confirmed finding is open.
 
+A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the tier.
+
 4. **Review feedback** from the operator or a PR reviewer. Read every item
    first, and ask about each unclear item before changing anything: items
    interact. Check each item against the code. An item that contradicts an
