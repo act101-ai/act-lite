@@ -765,3 +765,25 @@ fn an_unreadable_directory_makes_dependency_externals_unresolved() {
     assert_eq!(m[0].outcome, unresolved("locked/ could not be read"));
     assert_eq!(m[1].outcome, Outcome::External);
 }
+
+#[test]
+fn a_package_json_in_a_virtual_environment_is_not_read() {
+    let ws = workspace(&[
+        ("env/pyvenv.cfg", "home = /usr/bin\n"),
+        (
+            "env/pkg/package.json",
+            r#"{"name":"venvpkg","main":"lib.js"}"#,
+        ),
+        ("env/pkg/lib.js", ""),
+        ("env/pkg/index.js", ""),
+        ("src/m.ts", "import '../env/pkg';\n"),
+        ("src/n.ts", "import 'venvpkg';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/m.ts"), resolved("env/pkg/index.js"));
+    assert_eq!(
+        outcome(&graph, "src/n.ts"),
+        unresolved("bare specifier is not a declared dependency: venvpkg")
+    );
+    assert!(inputs(&graph).is_empty(), "{:?}", inputs(&graph));
+}
