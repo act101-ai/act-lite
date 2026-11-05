@@ -130,7 +130,6 @@ fn table(header: &str) -> Vec<Vec<String>> {
     lines
         .skip(1)
         .take_while(|l| l.starts_with('|'))
-        .skip(1)
         .map(|l| {
             l.trim_matches('|')
                 .split('|')
@@ -164,7 +163,7 @@ fn the_capability_table_has_one_true_row_per_language() {
     assert_eq!(names, status_languages());
     for row in &rows {
         let name = row[0].as_str();
-        assert_eq!(row.len(), 7, "{name}: {row:?}");
+        assert_eq!(row.len(), 8, "{name}: {row:?}");
         assert_eq!(row[1], "yes", "{name} skeleton and symbols");
         assert!(row[2].starts_with("tree-sitter"), "{name} definition");
         let served = SERVED.contains(&name);
@@ -191,7 +190,7 @@ fn the_capability_table_has_one_true_row_per_language() {
         } else {
             "not applicable"
         };
-        assert_eq!(&row[5..], [analyzed; 2], "{name} analyzers");
+        assert_eq!(&row[5..], [analyzed; 3], "{name} analyzers");
     }
     let note = |name: &str| rows.iter().find(|r| r[0] == name).unwrap()[2].clone();
     assert!(note("JSONC").contains("keys without quotes"));
@@ -351,7 +350,7 @@ fn each_addition_has_one_limitation_paragraph() {
             &[
                 "structural, not evaluated",
                 "`//`, `rec`, `with`, overlays, `lib.mkIf`",
-                "a binding under `mkIf false { … }` is reported",
+                "binding under `mkIf false { … }` is reported",
                 "interpolated attribute name",
             ],
         ),
