@@ -224,7 +224,7 @@ fn a6_two_rules_on_one_function_sort_by_rule() {
     );
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 21] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -239,6 +239,7 @@ const FIXTURE_LANGUAGES: [(&str, &str); 21] = [
     ("lua", "lua"),
     ("php", "php"),
     ("python", "py"),
+    ("r", "R"),
     ("ruby", "rb"),
     ("rust", "rs"),
     ("scala", "scala"),

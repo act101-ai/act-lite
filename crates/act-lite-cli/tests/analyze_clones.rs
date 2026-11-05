@@ -558,7 +558,7 @@ const TS_LIKE: &str = "function r1(orders: number, rate: number): number {
 }
 ";
 
-const LANGS: [Lang; 21] = [
+const LANGS: [Lang; 22] = [
     Lang {
         ext: "sh",
         language: "Bash",
@@ -921,6 +921,27 @@ end
     orders = orders - rate / 4;
     total = total * rate + 5;
     return total + count;
+}
+",
+        suffix: "",
+        line: 1,
+        names: &[],
+    },
+    Lang {
+        ext: "R",
+        language: "R",
+        prefix: "",
+        r1: "r1 <- function(orders, rate) {
+  total <- 0
+  count <- 1
+  label <- \"paid\"
+  total <- @T@ + orders * rate
+  count <- count + total * 2
+  label <- \"done\"
+  rate <- rate * 3 - count
+  orders <- orders - rate / 4
+  total <- total * rate + 5
+  total + count
 }
 ",
         suffix: "",

@@ -637,6 +637,25 @@ mod tests {
     }
 
     #[test]
+    fn r_extensions_file_name_query_dir_and_category() {
+        assert_eq!(Grammar::from_extension("R"), Some(Grammar::R));
+        assert_eq!(Grammar::from_extension("r"), Some(Grammar::R));
+        assert_eq!(Grammar::from_filename(".Rprofile"), Some(Grammar::R));
+        assert_eq!(
+            Grammar::from_path(std::path::Path::new("pkg/.Rprofile")),
+            Some(Grammar::R)
+        );
+        assert_eq!(Grammar::from_filename(".rprofile"), None);
+        assert_eq!(Grammar::from_filename("Rprofile"), None);
+        assert_eq!(Grammar::R.name(), "R");
+        assert_eq!(Grammar::R.query_dir(), "r");
+        assert!(matches!(
+            Grammar::R.category(),
+            act_lite_core::registry::LanguageCategory::Dynamic
+        ));
+    }
+
+    #[test]
     fn jsonc_name_query_dir_and_category() {
         assert_eq!(Grammar::Jsonc.name(), "JSONC");
         assert_eq!(Grammar::Jsonc.query_dir(), "json");
@@ -922,7 +941,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            38,
+            39,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

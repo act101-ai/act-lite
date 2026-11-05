@@ -1122,7 +1122,7 @@ fn unknown_tool_is_an_error() {
 // ---- status ----
 
 /// The languages the README lists.
-const README_LANGUAGES: [&str; 38] = [
+const README_LANGUAGES: [&str; 39] = [
     "Bash",
     "C",
     "C#",
@@ -1149,6 +1149,7 @@ const README_LANGUAGES: [&str; 38] = [
     "PHP",
     "Protocol Buffers",
     "Python",
+    "R",
     "Ruby",
     "Rust",
     "Scala",

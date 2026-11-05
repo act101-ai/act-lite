@@ -45,6 +45,7 @@ fn grammar_set_is_exactly_the_lite_set() {
         "CMake",
         "Nix",
         "Zig",
+        "R",
     ]
     .into_iter()
     .collect();
