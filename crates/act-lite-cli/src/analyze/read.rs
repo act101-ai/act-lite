@@ -424,6 +424,11 @@ impl SupportReader {
         }
     }
 
+    /// The request's includes, which every read and listing applies.
+    pub fn includes(&self) -> &Includes {
+        &self.includes
+    }
+
     /// Reads and parses a source file, blanking its test regions as an
     /// analyzed read does. A file below a pruned directory is refused.
     pub fn source(&self, rel: &str) -> Result<Parsed, SupportError> {
