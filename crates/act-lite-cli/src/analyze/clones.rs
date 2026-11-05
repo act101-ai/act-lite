@@ -772,7 +772,7 @@ mod tests {
         Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap()
     }
 
-    /// A [`FileSource`] over the scope of `request`, read by the M0 reader.
+    /// A [`FileSource`] over the scope of `request`.
     fn reader(request: &Request, cancel: &CancellationToken) -> Reader {
         let supported = |g: Grammar| function_model::supports(g);
         let found = discover(&request.root, &request.scope, &supported, cancel).unwrap();
