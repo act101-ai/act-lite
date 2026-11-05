@@ -157,6 +157,168 @@ pub fn discover(
     Ok(out)
 }
 
+/// Every regular file of the workspace that the discovery steps before the
+/// globs keep under `includes` (`.git` pruned; ignored paths, vendored and
+/// generated directories left out unless included), workspace-relative, in
+/// byte order, and the directories and entries the walk could not read, as
+/// discovery reports them. Symlinks are not followed. The token is checked
+/// before each entry and before each marker read.
+pub fn walk_workspace(
+    root: &Path,
+    includes: &Includes,
+    cancel: &CancellationToken,
+) -> Result<(Vec<String>, Vec<Skip>), AnalyzeError> {
+    struct Walker<'a> {
+        root: &'a Path,
+        includes: &'a Includes,
+        cancel: &'a CancellationToken,
+        files: Vec<String>,
+        skipped: Vec<Skip>,
+    }
+    impl Walker<'_> {
+        fn walk(&mut self, dir: &Path, rules: &IgnoreRules) -> Result<(), AnalyzeError> {
+            check(self.cancel)?;
+            let entries = match fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(err) => return self.error(dir, true, err),
+            };
+            for entry in entries {
+                check(self.cancel)?;
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => return self.error(dir, true, err),
+                };
+                let path = entry.path();
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(err) => {
+                        self.error(&path, false, err)?;
+                        continue;
+                    }
+                };
+                if file_type.is_dir() {
+                    if !dir_left_out(&path, rules, self.includes, self.cancel)? {
+                        self.walk(&path, &rules.child(&path))?;
+                    }
+                } else if file_type.is_file() && !file_left_out(&path, rules, self.includes) {
+                    self.files.push(rel_path(self.root, &path, false)?);
+                }
+            }
+            Ok(())
+        }
+
+        fn error(&mut self, path: &Path, is_dir: bool, err: io::Error) -> Result<(), AnalyzeError> {
+            self.skipped.push(Skip {
+                grammar: None,
+                file: SkippedFile {
+                    file: rel_path(self.root, path, is_dir)?,
+                    kind: SkipKind::WalkError,
+                    reason: format!("walk error: {err}"),
+                },
+            });
+            Ok(())
+        }
+    }
+    let mut walker = Walker {
+        root,
+        includes,
+        cancel,
+        files: Vec::new(),
+        skipped: Vec::new(),
+    };
+    walker.walk(root, &IgnoreRules::for_root(root))?;
+    let Walker {
+        mut files,
+        mut skipped,
+        ..
+    } = walker;
+    files.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    skipped.sort_by(|a, b| a.file.file.as_bytes().cmp(b.file.file.as_bytes()));
+    Ok((files, skipped))
+}
+
+fn check(cancel: &CancellationToken) -> Result<(), AnalyzeError> {
+    if cancel.is_cancelled() {
+        return Err(AnalyzeError::Cancelled);
+    }
+    Ok(())
+}
+
+/// Whether the steps before the globs leave out the directory `dir` under
+/// `includes`, by the ignore rules of its parent. The token is checked
+/// before each marker read.
+pub(crate) fn dir_left_out(
+    dir: &Path,
+    rules: &IgnoreRules,
+    includes: &Includes,
+    cancel: &CancellationToken,
+) -> Result<bool, AnalyzeError> {
+    if dir.file_name() == Some(OsStr::new(".git")) {
+        return Ok(true);
+    }
+    if !includes.ignored && rules.is_ignored(dir, true) {
+        return Ok(true);
+    }
+    check(cancel)?;
+    if !includes.vendored && is_vendored_dir(dir) {
+        return Ok(true);
+    }
+    check(cancel)?;
+    Ok(!includes.generated && is_generated_dir(dir))
+}
+
+/// Whether the steps before the globs leave out the file at `path`: a `.git`
+/// file, or an ignored file unless ignored paths are included.
+pub(crate) fn file_left_out(path: &Path, rules: &IgnoreRules, includes: &Includes) -> bool {
+    path.file_name() == Some(OsStr::new(".git"))
+        || (!includes.ignored && rules.is_ignored(path, false))
+}
+
+/// The ignore rules that apply to the entries of `dir`, a directory below
+/// `root`.
+pub(crate) fn rules_for(root: &Path, dir: &Path) -> IgnoreRules {
+    let mut rules = IgnoreRules::for_root(root);
+    let mut current = root.to_path_buf();
+    if let Ok(rel) = dir.strip_prefix(root) {
+        for part in rel.components() {
+            current.push(part);
+            rules = rules.child(&current);
+        }
+    }
+    rules
+}
+
+/// Whether the workspace-relative `rel` is left out by the steps before the
+/// globs under `includes`: an ancestor directory, or, for a file, the file
+/// itself.
+pub(crate) fn left_out(
+    root: &Path,
+    rel: &Path,
+    is_dir: bool,
+    includes: &Includes,
+    cancel: &CancellationToken,
+) -> Result<bool, AnalyzeError> {
+    let mut rules = IgnoreRules::for_root(root);
+    let mut dir = root.to_path_buf();
+    let parts: Vec<_> = rel.components().collect();
+    let Some((last, ancestors)) = parts.split_last() else {
+        return Ok(false);
+    };
+    for part in ancestors {
+        dir.push(part);
+        if dir_left_out(&dir, &rules, includes, cancel)? {
+            return Ok(true);
+        }
+        rules = rules.child(&dir);
+    }
+    let path = dir.join(last);
+    Ok(if is_dir {
+        dir_left_out(&path, &rules, includes, cancel)?
+    } else {
+        file_left_out(&path, &rules, includes)
+    })
+}
+
 /// The path as it is on disk: two names that differ only in invalid UTF-8
 /// have the same written form and different bytes.
 fn bytes(path: &Path) -> &[u8] {

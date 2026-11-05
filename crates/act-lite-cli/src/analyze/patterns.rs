@@ -203,6 +203,7 @@ mod tests {
             Ok(Some(Parsed {
                 rel: "a.rs".to_string(),
                 source,
+                removed: Vec::new(),
             }))
         }
 

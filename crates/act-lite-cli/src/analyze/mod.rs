@@ -7,6 +7,7 @@ pub mod command;
 pub mod discovery;
 pub mod embedded;
 pub mod envelope;
+pub mod focus;
 pub mod glob;
 pub mod hotspots;
 pub mod ignore;
