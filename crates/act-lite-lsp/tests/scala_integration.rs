@@ -57,7 +57,7 @@ async fn scala_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
 
     // Disabled pool must return None for Scala
-    let client = pool.get_client(Grammar::Scala).await;
+    let client = pool.get_installed_client(Grammar::Scala).await;
     assert!(client.is_none());
 }
 

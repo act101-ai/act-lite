@@ -51,7 +51,7 @@ async fn kotlin_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
 
     // Should return None for disabled pool
-    let client = pool.get_client(Grammar::Kotlin).await;
+    let client = pool.get_installed_client(Grammar::Kotlin).await;
     assert!(client.is_none());
 }
 

@@ -4,6 +4,8 @@ use act_lite_lsp::{LspPool, ServerConfig};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+include!("common/helper.rs");
+
 #[tokio::test]
 async fn jdtls_server_config_is_valid() {
     let workspace = PathBuf::from("/tmp/test");
@@ -63,17 +65,14 @@ public class Sample {
     )
     .unwrap();
 
+    if !require_server("jdtls") {
+        return;
+    }
     let pool = LspPool::new(temp_dir.path().to_path_buf());
 
-    // Try to get Java LSP client (using Grammar::Java)
     use act_lite_parser::Grammar;
-    let client = pool.get_client(Grammar::Java).await;
-
-    // Client may be None if jdtls is not installed, which is acceptable in CI
-    if client.is_none() {
-        eprintln!("jdtls not available (expected in some environments)");
-    }
-    // Test passes regardless - we're just verifying the code compiles and runs
+    let client = pool.get_installed_client(Grammar::Java).await;
+    assert!(client.is_some(), "jdtls did not start");
 }
 
 #[tokio::test]
