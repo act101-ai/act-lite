@@ -723,9 +723,12 @@ fn relative_paths_resolve_against_the_workspace() {
 }
 
 #[test]
-#[ignore = "local only: needs a workspace that takes over a second to analyze"]
 fn cancellation_by_sigint() {
-    // Checked locally: it needs a workspace that takes over a second to analyze.
+    // Local only: it needs a workspace that takes over a second to analyze.
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: ACT_LITE_CHECK_PERF not set");
+        return;
+    }
     let ws = TempDir::new().unwrap();
     for i in 0..SLOW_FILES {
         write(
