@@ -109,7 +109,20 @@ const DEPENDENCY_TABLES: [&str; 4] = [
 /// Directory names under which a `package.json` adds no workspace package.
 const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
 
-/// The most `extends` levels followed.
+/// Directory names whose `package.json` files are never read: the
+/// vendored directories of discovery.
+const VENDORED_DIRS: [&str; 7] = [
+    "vendor",
+    "third_party",
+    "third-party",
+    "node_modules",
+    "bower_components",
+    "Pods",
+    "Carthage",
+];
+
+/// The most `extends` levels followed; a deeper chain is reported as a
+/// cycle.
 const MAX_EXTENDS_DEPTH: usize = 32;
 
 /// The resolver of the JavaScript, JSX, TypeScript and TSX family.
@@ -130,7 +143,12 @@ impl Resolver for JsResolver {
             let Some(path) = cx.normalize(dir, spec) else {
                 return Outcome::External;
             };
-            return probe_path(cx, &path).outcome(|| format!("no file matches {spec}"));
+            let found = if spec.ends_with('/') {
+                probe_dir(cx, &path)
+            } else {
+                probe_path(cx, &path)
+            };
+            return found.outcome(|| format!("no file matches {spec}"));
         }
         if spec.starts_with('/') {
             return Outcome::Unresolved("root-relative specifier is not applied".to_string());
@@ -196,7 +214,11 @@ fn probe_as_file(cx: &mut ResolveCx<'_>, path: &str) -> Found {
     Found::None
 }
 
-/// Step 1.4: the directory's `package.json` `main`, then `index`.
+/// Step 1.4: the directory's `package.json` `main`, then `index`. A
+/// `main` that names the directory itself is passed over; one with a
+/// trailing `/` is a directory, probed for its `index`; one that leaves the
+/// workspace is outside. A `package.json` in a vendored directory is not
+/// read.
 fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
     let dir = match cx.probe_file(path) {
         Probe::Dir(dir) => dir,
@@ -204,20 +226,31 @@ fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
         _ => return Found::None,
     };
     let manifest = join(&dir, "package.json");
-    if is_file(cx, &manifest) {
+    if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
         match package(cx, &manifest) {
-            Ok(info) => {
-                if let Some(main) = info.main.and_then(|m| cx.normalize(&dir, &m)) {
-                    match probe_as_file(cx, &main) {
-                        Found::None => {}
-                        found => return found,
-                    }
+            Ok(PackageInfo {
+                main: Some(main), ..
+            }) => {
+                let found = match cx.normalize(&dir, &main) {
+                    None => Found::Outside,
+                    Some(target) if target == dir => Found::None,
+                    Some(target) if main.ends_with('/') => probe_index(cx, &target),
+                    Some(target) => probe_as_file(cx, &target),
+                };
+                if !matches!(found, Found::None) {
+                    return found;
                 }
             }
+            Ok(_) => {}
             Err(reason) => return Found::Failed(reason),
         }
     }
-    let index = join(&dir, "index");
+    probe_index(cx, &dir)
+}
+
+/// `<dir>/index` with each extension.
+fn probe_index(cx: &mut ResolveCx<'_>, dir: &str) -> Found {
+    let index = join(dir, "index");
     for ext in EXTENSIONS {
         if let Some(found) = probe_one(cx, &format!("{index}{ext}")) {
             return found;
@@ -239,17 +272,23 @@ fn probe_one(cx: &mut ResolveCx<'_>, path: &str) -> Option<Found> {
 fn bare(cx: &mut ResolveCx<'_>, dir: &str, spec: &str) -> Outcome {
     let name = package_name(spec);
     if let Some(config_path) = nearest_config(cx, dir) {
-        let config = match config(cx, &config_path, 0) {
+        let config = match config(cx, &config_path, &mut Vec::new()) {
             Ok(config) => config,
             Err(reason) => return Outcome::Unresolved(reason),
         };
         if let Some((declared_in, entries)) = &config.paths
             && let Some((replacements, star)) = match_paths(entries, spec)
         {
-            let base = config.base_url.clone().unwrap_or(declared_in.clone());
+            let base = match &config.base_url {
+                Some(BaseUrl::Inside(base)) => Some(base.as_str()),
+                Some(BaseUrl::Outside) => None,
+                None => Some(declared_in.as_str()),
+            };
+            let mut left = false;
             for replacement in replacements {
                 let target = replacement.replacen('*', star, 1);
-                let Some(path) = cx.normalize(&base, &target) else {
+                let Some(path) = base.and_then(|base| cx.normalize(base, &target)) else {
+                    left = true;
                     continue;
                 };
                 match probe_path(cx, &path) {
@@ -257,14 +296,25 @@ fn bare(cx: &mut ResolveCx<'_>, dir: &str, spec: &str) -> Outcome {
                     found => return found.outcome(String::new),
                 }
             }
-        }
-        if let Some(base) = &config.base_url
-            && let Some(path) = cx.normalize(base, spec)
-        {
-            match probe_path(cx, &path) {
-                Found::None => {}
-                found => return found.outcome(String::new),
+            if left {
+                return Outcome::External;
             }
+        }
+        match &config.base_url {
+            Some(BaseUrl::Outside) => return Outcome::External,
+            Some(BaseUrl::Inside(base)) => {
+                let Some(path) = cx.normalize(base, spec) else {
+                    return Outcome::External;
+                };
+                match probe_path(cx, &path) {
+                    Found::None => {}
+                    found => return found.outcome(String::new),
+                }
+            }
+            None => {}
+        }
+        if let Some(reason) = config.broken {
+            return Outcome::Unresolved(reason);
         }
     }
     if let Some(outcome) = workspace_package(cx, name, spec) {
@@ -288,7 +338,8 @@ fn bare(cx: &mut ResolveCx<'_>, dir: &str, spec: &str) -> Outcome {
                 };
                 return in_package(cx, &location, name, spec);
             }
-            if let Some(alias) = value.strip_prefix("workspace:").and_then(alias_name) {
+            if let Some(range) = value.strip_prefix("workspace:") {
+                let alias = alias_name(range).unwrap_or(name);
                 let aliased = format!("{alias}{}", &spec[name.len()..]);
                 return workspace_package(cx, alias, &aliased).unwrap_or_else(|| {
                     Outcome::Unresolved(format!("no workspace package is named {alias}"))
@@ -327,7 +378,7 @@ fn workspace_package(cx: &mut ResolveCx<'_>, name: &str, spec: &str) -> Option<O
 /// the package itself is probed as a directory, a subpath as a path.
 fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outcome {
     let manifest = join(dir, "package.json");
-    if is_file(cx, &manifest) {
+    if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
         match package(cx, &manifest) {
             Ok(info) if info.exports => {
                 return Outcome::Unresolved(format!(
@@ -352,7 +403,8 @@ fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outc
 }
 
 /// The workspace package names and their directories, read once per build.
-/// A `package.json` below a test directory adds no name.
+/// A `package.json` below a test directory adds no name; one in a vendored
+/// directory is not read.
 fn workspace_names<'c>(cx: &'c mut ResolveCx<'_>) -> &'c BTreeMap<String, Vec<String>> {
     if cx.cache::<JsCache>().names.is_none() {
         let manifests: Vec<String> = cx
@@ -360,6 +412,7 @@ fn workspace_names<'c>(cx: &'c mut ResolveCx<'_>) -> &'c BTreeMap<String, Vec<St
             .iter()
             .filter(|f| f.rsplit('/').next() == Some("package.json"))
             .filter(|f| !f.split('/').any(|part| TEST_DIRS.contains(&part)))
+            .filter(|f| !in_vendored_dir(f))
             .cloned()
             .collect();
         let mut names: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -384,18 +437,23 @@ fn manifests(cx: &mut ResolveCx<'_>, dir: &str) -> Result<Vec<(String, PackageIn
     let mut out = Vec::new();
     for ancestor in ancestors(dir) {
         let manifest = join(ancestor, "package.json");
-        if is_file(cx, &manifest) {
+        if !in_vendored_dir(&manifest) && is_file(cx, &manifest) {
             out.push((ancestor.to_string(), package(cx, &manifest)?));
         }
     }
     Ok(out)
 }
 
-/// Whether `node_modules/<name>/` exists in `dir` or an ancestor.
+/// Whether `node_modules/<name>/` exists in `dir` or an ancestor, as a
+/// directory or a symlink out of the workspace. A name with an empty, `.`
+/// or `..` segment is never there.
 fn in_node_modules(cx: &mut ResolveCx<'_>, dir: &str, name: &str) -> bool {
+    if name.split('/').any(|part| matches!(part, "" | "." | "..")) {
+        return false;
+    }
     ancestors(dir).into_iter().any(|ancestor| {
         let path = join(&join(ancestor, "node_modules"), name);
-        matches!(cx.probe_file(&path), Probe::Dir(_))
+        matches!(cx.probe_file(&path), Probe::Dir(_) | Probe::Outside)
     })
 }
 
@@ -427,13 +485,24 @@ struct PackageInfo {
 /// A `paths` key and its replacements.
 type PathsEntry = (String, Vec<String>);
 
+/// A config's `baseUrl`.
+#[derive(Debug, Clone)]
+enum BaseUrl {
+    /// The workspace-relative directory.
+    Inside(String),
+    /// It leaves the workspace root.
+    Outside,
+}
+
 /// The `baseUrl` and `paths` that apply to a config, after `extends`.
 #[derive(Debug, Clone, Default)]
 struct Config {
-    /// The workspace-relative `baseUrl` directory.
-    base_url: Option<String>,
+    base_url: Option<BaseUrl>,
     /// The declaring config's directory and the `paths` entries.
     paths: Option<(String, Vec<PathsEntry>)>,
+    /// When the `extends` chain is broken, the reason a bare specifier
+    /// that these settings do not resolve is unresolved.
+    broken: Option<String>,
 }
 
 /// The parsed inputs of one build.
@@ -475,18 +544,26 @@ fn package(cx: &mut ResolveCx<'_>, path: &str) -> Result<PackageInfo, String> {
 
 /// The config at `path` with its relative `extends` applied, read once: a
 /// setting of the config itself wins, then the later `extends` entries.
-fn config(cx: &mut ResolveCx<'_>, path: &str, depth: usize) -> Result<Config, String> {
+/// `chain` holds the configs that extend it, for the cycle check.
+fn config(cx: &mut ResolveCx<'_>, path: &str, chain: &mut Vec<String>) -> Result<Config, String> {
     if let Some(found) = cx.cache::<JsCache>().configs.get(path) {
         return found.clone();
     }
-    let result = read_config(cx, path, depth);
+    let result = read_config(cx, path, chain);
     cx.cache::<JsCache>()
         .configs
         .insert(path.to_string(), result.clone());
     result
 }
 
-fn read_config(cx: &mut ResolveCx<'_>, path: &str, depth: usize) -> Result<Config, String> {
+/// A setting that an unreadable `extends` member could have supplied is
+/// unknown: a later member that is broken blocks it, and so does a member
+/// whose own chain is broken without the setting.
+fn read_config(
+    cx: &mut ResolveCx<'_>,
+    path: &str,
+    chain: &mut Vec<String>,
+) -> Result<Config, String> {
     let value = read_json(cx, path, InputKind::Tsconfig, true)?;
     let dir = parent(path).to_string();
     let options = value.get("compilerOptions");
@@ -494,7 +571,10 @@ fn read_config(cx: &mut ResolveCx<'_>, path: &str, depth: usize) -> Result<Confi
         base_url: options
             .and_then(|o| o.get("baseUrl"))
             .and_then(Value::as_str)
-            .and_then(|base| cx.normalize(&dir, base)),
+            .map(|base| match cx.normalize(&dir, base) {
+                Some(base) => BaseUrl::Inside(base),
+                None => BaseUrl::Outside,
+            }),
         paths: options
             .and_then(|o| o.get("paths"))
             .and_then(Value::as_object)
@@ -516,6 +596,7 @@ fn read_config(cx: &mut ResolveCx<'_>, path: &str, depth: usize) -> Result<Confi
                     .collect();
                 (dir.clone(), entries)
             }),
+        broken: None,
     };
     let extends: Vec<String> = match value.get("extends") {
         Some(Value::String(one)) => vec![one.clone()],
@@ -526,31 +607,73 @@ fn read_config(cx: &mut ResolveCx<'_>, path: &str, depth: usize) -> Result<Confi
             .collect(),
         _ => Vec::new(),
     };
-    if depth < MAX_EXTENDS_DEPTH {
-        for entry in extends.iter().rev().filter(|e| is_relative(e)) {
-            if own.base_url.is_some() && own.paths.is_some() {
-                break;
+    chain.push(path.to_string());
+    let (mut base_blocked, mut paths_blocked) = (false, false);
+    for entry in extends.iter().rev().filter(|e| is_relative(e)) {
+        match extends_member(cx, path, &dir, entry, chain) {
+            Err(reason) => {
+                base_blocked |= own.base_url.is_none();
+                paths_blocked |= own.paths.is_none();
+                own.broken = Some(reason);
             }
-            let Some(target) = cx.normalize(&dir, entry) else {
-                continue;
-            };
-            let target = if is_file(cx, &target) {
-                target
-            } else if is_file(cx, &format!("{target}.json")) {
-                format!("{target}.json")
-            } else {
-                continue;
-            };
-            let inherited = config(cx, &target, depth + 1)?;
-            if own.base_url.is_none() {
-                own.base_url = inherited.base_url;
-            }
-            if own.paths.is_none() {
-                own.paths = inherited.paths;
+            Ok(member) => {
+                if own.base_url.is_none() && !base_blocked {
+                    match member.base_url {
+                        Some(base) => own.base_url = Some(base),
+                        None => base_blocked = member.broken.is_some(),
+                    }
+                }
+                if own.paths.is_none() && !paths_blocked {
+                    match member.paths {
+                        Some(paths) => own.paths = Some(paths),
+                        None => paths_blocked = member.broken.is_some(),
+                    }
+                }
+                if member.broken.is_some() {
+                    own.broken = member.broken;
+                }
             }
         }
     }
+    chain.pop();
     Ok(own)
+}
+
+/// The config that the relative `extends` entry of `config_path` names:
+/// the path, else the path with `.json`. A target that does not exist,
+/// leaves the workspace or is already on the chain is an error of
+/// `config_path`.
+fn extends_member(
+    cx: &mut ResolveCx<'_>,
+    config_path: &str,
+    dir: &str,
+    entry: &str,
+    chain: &mut Vec<String>,
+) -> Result<Config, String> {
+    let Some(target) = cx.normalize(dir, entry) else {
+        let error = format!("extends target {entry} leaves the workspace");
+        return Err(broken_input(cx, config_path, error));
+    };
+    let target = if is_file(cx, &target) {
+        target
+    } else if is_file(cx, &format!("{target}.json")) {
+        format!("{target}.json")
+    } else {
+        let error = format!("extends target {target} does not exist");
+        return Err(broken_input(cx, config_path, error));
+    };
+    if chain.contains(&target) || chain.len() >= MAX_EXTENDS_DEPTH {
+        let error = format!("extends cycle at {target}");
+        return Err(broken_input(cx, config_path, error));
+    }
+    config(cx, &target, chain)
+}
+
+/// Records `error` on the input `path` and gives the reason of the
+/// relationships that needed it.
+fn broken_input(cx: &mut ResolveCx<'_>, path: &str, error: String) -> String {
+    cx.input_error(path, error);
+    format!("{path} could not be read")
 }
 
 /// An input read with [`ResolveCx::input`] and parsed as a JSON object;
@@ -695,6 +818,14 @@ fn package_name(spec: &str) -> &str {
 fn alias_name(value: &str) -> Option<&str> {
     let at = value.rfind('@').filter(|at| *at > 0)?;
     Some(&value[..at])
+}
+
+/// Whether `path` lies below a vendored directory.
+fn in_vendored_dir(path: &str) -> bool {
+    path.split('/')
+        .rev()
+        .skip(1)
+        .any(|part| VENDORED_DIRS.contains(&part))
 }
 
 fn is_relative(spec: &str) -> bool {
