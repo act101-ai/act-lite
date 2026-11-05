@@ -476,3 +476,292 @@ fn a_tsconfig_that_does_not_parse() {
     assert_eq!(a[2].outcome, resolved("src/b.ts"));
     assert_eq!(outcome(&graph, "other/c.js"), unread);
 }
+
+fn inputs(graph: &DepGraph) -> Vec<Value> {
+    graph.common_details()["resolution_inputs"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn input_error(graph: &DepGraph, file: &str) -> Option<String> {
+    inputs(graph)
+        .iter()
+        .find(|i| i["file"] == file)
+        .and_then(|i| i["error"].as_str().map(str::to_string))
+}
+
+#[test]
+fn a_workspace_range_names_the_key() {
+    let ws = workspace(&[
+        (
+            "package.json",
+            r#"{"dependencies":{"w":"workspace:*","v":"workspace:^1.0.0","g":"github:o/g"}}"#,
+        ),
+        ("src/w.ts", "import 'w';\n"),
+        ("src/v.ts", "import 'v';\n"),
+        ("src/g.ts", "import 'g';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(
+        outcome(&graph, "src/w.ts"),
+        unresolved("no workspace package is named w")
+    );
+    assert_eq!(
+        outcome(&graph, "src/v.ts"),
+        unresolved("no workspace package is named v")
+    );
+    assert_eq!(outcome(&graph, "src/g.ts"), Outcome::External);
+}
+
+#[test]
+fn a_paths_replacement_that_leaves_the_workspace_is_external() {
+    let ws = workspace(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"paths":{"@o/*":["../../out/*"],"@m/*":["../../out/*","src/*"]}}}"#,
+        ),
+        ("src/k.ts", ""),
+        ("src/a.ts", "import '@o/k';\n"),
+        ("src/b.ts", "import '@m/k';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/a.ts"), Outcome::External);
+    assert_eq!(outcome(&graph, "src/b.ts"), resolved("src/k.ts"));
+}
+
+#[test]
+fn a_base_url_that_leaves_the_workspace_is_external() {
+    let ws = workspace(&[
+        (
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":"..","paths":{"@a/*":["src/*"]}}}"#,
+        ),
+        ("src/k.ts", ""),
+        ("src/a.ts", "import '@a/k';\n"),
+        ("src/b.ts", "import 'zz';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/a.ts"), Outcome::External);
+    assert_eq!(outcome(&graph, "src/b.ts"), Outcome::External);
+}
+
+#[test]
+fn a_missing_extends_target_breaks_the_config() {
+    let ws = workspace(&[
+        (
+            "tsconfig.json",
+            r#"{"extends":"./nope","compilerOptions":{"paths":{"@p/*":["src/*"]}}}"#,
+        ),
+        ("o/tsconfig.json", r#"{"extends":"../../up.json"}"#),
+        ("src/k.ts", ""),
+        (
+            "src/a.ts",
+            "import '@p/k';\nimport 'zz';\nimport 'node:fs';\n",
+        ),
+        ("o/b.ts", "import 'yy';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(
+        input_error(&graph, "tsconfig.json").as_deref(),
+        Some("extends target nope does not exist")
+    );
+    assert_eq!(
+        input_error(&graph, "o/tsconfig.json").as_deref(),
+        Some("extends target ../../up.json leaves the workspace")
+    );
+    let a = graph.relationships_of("src/a.ts");
+    assert_eq!(a[0].outcome, resolved("src/k.ts"));
+    assert_eq!(a[1].outcome, unresolved("tsconfig.json could not be read"));
+    assert_eq!(
+        a[2].outcome,
+        unresolved("o/tsconfig.json could not be read")
+    );
+    assert_eq!(
+        outcome(&graph, "o/b.ts"),
+        unresolved("o/tsconfig.json could not be read")
+    );
+}
+
+#[test]
+fn an_extends_member_that_does_not_parse() {
+    let ws = workspace(&[
+        (
+            "good.json",
+            r#"{"compilerOptions":{"paths":{"@g/*":["g/*"]}}}"#,
+        ),
+        ("bad.json", "{ broken\n"),
+        ("g/k.ts", ""),
+        (
+            "x/tsconfig.json",
+            r#"{"extends":["../good.json","../bad.json"]}"#,
+        ),
+        ("x/m.ts", "import '@g/k';\n"),
+        (
+            "y/tsconfig.json",
+            r#"{"extends":["../bad.json","../good.json"]}"#,
+        ),
+        ("y/m.ts", "import '@g/k';\nimport 'zz';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert!(input_error(&graph, "bad.json").is_some());
+    assert_eq!(
+        outcome(&graph, "x/m.ts"),
+        unresolved("bad.json could not be read")
+    );
+    let y = graph.relationships_of("y/m.ts");
+    assert_eq!(y[0].outcome, resolved("g/k.ts"));
+    assert_eq!(y[1].outcome, unresolved("bad.json could not be read"));
+}
+
+#[test]
+fn an_extends_cycle() {
+    let ws = workspace(&[
+        (
+            "tsconfig.json",
+            r#"{"extends":"./base.json","compilerOptions":{"paths":{"@p/*":["src/*"]}}}"#,
+        ),
+        ("base.json", r#"{"extends":"./tsconfig.json"}"#),
+        ("src/k.ts", ""),
+        ("src/a.ts", "import '@p/k';\nimport 'zz';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(
+        input_error(&graph, "base.json").as_deref(),
+        Some("extends cycle at tsconfig.json")
+    );
+    let a = graph.relationships_of("src/a.ts");
+    assert_eq!(a[0].outcome, resolved("src/k.ts"));
+    assert_eq!(a[1].outcome, unresolved("base.json could not be read"));
+}
+
+#[test]
+fn an_empty_package_name_is_never_in_node_modules() {
+    let ws = workspace(&[
+        ("node_modules/@s/x/index.js", ""),
+        ("src/a.ts", "import '';\n"),
+        ("src/b.ts", "import '@s/..';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(
+        outcome(&graph, "src/a.ts"),
+        unresolved("bare specifier is not a declared dependency: ")
+    );
+    assert_eq!(
+        outcome(&graph, "src/b.ts"),
+        unresolved("bare specifier is not a declared dependency: @s/..")
+    );
+}
+
+#[test]
+fn a_package_json_in_a_vendored_directory_is_not_read() {
+    let ws = workspace(&[
+        ("node_modules/pkg/package.json", r#"{"main":"lib.js"}"#),
+        ("node_modules/pkg/lib.js", ""),
+        ("node_modules/pkg/index.js", ""),
+        ("src/m.ts", "import '../node_modules/pkg';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(
+        outcome(&graph, "src/m.ts"),
+        resolved("node_modules/pkg/index.js")
+    );
+    assert!(inputs(&graph).is_empty(), "{:?}", inputs(&graph));
+}
+
+#[test]
+fn a_main_that_names_a_directory() {
+    let ws = workspace(&[
+        ("packages/p/package.json", r#"{"name":"p","main":"."}"#),
+        ("packages/p/index.ts", ""),
+        ("packages/p.ts", ""),
+        ("packages/q/package.json", r#"{"name":"q","main":"sub/"}"#),
+        ("packages/q/sub.ts", ""),
+        ("packages/q/sub/index.ts", ""),
+        ("src/p.ts", "import 'p';\n"),
+        ("src/q.ts", "import 'q';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/p.ts"), resolved("packages/p/index.ts"));
+    assert_eq!(
+        outcome(&graph, "src/q.ts"),
+        resolved("packages/q/sub/index.ts")
+    );
+}
+
+#[test]
+fn a_trailing_slash_names_a_directory() {
+    let ws = workspace(&[
+        ("src/u.ts", ""),
+        ("src/u/index.ts", ""),
+        ("src/m.ts", "import './u/';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/m.ts"), resolved("src/u/index.ts"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_node_modules_symlink_out_of_the_workspace_is_external() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("node_modules")).unwrap();
+    fs::create_dir_all(tmp.path().join("store/ext")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("store/ext"), root.join("node_modules/ext"))
+        .unwrap();
+    write(&root, "src/m.ts", "import 'ext';\n");
+    assert_eq!(outcome(&build(&root), "src/m.ts"), Outcome::External);
+}
+
+#[test]
+fn a_main_that_leaves_the_workspace_is_external() {
+    let ws = workspace(&[
+        (
+            "packages/p/package.json",
+            r#"{"name":"p","main":"../../../x.js"}"#,
+        ),
+        ("packages/p/index.ts", ""),
+        ("src/p.ts", "import 'p';\n"),
+    ]);
+    assert_eq!(outcome(&build(ws.path()), "src/p.ts"), Outcome::External);
+}
+
+#[test]
+fn an_unreadable_package_json() {
+    let ws = workspace(&[
+        ("app/package.json", "{ broken\n"),
+        ("app/src/m.ts", "import 'react';\n"),
+    ]);
+    assert_eq!(
+        outcome(&build(ws.path()), "app/src/m.ts"),
+        unresolved("app/package.json could not be read")
+    );
+    let ws = workspace(&[
+        ("packages/x/package.json", "{ broken\n"),
+        ("packages/x/index.ts", ""),
+        ("src/n.ts", "import 'x';\n"),
+    ]);
+    assert_eq!(
+        outcome(&build(ws.path()), "src/n.ts"),
+        unresolved("bare specifier is not a declared dependency: x")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_directory_makes_dependency_externals_unresolved() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = workspace(&[
+        ("package.json", r#"{"dependencies":{"react":"18.3.1"}}"#),
+        ("locked/package.json", r#"{"name":"react"}"#),
+        ("src/m.ts", "import 'react';\nimport 'node:fs';\n"),
+    ]);
+    let locked = ws.path().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let graph = build(ws.path());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    let m = graph.relationships_of("src/m.ts");
+    assert_eq!(m[0].outcome, unresolved("locked/ could not be read"));
+    assert_eq!(m[1].outcome, Outcome::External);
+}
