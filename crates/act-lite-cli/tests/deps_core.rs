@@ -502,7 +502,7 @@ fn a_cancelled_token_stops_the_build_before_the_next_file() {
 }
 
 #[test]
-fn the_families_and_the_stubs() {
+fn the_families_and_the_build() {
     assert_eq!(Family::of(Grammar::Tsx), Some(Family::JsTs));
     assert_eq!(Family::of(Grammar::Python), Some(Family::Python));
     assert_eq!(Family::of(Grammar::Css), None);
@@ -518,19 +518,11 @@ fn the_families_and_the_stubs() {
     };
     let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
     let graph = DepGraph::build(&mut reader, &ctx, &cancel).unwrap();
-    let reasons: Vec<String> = graph
-        .unresolved(&|_| true)
-        .into_iter()
-        .map(|u| u.reason)
-        .collect();
-    assert_eq!(
-        reasons,
-        ["resolution not implemented", "resolution not implemented"]
-    );
     assert_eq!(graph.family_of("lib.py"), Some(Family::Python));
     assert_eq!(graph.family_of("README.md"), None);
     assert!(graph.analyzed().contains("src/a.ts"));
     assert_eq!(graph.relationships_of("src/a.ts").len(), 1);
+    assert_eq!(graph.relationships_of("lib.py").len(), 1);
 }
 
 #[test]
