@@ -61,7 +61,7 @@ async fn elixir_disabled_pool_returns_none() {
     let pool = LspPool::disabled();
 
     // Should return None for disabled pool
-    let client = pool.get_client(Grammar::Elixir).await;
+    let client = pool.get_installed_client(Grammar::Elixir).await;
     assert!(client.is_none());
 }
 

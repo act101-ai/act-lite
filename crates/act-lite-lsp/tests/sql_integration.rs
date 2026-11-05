@@ -85,12 +85,12 @@ async fn sql_pool_client_count_is_zero_before_initialization() {
     );
 }
 
-// SQL-30: Replace trivial disabled pool test — assert both get_client and has_client are consistent
+// SQL-30: Replace trivial disabled pool test — assert both get_installed_client and has_client are consistent
 #[tokio::test]
 async fn sql_disabled_pool_returns_none_for_all_grammars() {
     let pool = LspPool::disabled();
     // Disabled pool must return None for SQL (and all grammars)
-    let client = pool.get_client(Grammar::Sql).await;
+    let client = pool.get_installed_client(Grammar::Sql).await;
     assert!(
         client.is_none(),
         "disabled pool must return None, not an uninitialized client"
@@ -201,13 +201,12 @@ async fn sql_initialization_options() {
 // SQL-32: Verify graceful degradation when sqls binary is absent
 #[tokio::test]
 async fn sql_pool_returns_none_when_sqls_binary_absent() {
-    // SQL-32 requirement: when sqls is not on PATH, get_client() must return
+    // SQL-32 requirement: when sqls is not on PATH, get_installed_client() must return
     // None rather than panicking.
     //
-    // LspPool.get_client() lazily spawns the LSP server on first call. We
-    // exercise that spawn path by restricting PATH to a directory that contains
-    // no executables, so LspClient::spawn() cannot find `sqls`. The pool must
-    // degrade gracefully and return None instead of panicking.
+    // We restrict PATH to a directory that contains no executables, so `sqls`
+    // cannot be found. The pool must degrade gracefully and return None
+    // instead of panicking or installing anything.
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("query.sql"), "SELECT 1").unwrap();
 
@@ -228,9 +227,8 @@ async fn sql_pool_returns_none_when_sqls_binary_absent() {
         std::env::set_var("PATH", dir.path());
     }
 
-    // get_client() must return None rather than panicking when sqls is absent.
-    // This exercises the Err(...) => None branch inside LspPool::get_client().
-    let client = pool.get_client(Grammar::Sql).await;
+    // get_installed_client() must return None rather than panicking when sqls is absent.
+    let client = pool.get_installed_client(Grammar::Sql).await;
 
     // Restore PATH before asserting so a test failure never leaves PATH broken.
     // SAFETY: Same rationale as the set_var call above.
@@ -240,6 +238,6 @@ async fn sql_pool_returns_none_when_sqls_binary_absent() {
 
     assert!(
         client.is_none(),
-        "get_client() should return None when sqls binary is absent, not panic"
+        "get_installed_client() should return None when sqls binary is absent, not panic"
     );
 }
