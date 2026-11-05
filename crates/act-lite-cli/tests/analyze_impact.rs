@@ -374,7 +374,7 @@ fn parameter_errors_are_invalid_requests() {
     let ws = tempfile::tempdir().unwrap();
     ts(ws.path());
     let request = Request::new(ws.path(), &[], &[], &[], Includes::default(), 100).unwrap();
-    let focus = vec!["src/a.ts".to_string()];
+    let focus = ["src/a.ts".to_string()];
     for (focus, max_depth) in [(&focus[..], Some(0)), (&[][..], None)] {
         let Err(err) = ImpactAnalyzer::new(&request, focus, max_depth) else {
             panic!("an error");
