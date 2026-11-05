@@ -6,7 +6,8 @@ use act_lite_cli::analyze::discovery::{Candidate, Includes, discover, walk_works
 use act_lite_cli::analyze::envelope::{AnalyzeError, Finding, Location};
 use act_lite_cli::analyze::focus::{FocusSet, check_focus, focus_files};
 use act_lite_cli::analyze::read::{
-    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader, read_file,
+    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader,
+    SymlinkTarget, read_file,
 };
 use act_lite_cli::analyze::run::{Analysis, Analyzer, Request, RunContext, run};
 use act_lite_parser::Grammar;
@@ -80,7 +81,7 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(tmp.path().join("outside.rs"), root.join("link.rs")).unwrap();
 
-    let support = SupportReader::new(&root, false, &token());
+    let support = SupportReader::new(&root, &Includes::default(), &token());
     let parsed = support.source("other/x.rs").unwrap();
     assert_eq!(parsed.rel, "other/x.rs");
     assert_eq!(parsed.removed.len(), 1, "blanked as an analyzed read is");
@@ -109,7 +110,7 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
 
     let cancelled = token();
     cancelled.cancel();
-    let support = SupportReader::new(&root, false, &cancelled);
+    let support = SupportReader::new(&root, &Includes::default(), &cancelled);
     assert!(matches!(
         support.source("other/x.rs"),
         Err(SupportError::Cancelled)
@@ -123,7 +124,7 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
         Err(SupportError::Cancelled)
     ));
 
-    let error = SupportReader::new(&root, false, &token())
+    let error = SupportReader::new(&root, &Includes::default(), &token())
         .source("big.rs")
         .err()
         .unwrap()
@@ -137,7 +138,7 @@ fn support_reads_refuse_pruned_directories_and_add_no_evidence() {
     write(ws.path(), "node_modules/x.js", b"export const x = 1;\n");
     write(ws.path(), "lib/broken.rs", b"fn a( {\n");
     write(ws.path(), "src/a.rs", b"fn a() {}\n");
-    let support = SupportReader::new(ws.path(), false, &token());
+    let support = SupportReader::new(ws.path(), &Includes::default(), &token());
     assert!(matches!(
         support.source("node_modules/x.js"),
         Err(SupportError::Refused(_))
@@ -169,7 +170,7 @@ fn list_dir_gives_names_byte_for_byte() {
     let ws = tempfile::tempdir().unwrap();
     write(ws.path(), "src/b.ts", b"export const b = 1;\n");
     write(ws.path(), "node_modules/p/package.json", b"{}\n");
-    let support = SupportReader::new(ws.path(), false, &token());
+    let support = SupportReader::new(ws.path(), &Includes::default(), &token());
     let entries = support.list_dir("src").unwrap();
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, ["b.ts"]);
@@ -192,7 +193,7 @@ fn the_workspace_walk_prunes_like_discovery() {
     write(ws.path(), "tests/t.ts", b"t\n");
     write(ws.path(), "a-b/c.ts", b"c\n");
     write(ws.path(), ".git/config", b"\n");
-    let files = walk_workspace(ws.path(), &token()).unwrap();
+    let (files, _) = walk_workspace(ws.path(), &Includes::default(), &token()).unwrap();
     assert_eq!(files, ["a-b/c.ts", "src/a.ts", "tests/t.ts"]);
 }
 
@@ -242,7 +243,15 @@ fn focus_of(root: &Path, focus: &[&str], exclude: &[&str]) -> FocusSet {
     let focus: Vec<String> = focus.iter().map(|s| s.to_string()).collect();
     let paths = check_focus(root, &req.scope, &focus).unwrap();
     let discovered = discover(root, &req.scope, &is_js_or_ts, &token()).unwrap();
-    focus_files(root, &paths, &discovered, &is_js_or_ts, &token()).unwrap()
+    focus_files(
+        root,
+        &paths,
+        &discovered,
+        &Includes::default(),
+        &is_js_or_ts,
+        &token(),
+    )
+    .unwrap()
 }
 
 fn reasons(set: &FocusSet) -> BTreeMap<String, Option<String>> {
@@ -324,7 +333,15 @@ fn every_focus_reason_occurs() {
     // files only when named.
     let named = [".", "vendor/v.js", "ign/i.js"].map(String::from);
     let paths = check_focus(ws.path(), &req.scope, &named).unwrap();
-    let mut set = focus_files(ws.path(), &paths, &discovered, &is_js_or_ts, &token()).unwrap();
+    let mut set = focus_files(
+        ws.path(),
+        &paths,
+        &discovered,
+        &Includes::default(),
+        &is_js_or_ts,
+        &token(),
+    )
+    .unwrap();
     let mut reader = Reader::new(&discovered.files, &is_js_or_ts, false, &token());
     while reader.next_file().unwrap().is_some() {}
     let read: ReadOutcome = reader.finish();
@@ -357,7 +374,15 @@ fn settle_marks_what_the_read_left_out() {
     let req = request(ws.path(), &[]);
     let discovered = discover(ws.path(), &req.scope, &rust, &token()).unwrap();
     let paths = check_focus(ws.path(), &req.scope, &["src".to_string()]).unwrap();
-    let mut set = focus_files(ws.path(), &paths, &discovered, &rust, &token()).unwrap();
+    let mut set = focus_files(
+        ws.path(),
+        &paths,
+        &discovered,
+        &Includes::default(),
+        &rust,
+        &token(),
+    )
+    .unwrap();
     assert!(set.files.iter().all(|f| f.analyzed));
     let mut reader = Reader::new(&discovered.files, &rust, false, &token());
     while reader.next_file().unwrap().is_some() {}
@@ -472,10 +497,222 @@ fn support_reads_write_nothing() {
     write(ws.path(), "src/lib.rs", WITH_TEST_MOD.as_bytes());
     write(ws.path(), "package.json", b"{\"name\":\"p\"}\n");
     let before = snapshot(ws.path());
-    let support = SupportReader::new(ws.path(), false, &token());
+    let support = SupportReader::new(ws.path(), &Includes::default(), &token());
     support.source("src/lib.rs").unwrap();
     support.text("package.json").unwrap();
     support.list_dir("src").unwrap();
-    walk_workspace(ws.path(), &token()).unwrap();
+    walk_workspace(ws.path(), &Includes::default(), &token()).unwrap();
     assert_eq!(snapshot(ws.path()), before);
+}
+
+// ---- review round 2 ----
+
+/// The workspace of the round-2 cases: ignored files, a whole-file test, a
+/// FIFO, symlinks out of the workspace and broken, an unlistable directory,
+/// a vendored directory with a nested `node_modules`, and a `.git` file.
+#[cfg(unix)]
+fn round2(tmp: &Path) -> PathBuf {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let ws = tmp.join("ws");
+    fs::create_dir_all(ws.join(".git")).unwrap();
+    write(&ws, ".gitignore", b"secret.json\nign.log\n");
+    write(&ws, "secret.json", b"{}\n");
+    write(&ws, "ign.log", b"x\n");
+    write(&ws, "src/a.ts", b"export const a = 1;\n");
+    write(&ws, "src/inner.ts", b"export const i = 1;\n");
+    write(&ws, "src/t.rs", b"#![cfg(test)]\nfn t() {}\n");
+    write(tmp, "out.ts", b"o\n");
+    symlink(tmp.join("out.ts"), ws.join("src/out.ts")).unwrap();
+    symlink(ws.join("missing.ts"), ws.join("src/broken.ts")).unwrap();
+    symlink(ws.join("src/inner.ts"), ws.join("src/in.ts")).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(ws.join("src/pipe.ts"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    write(&ws, "locked/x.ts", b"x\n");
+    fs::set_permissions(ws.join("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    write(&ws, "vendor/lib/a.js", b"a\n");
+    write(&ws, "vendor/lib/node_modules/q/x.js", b"x\n");
+    write(&ws, "src/sub/.git", b"gitdir: x\n");
+    ws
+}
+
+#[cfg(unix)]
+fn unlock(ws: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(ws.join("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn walk_workspace_returns_walk_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let (files, skipped) = walk_workspace(&ws, &Includes::default(), &token()).unwrap();
+    unlock(&ws);
+    assert!(!files.iter().any(|f| f.starts_with("locked/")), "{files:?}");
+    assert!(!files.contains(&"secret.json".to_string()), "{files:?}");
+    let locked: Vec<_> = skipped
+        .iter()
+        .filter(|s| s.file.file == "locked/")
+        .map(|s| serde_json::to_value(s.file.kind).unwrap())
+        .collect();
+    assert_eq!(locked, [serde_json::json!("walk_error")], "{skipped:?}");
+}
+
+#[test]
+fn a_cancelled_walk_stops() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "a/b/c.ts", b"c\n");
+    let cancelled = token();
+    cancelled.cancel();
+    assert!(matches!(
+        walk_workspace(ws.path(), &Includes::default(), &cancelled),
+        Err(AnalyzeError::Cancelled)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn list_dir_tells_symlink_targets_apart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let support = SupportReader::new(&ws, &Includes::default(), &token());
+    let entries = support.list_dir("src").unwrap();
+    unlock(&ws);
+    let target = |name: &str| {
+        entries
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("{name} in {entries:?}"))
+            .target
+            .clone()
+    };
+    assert_eq!(target("out.ts"), Some(SymlinkTarget::Outside));
+    assert_eq!(target("broken.ts"), Some(SymlinkTarget::Broken));
+    assert_eq!(
+        target("in.ts"),
+        Some(SymlinkTarget::Inside("src/inner.ts".to_string()))
+    );
+    assert_eq!(target("a.ts"), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_whole_file_test_is_a_test_file_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let support = SupportReader::new(&ws, &Includes::default(), &token());
+    let err = support.source("src/t.rs").err().unwrap();
+    unlock(&ws);
+    assert_eq!(err, SupportError::TestFile("src/t.rs".to_string()));
+    assert_eq!(err.to_string(), "src/t.rs: excluded as tests");
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_files_are_refused_unless_included() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let default = SupportReader::new(&ws, &Includes::default(), &token());
+    let refused = default.text("secret.json");
+    let included = Includes {
+        ignored: true,
+        ..Includes::default()
+    };
+    let allowed = SupportReader::new(&ws, &included, &token()).text("secret.json");
+    unlock(&ws);
+    assert!(
+        matches!(refused, Err(SupportError::Refused(_))),
+        "{refused:?}"
+    );
+    assert_eq!(allowed.unwrap(), "{}\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn support_reads_honour_the_request_includes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let default = SupportReader::new(&ws, &Includes::default(), &token());
+    let refused = default.source("vendor/lib/a.js").err();
+    let vendored = Includes {
+        vendored: true,
+        ..Includes::default()
+    };
+    let read = SupportReader::new(&ws, &vendored, &token())
+        .source("vendor/lib/a.js")
+        .map(|p| p.rel);
+    unlock(&ws);
+    assert!(
+        matches!(refused, Some(SupportError::Refused(_))),
+        "{refused:?}"
+    );
+    assert_eq!(read.unwrap(), "vendor/lib/a.js");
+}
+
+/// The focus files of `focus` in a JS/TS analysis of the round-2 workspace,
+/// settled by a read.
+#[cfg(unix)]
+fn round2_focus(ws: &Path, focus: &[&str]) -> BTreeMap<String, Option<String>> {
+    let req = request(ws, &[]);
+    let focus: Vec<String> = focus.iter().map(|s| s.to_string()).collect();
+    let paths = check_focus(ws, &req.scope, &focus).unwrap();
+    let discovered = discover(ws, &req.scope, &is_js_or_ts, &token()).unwrap();
+    let mut set = focus_files(
+        ws,
+        &paths,
+        &discovered,
+        &Includes::default(),
+        &is_js_or_ts,
+        &token(),
+    )
+    .unwrap();
+    let mut reader = Reader::new(&discovered.files, &is_js_or_ts, false, &token());
+    while reader.next_file().unwrap().is_some() {}
+    set.settle(&reader.finish());
+    reasons(&set)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_named_pruned_directory_prunes_its_nested_pruned_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let found = round2_focus(&ws, &["vendor/lib"]);
+    unlock(&ws);
+    assert_eq!(
+        found,
+        BTreeMap::from([(
+            "vendor/lib/a.js".to_string(),
+            Some("excluded as vendored".to_string())
+        )])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn focus_walk_follows_discovery_for_special_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = round2(tmp.path());
+    let found = round2_focus(&ws, &["."]);
+    unlock(&ws);
+    assert!(!found.contains_key("src/sub/.git"), "{found:?}");
+    assert_eq!(found["ign.log"], Some("excluded as ignored".to_string()));
+    assert_eq!(
+        found["src/pipe.ts"],
+        Some("skipped: unreadable".to_string())
+    );
+    assert_eq!(
+        found["src/out.ts"],
+        Some("skipped: symlink_outside_workspace".to_string())
+    );
+    assert_eq!(found["locked/"], Some("skipped: walk_error".to_string()));
+    assert!(
+        !found.contains_key("src/in.ts"),
+        "a link inside the workspace: {found:?}"
+    );
 }
