@@ -1,0 +1,237 @@
+---
+source: crates/act-lite-parser/tests/snapshots.rs
+expression: result
+---
+{
+  "type": "Symbols",
+  "symbols": [
+    {
+      "name": "User",
+      "kind": "interface",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 18,
+          "byte_offset": 101
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 22,
+          "byte_offset": 105
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "id",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 6,
+          "column": 3,
+          "byte_offset": 110
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 6,
+          "column": 5,
+          "byte_offset": 112
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "name",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 7,
+          "column": 3,
+          "byte_offset": 124
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 7,
+          "column": 7,
+          "byte_offset": 128
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "UserService",
+      "kind": "class",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 14,
+          "byte_offset": 154
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 25,
+          "byte_offset": 165
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "logger",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 11,
+          "column": 11,
+          "byte_offset": 178
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 11,
+          "column": 17,
+          "byte_offset": 184
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "constructor",
+      "kind": "method",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 13,
+          "column": 3,
+          "byte_offset": 197
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 13,
+          "column": 14,
+          "byte_offset": 208
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "getUser",
+      "kind": "method",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 17,
+          "column": 9,
+          "byte_offset": 266
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 17,
+          "column": 16,
+          "byte_offset": 273
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "id",
+      "kind": "unknown",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 20,
+          "column": 14,
+          "byte_offset": 387
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 20,
+          "column": 16,
+          "byte_offset": 389
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "name",
+      "kind": "unknown",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 20,
+          "column": 18,
+          "byte_offset": 391
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 20,
+          "column": 22,
+          "byte_offset": 395
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "createDefaultUser",
+      "kind": "function",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 17,
+          "byte_offset": 430
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 34,
+          "byte_offset": 447
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "id",
+      "kind": "unknown",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 25,
+          "column": 12,
+          "byte_offset": 469
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 25,
+          "column": 14,
+          "byte_offset": 471
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "name",
+      "kind": "unknown",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 25,
+          "column": 19,
+          "byte_offset": 476
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 25,
+          "column": 23,
+          "byte_offset": 480
+        }
+      },
+      "visibility": "unknown"
+    }
+  ]
+}

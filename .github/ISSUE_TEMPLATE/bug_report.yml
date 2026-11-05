@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a defect in act-lite.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: act-lite version
+      description: Output of `act-lite --version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: macOS 14 arm64, Ubuntu 22.04 x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or MCP tool call
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true

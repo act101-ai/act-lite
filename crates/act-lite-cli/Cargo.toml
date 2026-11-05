@@ -1,0 +1,41 @@
+[package]
+name = "act-lite-cli"
+description = "act-lite: navigation-only code queries and sequestered secrets for AI agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "act_lite_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "act-lite"
+path = "src/main.rs"
+
+[dependencies]
+act-lite-core.workspace = true
+act-lite-parser.workspace = true
+act-lite-lsp.workspace = true
+act-lite-secrets.workspace = true
+anstream = "1"
+anyhow.workspace = true
+clap.workspace = true
+regex = "1"
+rmcp = { version = "3.5", features = ["server", "macros", "transport-io"] }
+rpassword = "7"
+schemars = "1.2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tree-sitter = "0.25"
+walkdir = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+rmcp = { version = "3.5", features = ["client"] }
+tempfile = "3"

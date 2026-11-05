@@ -1,0 +1,244 @@
+---
+source: crates/act-lite-parser/tests/snapshots.rs
+expression: result
+---
+{
+  "type": "Skeleton",
+  "declarations": [
+    {
+      "kind": "import",
+      "name": "import { Logger } from './logger';",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 3,
+          "column": 1,
+          "byte_offset": 48
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 3,
+          "column": 35,
+          "byte_offset": 82
+        }
+      }
+    },
+    {
+      "kind": "export",
+      "name": "export interface User {",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 1,
+          "byte_offset": 84
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 8,
+          "column": 2,
+          "byte_offset": 139
+        }
+      }
+    },
+    {
+      "kind": "interface",
+      "name": "User",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 8,
+          "byte_offset": 91
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 8,
+          "column": 2,
+          "byte_offset": 139
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 18,
+          "byte_offset": 101
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 5,
+          "column": 22,
+          "byte_offset": 105
+        }
+      },
+      "visibility": "export"
+    },
+    {
+      "kind": "export",
+      "name": "export class UserService {",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 1,
+          "byte_offset": 141
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 22,
+          "column": 2,
+          "byte_offset": 412
+        }
+      }
+    },
+    {
+      "kind": "class",
+      "name": "UserService",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 8,
+          "byte_offset": 148
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 22,
+          "column": 2,
+          "byte_offset": 412
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 14,
+          "byte_offset": 154
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 10,
+          "column": 25,
+          "byte_offset": 165
+        }
+      },
+      "visibility": "export"
+    },
+    {
+      "kind": "method",
+      "name": "constructor",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 13,
+          "column": 3,
+          "byte_offset": 197
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 15,
+          "column": 4,
+          "byte_offset": 256
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 13,
+          "column": 3,
+          "byte_offset": 197
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 13,
+          "column": 14,
+          "byte_offset": 208
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "getUser",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 17,
+          "column": 3,
+          "byte_offset": 260
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 21,
+          "column": 4,
+          "byte_offset": 410
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 17,
+          "column": 9,
+          "byte_offset": 266
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 17,
+          "column": 16,
+          "byte_offset": 273
+        }
+      }
+    },
+    {
+      "kind": "export",
+      "name": "export function createDefaultUser(): User {",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 1,
+          "byte_offset": 414
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 26,
+          "column": 2,
+          "byte_offset": 498
+        }
+      }
+    },
+    {
+      "kind": "function",
+      "name": "createDefaultUser",
+      "range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 8,
+          "byte_offset": 421
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 26,
+          "column": 2,
+          "byte_offset": 498
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 17,
+          "byte_offset": 430
+        },
+        "end": {
+          "file": "sample.ts",
+          "line": 24,
+          "column": 34,
+          "byte_offset": 447
+        }
+      },
+      "visibility": "export"
+    }
+  ]
+}

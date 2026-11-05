@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/act-lite-core",
+    "crates/act-lite-parser",
+    "crates/act-lite-lsp",
+    "crates/act-lite-secrets",
+    "crates/act-lite-cli",
+]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+publish = false
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.test]
+incremental = false
+
+[workspace.dependencies]
+act-lite-core = { path = "crates/act-lite-core" }
+act-lite-parser = { path = "crates/act-lite-parser" }
+act-lite-lsp = { path = "crates/act-lite-lsp" }
+act-lite-secrets = { path = "crates/act-lite-secrets" }
+
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+sha2 = "0.10"

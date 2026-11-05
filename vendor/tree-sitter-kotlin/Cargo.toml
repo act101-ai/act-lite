@@ -1,0 +1,28 @@
+[package]
+edition = "2018"
+name = "tree-sitter-kotlin"
+version = "0.3.5"
+authors = ["fwcd"]
+build = "bindings/rust/build.rs"
+include = [
+    "bindings/rust/*",
+    "src/*",
+]
+autolib = false
+description = "Kotlin grammar for the tree-sitter parsing library (vendored)"
+license = "MIT"
+repository = "https://github.com/fwcd/tree-sitter-kotlin"
+
+[lib]
+name = "tree_sitter_kotlin"
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1.6"
+
+# tree-sitter moved to dev-dependencies to avoid links conflict with act-lite-parser
+[dev-dependencies]
+tree-sitter = "0.26.3"
+
+[build-dependencies]
+cc = "1.2.51"

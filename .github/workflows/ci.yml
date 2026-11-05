@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**']
+  pull_request:
+    paths-ignore: ['docs/**']
+  workflow_dispatch:
+    inputs:
+      os:
+        description: runner for an on-demand platform floor (macos-latest or windows-latest)
+        required: true
+        default: windows-latest
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  floor:
+    name: floor (${{ github.event.inputs.os || 'ubuntu-latest' }})
+    runs-on: ${{ github.event.inputs.os || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: scope to the change
+        id: scope
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+            changed=$(git ls-files)
+          else
+            changed=$(git diff --name-only "$base" HEAD)
+          fi
+          crates=$(printf '%s\n' "$changed" | sed -n 's#^crates/\([^/]*\)/.*#\1#p' | sort -u)
+          if printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml|rustfmt\.toml|\.github/|vendor/)'; then crates=all; fi
+          # dependents, from each crates/*/Cargo.toml: core -> parser, lsp, cli; parser -> lsp, cli; lsp -> cli; secrets -> cli
+          case "$crates" in *act-lite-core*) crates="$crates act-lite-parser" ;; esac
+          case "$crates" in *act-lite-parser*) crates="$crates act-lite-lsp" ;; esac
+          case "$crates" in *act-lite-lsp*|*act-lite-secrets*) crates="$crates act-lite-cli" ;; esac
+          pkgs=""; [ "$crates" = all ] && pkgs="--workspace" || for c in $(printf '%s\n' $crates | sort -u); do pkgs="$pkgs -p $c"; done
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml)' && echo "deny=true" >> "$GITHUB_OUTPUT" || echo "deny=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
+          echo "rust: ${pkgs:-none}"
+      - name: cargo fmt --check
+        if: steps.scope.outputs.pkgs != ''
+        run: cargo fmt --check
+      - name: cargo check
+        if: steps.scope.outputs.pkgs != ''
+        run: cargo check ${{ steps.scope.outputs.pkgs }}
+      - name: cargo test
+        if: steps.scope.outputs.pkgs != ''
+        run: cargo test ${{ steps.scope.outputs.pkgs }} --no-fail-fast
+      - name: cargo clippy
+        if: steps.scope.outputs.pkgs != ''
+        run: cargo clippy ${{ steps.scope.outputs.pkgs }} --all-targets -- -D warnings
+      - uses: taiki-e/install-action@v2
+        if: steps.scope.outputs.deny == 'true'
+        with:
+          tool: cargo-deny
+      - name: cargo deny check
+        if: steps.scope.outputs.deny == 'true'
+        run: cargo deny check
+      - name: work graph script tests
+        if: steps.scope.outputs.python == 'true'
+        run: python3 -m unittest discover -s tests/scripts -v

@@ -1,0 +1,767 @@
+---
+source: crates/act-lite-parser/tests/snapshots.rs
+expression: result
+---
+{
+  "type": "Skeleton",
+  "declarations": [
+    {
+      "kind": "import",
+      "name": "using System;",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 1,
+          "column": 1,
+          "byte_offset": 0
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 1,
+          "column": 14,
+          "byte_offset": 13
+        }
+      }
+    },
+    {
+      "kind": "import",
+      "name": "using System.Collections.Generic;",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 2,
+          "column": 1,
+          "byte_offset": 14
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 2,
+          "column": 34,
+          "byte_offset": 47
+        }
+      }
+    },
+    {
+      "kind": "import",
+      "name": "using System.Threading.Tasks;",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 3,
+          "column": 1,
+          "byte_offset": 48
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 3,
+          "column": 30,
+          "byte_offset": 77
+        }
+      }
+    },
+    {
+      "kind": "namespace",
+      "name": "Sample.Application",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 5,
+          "column": 1,
+          "byte_offset": 79
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 5,
+          "column": 30,
+          "byte_offset": 108
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 5,
+          "column": 11,
+          "byte_offset": 89
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 5,
+          "column": 29,
+          "byte_offset": 107
+        }
+      }
+    },
+    {
+      "kind": "class",
+      "name": "User",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 10,
+          "column": 1,
+          "byte_offset": 176
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 32,
+          "column": 2,
+          "byte_offset": 693
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 10,
+          "column": 14,
+          "byte_offset": 189
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 10,
+          "column": 18,
+          "byte_offset": 193
+        }
+      }
+    },
+    {
+      "kind": "field",
+      "name": "_id",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 12,
+          "column": 5,
+          "byte_offset": 200
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 12,
+          "column": 30,
+          "byte_offset": 225
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 12,
+          "column": 26,
+          "byte_offset": 221
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 12,
+          "column": 29,
+          "byte_offset": 224
+        }
+      }
+    },
+    {
+      "kind": "field",
+      "name": "_name",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 13,
+          "column": 5,
+          "byte_offset": 230
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 13,
+          "column": 26,
+          "byte_offset": 251
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 13,
+          "column": 20,
+          "byte_offset": 245
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 13,
+          "column": 25,
+          "byte_offset": 250
+        }
+      }
+    },
+    {
+      "kind": "property",
+      "name": "Id",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 15,
+          "column": 5,
+          "byte_offset": 257
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 15,
+          "column": 26,
+          "byte_offset": 278
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 15,
+          "column": 16,
+          "byte_offset": 268
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 15,
+          "column": 18,
+          "byte_offset": 270
+        }
+      }
+    },
+    {
+      "kind": "property",
+      "name": "Name",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 16,
+          "column": 5,
+          "byte_offset": 283
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 16,
+          "column": 100,
+          "byte_offset": 378
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 16,
+          "column": 19,
+          "byte_offset": 297
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 16,
+          "column": 23,
+          "byte_offset": 301
+        }
+      }
+    },
+    {
+      "kind": "property",
+      "name": "CreatedAt",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 17,
+          "column": 5,
+          "byte_offset": 383
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 17,
+          "column": 45,
+          "byte_offset": 423
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 17,
+          "column": 21,
+          "byte_offset": 399
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 17,
+          "column": 30,
+          "byte_offset": 408
+        }
+      }
+    },
+    {
+      "kind": "event",
+      "name": "NameChanged",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 19,
+          "column": 5,
+          "byte_offset": 429
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 19,
+          "column": 52,
+          "byte_offset": 476
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 19,
+          "column": 40,
+          "byte_offset": 464
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 19,
+          "column": 51,
+          "byte_offset": 475
+        }
+      }
+    },
+    {
+      "kind": "constructor",
+      "name": "User",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 21,
+          "column": 5,
+          "byte_offset": 482
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 25,
+          "column": 6,
+          "byte_offset": 566
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 21,
+          "column": 12,
+          "byte_offset": 489
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 21,
+          "column": 16,
+          "byte_offset": 493
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "UpdateName",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 27,
+          "column": 5,
+          "byte_offset": 572
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 31,
+          "column": 6,
+          "byte_offset": 691
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 27,
+          "column": 17,
+          "byte_offset": 584
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 27,
+          "column": 27,
+          "byte_offset": 594
+        }
+      }
+    },
+    {
+      "kind": "interface",
+      "name": "IRepository",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 34,
+          "column": 1,
+          "byte_offset": 695
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 39,
+          "column": 2,
+          "byte_offset": 851
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 34,
+          "column": 18,
+          "byte_offset": 712
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 34,
+          "column": 29,
+          "byte_offset": 723
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "GetByIdAsync",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 36,
+          "column": 5,
+          "byte_offset": 749
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 36,
+          "column": 35,
+          "byte_offset": 779
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 36,
+          "column": 14,
+          "byte_offset": 758
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 36,
+          "column": 26,
+          "byte_offset": 770
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "GetAllAsync",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 37,
+          "column": 5,
+          "byte_offset": 784
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 37,
+          "column": 40,
+          "byte_offset": 819
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 37,
+          "column": 26,
+          "byte_offset": 805
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 37,
+          "column": 37,
+          "byte_offset": 816
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "SaveAsync",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 38,
+          "column": 5,
+          "byte_offset": 824
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 38,
+          "column": 30,
+          "byte_offset": 849
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 38,
+          "column": 10,
+          "byte_offset": 829
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 38,
+          "column": 19,
+          "byte_offset": 838
+        }
+      }
+    },
+    {
+      "kind": "enum",
+      "name": "Status",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 41,
+          "column": 1,
+          "byte_offset": 853
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 46,
+          "column": 2,
+          "byte_offset": 913
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 41,
+          "column": 13,
+          "byte_offset": 865
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 41,
+          "column": 19,
+          "byte_offset": 871
+        }
+      }
+    },
+    {
+      "kind": "class",
+      "name": "Person",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 48,
+          "column": 1,
+          "byte_offset": 915
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 48,
+          "column": 57,
+          "byte_offset": 971
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 48,
+          "column": 15,
+          "byte_offset": 929
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 48,
+          "column": 21,
+          "byte_offset": 935
+        }
+      }
+    },
+    {
+      "kind": "struct",
+      "name": "Point",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 50,
+          "column": 1,
+          "byte_offset": 973
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 54,
+          "column": 2,
+          "byte_offset": 1060
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 50,
+          "column": 15,
+          "byte_offset": 987
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 50,
+          "column": 20,
+          "byte_offset": 992
+        }
+      }
+    },
+    {
+      "kind": "property",
+      "name": "X",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 52,
+          "column": 5,
+          "byte_offset": 999
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 52,
+          "column": 32,
+          "byte_offset": 1026
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 52,
+          "column": 16,
+          "byte_offset": 1010
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 52,
+          "column": 17,
+          "byte_offset": 1011
+        }
+      }
+    },
+    {
+      "kind": "property",
+      "name": "Y",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 53,
+          "column": 5,
+          "byte_offset": 1031
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 53,
+          "column": 32,
+          "byte_offset": 1058
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 53,
+          "column": 16,
+          "byte_offset": 1042
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 53,
+          "column": 17,
+          "byte_offset": 1043
+        }
+      }
+    },
+    {
+      "kind": "delegate",
+      "name": "UserCreatedHandler",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 56,
+          "column": 1,
+          "byte_offset": 1062
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 56,
+          "column": 52,
+          "byte_offset": 1113
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 56,
+          "column": 22,
+          "byte_offset": 1083
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 56,
+          "column": 40,
+          "byte_offset": 1101
+        }
+      }
+    },
+    {
+      "kind": "class",
+      "name": "Extensions",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 58,
+          "column": 1,
+          "byte_offset": 1115
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 61,
+          "column": 2,
+          "byte_offset": 1224
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 58,
+          "column": 21,
+          "byte_offset": 1135
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 58,
+          "column": 31,
+          "byte_offset": 1145
+        }
+      }
+    },
+    {
+      "kind": "method",
+      "name": "IsEmpty",
+      "range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 60,
+          "column": 5,
+          "byte_offset": 1152
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 60,
+          "column": 75,
+          "byte_offset": 1222
+        }
+      },
+      "name_range": {
+        "start": {
+          "file": "sample.cs",
+          "line": 60,
+          "column": 24,
+          "byte_offset": 1171
+        },
+        "end": {
+          "file": "sample.cs",
+          "line": 60,
+          "column": 31,
+          "byte_offset": 1178
+        }
+      }
+    }
+  ]
+}

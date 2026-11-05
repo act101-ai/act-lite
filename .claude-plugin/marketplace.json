@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "act-lite-marketplace",
+  "description": "act-lite: navigation-only, AST-aware code queries for AI agents across 30 languages.",
+  "owner": {
+    "name": "Kage Martin",
+    "url": "https://github.com/act101-ai"
+  },
+  "plugins": [
+    {
+      "name": "act-lite",
+      "description": "Navigation-only, AST-aware code queries for AI agents across 30 languages: skeletons, symbols, repository outlines, definitions, references and callers over MCP.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Kage Martin",
+        "url": "https://github.com/act101-ai"
+      },
+      "source": "./plugin",
+      "category": "development"
+    }
+  ]
+}

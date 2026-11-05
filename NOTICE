@@ -1,0 +1,130 @@
+act-lite
+========
+
+act-lite parses source code with the tree-sitter grammars listed below. Each
+grammar is distributed under its own license, stated here with its source and
+copyright line. "registry" means the crate is fetched from crates.io at build
+time; a path means the grammar is vendored in this repository with its
+LICENSE file beside it. Where the grammar's LICENSE file carries no copyright
+line, the line below is taken from the crate's Cargo.toml `authors` field, or
+names the upstream contributors when that field is empty too.
+
+Runtime
+-------
+tree-sitter 0.25.10 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter
+  Copyright (c) 2018 Max Brunsfeld (Cargo.toml authors: Max Brunsfeld, Amaan Qureshi)
+
+Grammars (30 languages)
+-----------------------
+Bash — tree-sitter-bash 0.25.1 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-bash
+  Copyright (c) 2017 Max Brunsfeld
+
+C — tree-sitter-c 0.24.2 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-c
+  Copyright (c) 2014 Max Brunsfeld
+
+C++ — tree-sitter-cpp 0.23.4 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-cpp
+  Copyright (c) Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+C# — tree-sitter-c-sharp 0.23.5 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-c-sharp
+  Copyright (c) 2014-2023 Max Brunsfeld, Damien Guard, Amaan Qureshi, and contributors.
+
+CSS — tree-sitter-css 0.25.0 — crates/act-lite-parser/vendor/tree-sitter-css — MIT
+  https://github.com/tree-sitter/tree-sitter-css
+  Copyright (c) 2018 Max Brunsfeld
+
+Dart — tree-sitter-dart 0.0.4 — vendor/tree-sitter-dart — MIT
+  https://github.com/ast-grep/tree-sitter-dart
+  Copyright (c) 2020-2022 UserNobody14 and others
+
+Dockerfile — tree-sitter-dockerfile 0.2.1 — crates/act-lite-parser/vendor/tree-sitter-dockerfile — MIT
+  https://github.com/camdencheek/tree-sitter-dockerfile
+  Copyright (c) 2021 Camden Cheek
+
+Elixir — tree-sitter-elixir 0.3.5 — registry — Apache-2.0
+  https://github.com/elixir-lang/tree-sitter-elixir
+  Copyright (c) the tree-sitter-elixir contributors (no copyright line in LICENSE or Cargo.toml authors; no NOTICE file upstream)
+
+Go — tree-sitter-go 0.25.0 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-go
+  Copyright (c) 2014 Max Brunsfeld
+
+HCL/Terraform — tree-sitter-hcl 1.1.0 — registry — Apache-2.0
+  https://github.com/tree-sitter-grammars/tree-sitter-hcl
+  Copyright (c) the tree-sitter-hcl contributors (no copyright line in LICENSE or Cargo.toml authors; no NOTICE file upstream)
+
+HTML — tree-sitter-html 0.23.2 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-html
+  Copyright (c) Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+Java — tree-sitter-java 0.23.5 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-java
+  Copyright (c) Ayman Nadeem, Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+JavaScript, JSX — tree-sitter-javascript 0.25.0 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-javascript
+  Copyright (c) 2014 Max Brunsfeld
+
+JSON — tree-sitter-json 0.24.8 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-json
+  Copyright (c) Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+Kotlin — tree-sitter-kotlin 0.3.5 — vendor/tree-sitter-kotlin — MIT
+  https://github.com/fwcd/tree-sitter-kotlin
+  Copyright (c) 2019 fwcd
+
+Lua — tree-sitter-lua 0.5.0 — registry — MIT
+  https://github.com/tree-sitter-grammars/tree-sitter-lua
+  Copyright (c) Munif Tanjim (Cargo.toml authors)
+
+Markdown — tree-sitter-markdown 0.7.1 — crates/act-lite-parser/vendor/tree-sitter-markdown — MIT
+  https://github.com/ikatyang/tree-sitter-markdown
+  Copyright (c) Ika <ikatyang@gmail.com> (https://github.com/ikatyang)
+
+PHP — tree-sitter-php 0.24.2 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-php
+  Copyright (c) 2017 Josh Vera, GitHub
+
+Python — tree-sitter-python 0.25.0 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-python
+  Copyright (c) 2016 Max Brunsfeld
+
+Ruby — tree-sitter-ruby 0.23.1 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-ruby
+  Copyright (c) Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+Rust — tree-sitter-rust 0.24.2 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-rust
+  Copyright (c) 2017 Maxim Sokolov
+
+Scala — tree-sitter-scala 0.26.3 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-scala
+  Copyright (c) 2018 Max Brunsfeld and GitHub
+
+SCSS — tree-sitter-scss 1.0.0 — vendor/tree-sitter-scss — MIT
+  https://github.com/tree-sitter-grammars/tree-sitter-scss
+  Copyright (c) 2024 Amaan Qureshi <amaanq12@gmail.com>
+
+SQL — tree-sitter-sequel 0.3.11 — vendor/tree-sitter-sequel — MIT
+  https://github.com/DerekStride/tree-sitter-sql
+  Copyright (c) 2021 Derek Stride
+
+Swift — tree-sitter-swift 0.7.4 — registry — MIT
+  https://github.com/alex-pinkus/tree-sitter-swift
+  Copyright (c) 2021 alex-pinkus
+
+TOML — tree-sitter-toml-ng 0.7.0 — registry — MIT
+  https://github.com/tree-sitter-grammars/tree-sitter-toml
+  Copyright (c) Ika, Amaan Qureshi (Cargo.toml authors)
+
+TypeScript, TSX — tree-sitter-typescript 0.23.2 — registry — MIT
+  https://github.com/tree-sitter/tree-sitter-typescript
+  Copyright (c) Max Brunsfeld, Amaan Qureshi (Cargo.toml authors)
+
+YAML — tree-sitter-yaml 0.7.2 — registry — MIT
+  https://github.com/tree-sitter-grammars/tree-sitter-yaml
+  Copyright (c) 2024 tree-sitter-grammars contributors
