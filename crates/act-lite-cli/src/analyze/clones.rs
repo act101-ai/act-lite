@@ -826,6 +826,7 @@ fn literal_kinds(grammar: Grammar) -> &'static [&'static str] {
             "integer",
             "float",
         ],
+        Grammar::R => &["string", "integer", "float", "complex"],
         _ => &[],
     }
 }
