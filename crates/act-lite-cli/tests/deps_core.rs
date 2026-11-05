@@ -11,6 +11,11 @@
 //!   (`Resolved([])`);
 //! - `failed:` is unresolved with the first failed JS/TS input as reason;
 //! - `count:` reports the per-build counter after incrementing it;
+//! - `src:<file>` reports the first line of the support read of `<file>`,
+//!   then rewrites `<file>` on disk; `read:<file>` only reads it;
+//!   `rm:<file>` reports the number of its removed test regions;
+//! - `ws:<file>` reports whether `<file>` is a workspace file; `skips:`
+//!   reports the entries the workspace walk could not read;
 //! - anything else is probed as a workspace-relative path.
 
 use act_lite_cli::analyze::deps::{
@@ -18,13 +23,13 @@ use act_lite_cli::analyze::deps::{
 };
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::envelope::AnalyzeError;
-use act_lite_cli::analyze::read::{Reader, SupportReader};
+use act_lite_cli::analyze::read::{FileSource, Parsed, Reader, SupportReader};
 use act_lite_cli::analyze::run::{Request, RunContext};
 use act_lite_parser::Grammar;
 use act_lite_parser::deps::Relationship;
 use serde_json::{Value, json};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
 
@@ -37,6 +42,8 @@ fn write(root: &Path, rel: &str, content: &str) {
 struct TestResolver {
     calls: AtomicUsize,
     cancel_on_first: Option<CancellationToken>,
+    /// The workspace root, for `src:`.
+    root: PathBuf,
 }
 
 impl TestResolver {
@@ -44,6 +51,7 @@ impl TestResolver {
         TestResolver {
             calls: AtomicUsize::new(0),
             cancel_on_first: None,
+            root: PathBuf::new(),
         }
     }
 }
@@ -93,6 +101,34 @@ impl Resolver for TestResolver {
             let first = cx.input_failed(Family::JsTs).unwrap_or("none");
             return Outcome::Unresolved(first.to_string());
         }
+        if let Some(path) = spec.strip_prefix("src:") {
+            let first = cx
+                .source(path)
+                .map(|p| p.source.content().lines().next().unwrap().to_string());
+            fs::write(self.root.join(path), "// v2\nexport const s = 2;\n").unwrap();
+            return Outcome::Unresolved(first.unwrap_or_else(|err| err));
+        }
+        if let Some(path) = spec.strip_prefix("read:") {
+            return match cx.source(path) {
+                Ok(_) => Outcome::Resolved(Vec::new()),
+                Err(err) => Outcome::Unresolved(err),
+            };
+        }
+        if let Some(path) = spec.strip_prefix("rm:") {
+            return Outcome::Unresolved(format!("removed {}", cx.removed(path).len()));
+        }
+        if let Some(path) = spec.strip_prefix("ws:") {
+            let listed = cx.workspace_files().iter().any(|f| f == path);
+            return Outcome::Unresolved(if listed { "listed" } else { "not listed" }.to_string());
+        }
+        if spec == "skips:" {
+            let skips: Vec<&str> = cx
+                .workspace_skipped()
+                .iter()
+                .map(|s| s.file.file.as_str())
+                .collect();
+            return Outcome::Unresolved(skips.join(","));
+        }
         if spec == "count:" {
             let counter = cx.cache::<u32>();
             *counter += 1;
@@ -120,15 +156,60 @@ fn build(
     resolver: &TestResolver,
     cancel: &CancellationToken,
 ) -> Result<DepGraph, AnalyzeError> {
+    build_in(root, paths, Includes::default(), resolver, cancel, false)
+}
+
+/// As `build`, under `includes`; with `cancel_on_yield` the file source
+/// cancels the token as it returns the first file.
+fn build_in(
+    root: &Path,
+    paths: &[&str],
+    includes: Includes,
+    resolver: &TestResolver,
+    cancel: &CancellationToken,
+    cancel_on_yield: bool,
+) -> Result<DepGraph, AnalyzeError> {
     let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
-    let request = Request::new(root, &paths, &[], &[], Includes::default(), 100).unwrap();
+    let request = Request::new(root, &paths, &[], &[], includes, 100).unwrap();
     let ctx = RunContext {
         root: root.to_path_buf(),
         discovered: discover(root, &request.scope, &is_js_or_ts, cancel)?,
-        support: SupportReader::new(root, &Includes::default(), cancel),
+        support: SupportReader::new(root, &includes, cancel),
     };
-    let mut reader = Reader::new(&ctx.discovered.files, &is_js_or_ts, false, cancel);
-    DepGraph::build_with(&mut reader, &ctx, &[resolver], cancel)
+    let reader = Reader::new(&ctx.discovered.files, &is_js_or_ts, false, cancel);
+    let mut files = CancelOnYield {
+        inner: reader,
+        cancel: cancel_on_yield.then(|| cancel.clone()),
+    };
+    DepGraph::build_with(&mut files, &ctx, &[resolver], cancel)
+}
+
+/// A file source that can cancel the token as it returns the first file.
+struct CancelOnYield {
+    inner: Reader,
+    cancel: Option<CancellationToken>,
+}
+
+impl FileSource for CancelOnYield {
+    fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError> {
+        let next = self.inner.next_file();
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+        next
+    }
+
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        self.inner.reread(rel)
+    }
+}
+
+fn reasons(graph: &DepGraph) -> Vec<String> {
+    graph
+        .unresolved(&|_| true)
+        .into_iter()
+        .map(|u| u.reason)
+        .collect()
 }
 
 fn graph(root: &Path) -> DepGraph {
@@ -413,6 +494,7 @@ fn a_cancelled_token_stops_the_build_before_the_next_file() {
     let resolver = TestResolver {
         calls: AtomicUsize::new(0),
         cancel_on_first: Some(cancel.clone()),
+        root: PathBuf::new(),
     };
     let result = build(ws.path(), &[], &resolver, &cancel);
     assert!(matches!(result, Err(AnalyzeError::Cancelled)));
@@ -449,4 +531,113 @@ fn the_families_and_the_stubs() {
     assert_eq!(graph.family_of("README.md"), None);
     assert!(graph.analyzed().contains("src/a.ts"));
     assert_eq!(graph.relationships_of("src/a.ts").len(), 1);
+}
+
+#[test]
+fn a_cancel_while_a_file_is_read_stops_before_its_resolution() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "src/a.ts", "import 'unres:a';\n");
+    let cancel = CancellationToken::new();
+    let resolver = TestResolver::new();
+    let result = build_in(
+        ws.path(),
+        &[],
+        Includes::default(),
+        &resolver,
+        &cancel,
+        true,
+    );
+    assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn support_reads_last_only_while_one_file_is_resolved() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "lib/s.ts", "// v1\nexport const s = 1;\n");
+    write(
+        ws.path(),
+        "lib/m.rs",
+        "pub fn f() {}\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n",
+    );
+    write(
+        ws.path(),
+        "src/a.ts",
+        "import 'src:lib/s.ts';\nimport 'src:lib/s.ts';\nimport 'read:lib/m.rs';\n",
+    );
+    write(
+        ws.path(),
+        "src/b.ts",
+        "import 'src:lib/s.ts';\nimport 'rm:lib/m.rs';\n",
+    );
+    let resolver = TestResolver {
+        root: ws.path().to_path_buf(),
+        ..TestResolver::new()
+    };
+    let graph = build(ws.path(), &["src"], &resolver, &CancellationToken::new()).unwrap();
+    assert_eq!(reasons(&graph), ["// v1", "// v1", "// v2", "removed 1"]);
+}
+
+#[test]
+fn the_workspace_walk_uses_the_request_includes() {
+    let ws = tempfile::tempdir().unwrap();
+    fs::create_dir(ws.path().join(".git")).unwrap();
+    write(ws.path(), ".gitignore", "secret.ts\n");
+    write(ws.path(), "secret.ts", "export const s = 1;\n");
+    write(ws.path(), "src/x.ts", "import 'ws:secret.ts';\n");
+    let cancel = CancellationToken::new();
+    let by_default = build(ws.path(), &["src"], &TestResolver::new(), &cancel).unwrap();
+    assert_eq!(reasons(&by_default), ["not listed"]);
+    let includes = Includes {
+        ignored: true,
+        ..Includes::default()
+    };
+    let resolver = TestResolver::new();
+    let with_ignored = build_in(ws.path(), &["src"], includes, &resolver, &cancel, false).unwrap();
+    assert_eq!(reasons(&with_ignored), ["listed"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_workspace_walk_reports_what_it_could_not_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "locked/a.ts", "export const a = 1;\n");
+    write(ws.path(), "src/x.ts", "import 'skips:';\n");
+    let locked = ws.path().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let result = build(
+        ws.path(),
+        &["src"],
+        &TestResolver::new(),
+        &CancellationToken::new(),
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(reasons(&result.unwrap()), ["locked/"]);
+}
+
+#[test]
+fn a_missing_input_is_no_failed_input() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "src/x.ts",
+        "import 'input:nope.json';\nimport 'ext:react';\n",
+    );
+    let graph = graph(ws.path());
+    assert_eq!(reasons(&graph), ["nope.json does not exist"]);
+    let details = graph.common_details();
+    assert_eq!(details["resolution_inputs"], json!([]));
+    assert_eq!(details["resolution_inputs_total"], 0);
+    assert_eq!(details["relationships"]["external"], 1);
+}
+
+#[test]
+fn an_absolute_path_does_not_normalize() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "src/etc/x", "x\n");
+    write(ws.path(), "src/x.ts", "import 'up:/etc/x';\n");
+    let graph = graph(ws.path());
+    assert!(graph.edges().is_empty());
+    assert_eq!(graph.common_details()["relationships"]["external"], 1);
 }
