@@ -322,6 +322,28 @@ impl ResolveCx<'_> {
         self.walk().map_or(&[], |(_, skipped)| skipped)
     }
 
+    /// Whether `rel` is inside a vendored directory: a directory component
+    /// with a vendored name, or one that holds a `pyvenv.cfg` file. Such a
+    /// path is outside the analyzed project whatever the request includes.
+    pub fn vendored(&mut self, rel: &str) -> bool {
+        let parts: Vec<&str> = rel.split('/').filter(|p| !p.is_empty()).collect();
+        let dirs = if parts.is_empty() { 0 } else { parts.len() - 1 };
+        for depth in 0..dirs {
+            let name = parts[depth];
+            if super::classify::is_vendored_name(name) {
+                return true;
+            }
+            let dir = parts[..=depth].join("/");
+            if matches!(
+                self.probe_file(&format!("{dir}/pyvenv.cfg")),
+                Probe::File(_)
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn walk(&self) -> Option<&Walked> {
         self.state
             .workspace
