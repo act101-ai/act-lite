@@ -1,0 +1,8 @@
+$primary: red;
+
+@mixin rounded { border-radius: 4px; }
+
+.btn {
+  color: $primary;
+  @include rounded;
+}

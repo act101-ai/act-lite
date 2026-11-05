@@ -1,0 +1,29 @@
+[package]
+name = "tree-sitter-markdown"
+version = "0.7.1"
+authors = ["Ika <ikatyang@gmail.com>"]
+license = "MIT"
+description = "Markdown grammar for tree-sitter"
+keywords = ["incremental", "parsing", "markdown"]
+categories = ["parsing", "text-editors"]
+repository = "https://github.com/ikatyang/tree-sitter-markdown"
+edition = "2021"
+autoexamples = false
+
+build = "build.rs"
+include = [
+  "src/*",
+  "LICENSE",
+]
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.2"
+
+[dev-dependencies]
+tree-sitter = "0.25"

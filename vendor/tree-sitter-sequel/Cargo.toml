@@ -1,0 +1,32 @@
+[package]
+edition = "2021"
+name = "tree-sitter-sequel"
+version = "0.3.11"
+authors = ["derek stride"]
+build = "bindings/rust/build.rs"
+include = [
+    "bindings/rust/*",
+    "grammar.js",
+    "queries/*",
+    "src/*",
+]
+autolib = false
+description = "Tree-sitter Grammar for SQL (vendored)"
+license = "MIT"
+repository = "https://github.com/DerekStride/tree-sitter-sql"
+
+[lib]
+name = "tree_sitter_sequel"
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1.6"
+
+[dev-dependencies]
+tree-sitter = "0.25.10"
+
+[build-dependencies]
+cc = "1.2.51"
+
+# Keep this package out of any parent workspace
+[workspace]

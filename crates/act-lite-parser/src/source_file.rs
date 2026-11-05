@@ -1,0 +1,431 @@
+//! Source file with parsed syntax tree.
+
+use crate::{Grammar, Parser, ParserError, SyntaxTree, error::Result};
+use std::path::{Path, PathBuf};
+
+/// A source file with its content and parsed syntax tree.
+///
+/// Handles incremental re-parsing when content changes.
+pub struct SourceFile {
+    path: PathBuf,
+    content: String,
+    grammar: Grammar,
+    tree: SyntaxTree,
+}
+
+impl SourceFile {
+    /// Loads and parses a source file.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let source = Self::load_inner(path)?;
+        // Parse-entry touch hook. SourceFile::load is the read entry
+        // point for the navigation/analyze surface (skeleton, symbols, and the
+        // MCP/CLI query handlers), which loads files directly rather than through
+        // Workspace::open_file/get_file. Recording here attributes their read
+        // bytes to the active TouchScope; record() is a no-op without one.
+        // TouchSet dedups by path, so this coexists with the Workspace hooks
+        // (which still cover cached get_file re-access, where no load() occurs).
+        act_lite_core::touch::record(
+            &source.path,
+            source.content.len() as u64,
+            source.grammar.name(),
+        );
+        Ok(source)
+    }
+
+    fn load_inner(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        // Read bytes first to distinguish I/O errors from UTF-8 errors
+        let bytes = std::fs::read(path).map_err(ParserError::Io)?;
+        let content = String::from_utf8(bytes).map_err(|_| ParserError::InvalidUtf8 {
+            file: path.to_path_buf(),
+        })?;
+
+        // Filename conventions (Dockerfile) route by NAME before extension
+        // routing; `Grammar::from_path` is the single
+        // classifier, shared with the reference walk.
+        let grammar = Grammar::from_path(path).ok_or_else(|| ParserError::UnsupportedLanguage {
+            extension: path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map_or_else(|| path.display().to_string(), str::to_string),
+        })?;
+
+        let mut parser = Parser::new();
+        let tree = parser.parse(&content, grammar)?;
+
+        Ok(Self {
+            path: path.to_path_buf(),
+            content,
+            grammar,
+            tree,
+        })
+    }
+
+    /// Creates a source file from content with explicit grammar.
+    pub fn from_content(
+        path: impl Into<PathBuf>,
+        content: String,
+        grammar: Grammar,
+    ) -> Result<Self> {
+        let mut parser = Parser::new();
+        let tree = parser.parse(&content, grammar)?;
+
+        Ok(Self {
+            path: path.into(),
+            content,
+            grammar,
+            tree,
+        })
+    }
+
+    /// Returns the file path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the source content.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Returns the grammar.
+    pub fn grammar(&self) -> Grammar {
+        self.grammar
+    }
+
+    /// Returns a reference to the syntax tree.
+    pub fn tree(&self) -> &SyntaxTree {
+        &self.tree
+    }
+
+    /// Returns true if this is a TypeScript declaration file (.d.ts, .d.mts, .d.cts).
+    ///
+    /// Declaration files are ambient-only and should not be targets for
+    /// refactoring operations that generate implementation code.
+    pub fn is_declaration_file(&self) -> bool {
+        let path_str = self.path.to_string_lossy();
+        path_str.ends_with(".d.ts") || path_str.ends_with(".d.mts") || path_str.ends_with(".d.cts")
+    }
+
+    /// Updates the content and re-parses.
+    ///
+    /// TODO: Implement incremental parsing with tree-sitter's `parse(source, Some(&old_tree))`
+    /// for efficiency. Currently parses from scratch.
+    pub fn update_content(&mut self, new_content: String) -> Result<()> {
+        let mut parser = Parser::new();
+        let tree = parser.parse(&new_content, self.grammar)?;
+        self.content = new_content;
+        self.tree = tree;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn load_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("ts");
+        writeln!(file, "const x = 1;").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let source = SourceFile::load(&path).unwrap();
+        assert_eq!(source.content().trim(), "const x = 1;");
+        assert_eq!(source.grammar(), Grammar::TypeScript);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn load_records_a_touch_into_the_active_scope() {
+        // Parse-entry hook: SourceFile::load is the read entry point for
+        // the navigation/analyze surface (skeleton, symbols, …), which bypasses
+        // Workspace::open_file/get_file. Without this hook, every read op records
+        // naive_bytes=0 — measured savings for the read surface collapse to zero.
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("rs");
+        writeln!(file, "fn main() {{}}").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+        let canonical = std::fs::canonicalize(&path).unwrap();
+
+        let scope = act_lite_core::touch::TouchScope::enter();
+        let _ = SourceFile::load(&canonical).unwrap();
+        let set = scope.finish();
+
+        assert!(
+            set.contains(&canonical),
+            "load must record the file as touched in the active scope"
+        );
+        assert!(
+            set.naive_bytes() > 0,
+            "touched file must contribute naive bytes"
+        );
+        assert_eq!(
+            set.grammar_bytes().get("Rust"),
+            Some(&(set.naive_bytes())),
+            "touched bytes must be attributed to the resolved grammar"
+        );
+
+        std::fs::remove_file(&canonical).unwrap();
+    }
+
+    #[test]
+    fn load_without_active_scope_is_a_noop() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("rs");
+        writeln!(file, "fn main() {{}}").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        // Must not panic when no TouchScope is active.
+        let source = SourceFile::load(&path).unwrap();
+        assert_eq!(source.grammar(), Grammar::Rust);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn from_content() {
+        let source =
+            SourceFile::from_content("test.ts", "const x = 1;".to_string(), Grammar::TypeScript)
+                .unwrap();
+        assert_eq!(source.content(), "const x = 1;");
+        assert_eq!(source.path(), Path::new("test.ts"));
+    }
+
+    #[test]
+    fn update_content() {
+        let mut source =
+            SourceFile::from_content("test.ts", "const x = 1;".to_string(), Grammar::TypeScript)
+                .unwrap();
+
+        source.update_content("const y = 2;".to_string()).unwrap();
+        assert_eq!(source.content(), "const y = 2;");
+    }
+
+    #[test]
+    fn load_file_not_found() {
+        let result = SourceFile::load("/nonexistent/file.ts");
+        assert!(result.is_err());
+        if let Err(ParserError::Io(_)) = result {
+            // Expected I/O error
+        } else {
+            panic!("Expected I/O error");
+        }
+    }
+
+    #[test]
+    fn load_file_unsupported_extension() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("xyz"); // Unsupported extension
+        writeln!(file, "some content").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let result = SourceFile::load(&path);
+        assert!(result.is_err());
+        if let Err(ParserError::UnsupportedLanguage { extension }) = result {
+            assert_eq!(extension, "xyz");
+        } else {
+            panic!("Expected UnsupportedLanguage error");
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn load_file_no_extension() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_file_name("noextension");
+        writeln!(file, "some content").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let result = SourceFile::load(&path);
+        assert!(result.is_err());
+        if let Err(ParserError::UnsupportedLanguage { .. }) = result {
+            // Expected
+        } else {
+            panic!("Expected UnsupportedLanguage error");
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn load_file_invalid_utf8() {
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("ts");
+        // Write invalid UTF-8 bytes
+        std::fs::write(&path, [0xFF, 0xFE, 0xFD]).unwrap();
+
+        let result = SourceFile::load(&path);
+        assert!(result.is_err());
+        if let Err(ParserError::InvalidUtf8 { .. }) = result {
+            // Expected
+        } else {
+            panic!("Expected InvalidUtf8 error");
+        }
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn tree_returns_syntax_tree() {
+        let source =
+            SourceFile::from_content("test.ts", "const x = 1;".to_string(), Grammar::TypeScript)
+                .unwrap();
+        let tree = source.tree();
+        assert_eq!(tree.root_node().kind(), "program");
+        assert!(!tree.root_node().has_error());
+    }
+
+    #[test]
+    fn tree_can_be_queried() {
+        let source = SourceFile::from_content(
+            "test.ts",
+            "function foo() {}".to_string(),
+            Grammar::TypeScript,
+        )
+        .unwrap();
+        let tree = source.tree();
+        // Navigate to function declaration
+        let root = tree.root_node();
+        let func = root.child(0).unwrap();
+        assert_eq!(func.kind(), "function_declaration");
+    }
+
+    #[test]
+    fn path_returns_correct_path() {
+        let source = SourceFile::from_content(
+            "my/path/test.ts",
+            "const x = 1;".to_string(),
+            Grammar::TypeScript,
+        )
+        .unwrap();
+        assert_eq!(source.path(), Path::new("my/path/test.ts"));
+    }
+
+    #[test]
+    fn update_content_changes_tree() {
+        let mut source =
+            SourceFile::from_content("test.ts", "const x = 1;".to_string(), Grammar::TypeScript)
+                .unwrap();
+
+        // Initially has lexical_declaration
+        let root = source.tree().root_node();
+        let first_child = root.child(0).unwrap();
+        assert_eq!(first_child.kind(), "lexical_declaration");
+
+        // Update to function
+        source
+            .update_content("function foo() {}".to_string())
+            .unwrap();
+
+        // Now has function_declaration
+        let root = source.tree().root_node();
+        let first_child = root.child(0).unwrap();
+        assert_eq!(first_child.kind(), "function_declaration");
+    }
+
+    #[test]
+    fn grammar_is_preserved_after_update() {
+        let mut source =
+            SourceFile::from_content("test.ts", "const x = 1;".to_string(), Grammar::TypeScript)
+                .unwrap();
+        assert_eq!(source.grammar(), Grammar::TypeScript);
+
+        source.update_content("const y = 2;".to_string()).unwrap();
+        assert_eq!(source.grammar(), Grammar::TypeScript);
+    }
+
+    #[test]
+    fn load_tsx_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("tsx");
+        writeln!(file, "const x = <div>Hello</div>;").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let source = SourceFile::load(&path).unwrap();
+        assert_eq!(source.grammar(), Grammar::Tsx);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn load_mts_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("mts");
+        writeln!(file, "export const x = 1;").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let source = SourceFile::load(&path).unwrap();
+        assert_eq!(source.grammar(), Grammar::TypeScript);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn load_cts_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("cts");
+        writeln!(file, "const x = require('foo');").unwrap();
+        std::fs::rename(file.path(), &path).unwrap();
+
+        let source = SourceFile::load(&path).unwrap();
+        assert_eq!(source.grammar(), Grammar::TypeScript);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn is_declaration_file_d_ts() {
+        let source = SourceFile::from_content(
+            "types.d.ts",
+            "declare function foo(): void;".to_string(),
+            Grammar::TypeScript,
+        )
+        .unwrap();
+        assert!(source.is_declaration_file());
+    }
+
+    #[test]
+    fn is_declaration_file_regular_ts() {
+        let source = SourceFile::from_content(
+            "main.ts",
+            "function foo() {}".to_string(),
+            Grammar::TypeScript,
+        )
+        .unwrap();
+        assert!(!source.is_declaration_file());
+    }
+
+    #[test]
+    fn is_declaration_file_d_mts() {
+        let source =
+            SourceFile::from_content("types.d.mts", "export {};".to_string(), Grammar::TypeScript)
+                .unwrap();
+        assert!(source.is_declaration_file());
+    }
+
+    #[test]
+    fn is_declaration_file_d_cts() {
+        let source =
+            SourceFile::from_content("types.d.cts", "export {};".to_string(), Grammar::TypeScript)
+                .unwrap();
+        assert!(source.is_declaration_file());
+    }
+
+    #[test]
+    fn load_filename_convention_grammars() {
+        let cases: &[(&str, &str, Grammar)] = &[];
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        for (name, content, expected) in cases {
+            let path = temp_dir.path().join(name);
+            std::fs::write(&path, content).unwrap();
+            let source = SourceFile::load(&path).unwrap();
+            assert_eq!(source.grammar(), *expected, "filename {name}");
+        }
+    }
+}

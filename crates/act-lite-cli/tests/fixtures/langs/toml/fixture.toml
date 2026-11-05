@@ -1,0 +1,5 @@
+[package]
+name = "widget"
+
+[dependencies]
+serde = "1"

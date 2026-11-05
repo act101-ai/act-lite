@@ -1,0 +1,161 @@
+---
+source: crates/act-lite-parser/tests/snapshots.rs
+expression: result
+---
+{
+  "type": "Symbols",
+  "symbols": [
+    {
+      "name": "users",
+      "kind": "class",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 14,
+          "byte_offset": 54
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 19,
+          "byte_offset": 59
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "id",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 21,
+          "byte_offset": 61
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 23,
+          "byte_offset": 63
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "email",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 44,
+          "byte_offset": 84
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 3,
+          "column": 49,
+          "byte_offset": 89
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "idx_users_email",
+      "kind": "variable",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 4,
+          "column": 14,
+          "byte_offset": 119
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 4,
+          "column": 29,
+          "byte_offset": 134
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "orders",
+      "kind": "class",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 14,
+          "byte_offset": 165
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 20,
+          "byte_offset": 171
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "id",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 22,
+          "byte_offset": 173
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 24,
+          "byte_offset": 175
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "user_id",
+      "kind": "field",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 45,
+          "byte_offset": 196
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 5,
+          "column": 52,
+          "byte_offset": 203
+        }
+      },
+      "visibility": "unknown"
+    },
+    {
+      "name": "active_orders",
+      "kind": "class",
+      "range": {
+        "start": {
+          "file": "sample.sql",
+          "line": 6,
+          "column": 13,
+          "byte_offset": 235
+        },
+        "end": {
+          "file": "sample.sql",
+          "line": 6,
+          "column": 26,
+          "byte_offset": 248
+        }
+      },
+      "visibility": "unknown"
+    }
+  ]
+}

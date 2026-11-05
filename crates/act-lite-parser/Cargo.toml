@@ -1,0 +1,53 @@
+[package]
+name = "act-lite-parser"
+description = "Tree-sitter integration with language-agnostic parsing interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+act-lite-core = { path = "../act-lite-core" }
+tree-sitter = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+tree-sitter-elixir = "0.3"
+tree-sitter-java = "0.23"
+tree-sitter-kotlin = { path = "../../vendor/tree-sitter-kotlin", version = "0.3" }
+tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-dockerfile = { path = "vendor/tree-sitter-dockerfile", version = "0.2.1" }
+tree-sitter-ruby = "0.23"
+tree-sitter-php = "0.24"
+tree-sitter-scala = "0.26"
+tree-sitter-hcl = "1.1"
+tree-sitter-html = "0.23"
+tree-sitter-swift = "0.7"
+tree-sitter-sequel = { path = "../../vendor/tree-sitter-sequel", version = "0.3" }
+tree-sitter-dart = { path = "../../vendor/tree-sitter-dart", version = "0.0.4" }
+tree-sitter-lua = "0.5.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-yaml = "0.7"
+streaming-iterator = "0.1"
+strum = { version = "0.28", features = ["derive"] }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+inventory = "0.3"
+tree-sitter-css = { path = "vendor/tree-sitter-css", version = "0.25.0" }
+tree-sitter-scss = { path = "../../vendor/tree-sitter-scss", version = "1.0.0" }
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-markdown = { path = "vendor/tree-sitter-markdown", version = "0.7.1" }
+walkdir = "2"
+
+[dev-dependencies]
+proptest = "1"
+toml = "1"
+insta = { version = "1", features = ["json"] }
+tempfile = "3"
