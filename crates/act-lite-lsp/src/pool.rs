@@ -97,7 +97,7 @@ impl LspPool {
     /// manager with no timeout. Warming happens while the MCP server is coming
     /// up, so an install reached from here is an unbounded network operation on
     /// a startup path, on every launch, for a server the user never asked to
-    /// install. A real query still goes through `get_client` and still installs.
+    /// install.
     pub async fn get_installed_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
         if self.disabled {
             return None;
@@ -111,6 +111,17 @@ impl LspPool {
         }
         which_on_path(&server.config(self.workspace_root.clone()).command)?;
         self.get_client(grammar).await
+    }
+
+    /// The client for a query: [`get_installed_client`](Self::get_installed_client),
+    /// or, when `ACT_LITE_INSTALL_LSP=1`, [`get_client`](Self::get_client),
+    /// which installs a missing server first.
+    pub async fn get_query_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
+        if crate::installer::install_opted_in() {
+            self.get_client(grammar).await
+        } else {
+            self.get_installed_client(grammar).await
+        }
     }
 
     pub async fn get_client(&self, grammar: Grammar) -> Option<Arc<LspClient>> {
@@ -151,7 +162,13 @@ impl LspPool {
         let language = server.binary_name().to_string();
 
         // Ensure the binary is installed before attempting to spawn
-        if let Err(e) = crate::installer::ensure_installed(&config, &language).await {
+        if let Err(e) = crate::installer::ensure_installed(
+            &config,
+            &language,
+            crate::installer::install_opted_in(),
+        )
+        .await
+        {
             warn!("LSP binary not available for {:?}: {}", server, e);
             self.failed_installs.write().await.insert(server);
             return None;
