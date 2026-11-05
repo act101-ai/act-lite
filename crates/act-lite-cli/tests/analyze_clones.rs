@@ -1131,3 +1131,51 @@ fn dart_label_expr(expr: &str) -> String {
         "String report(int x, int y) {{\n  var a = x + y * 2;\n  var b = a - x * 3;\n  var c = b * a + y;\n  var label = {expr};\n  if (c > a && b < y) {{\n    return label + c.toString();\n  }}\n  return label;\n}}\n"
     )
 }
+
+/// A C function of more than 50 tokens that assigns `label` the expression
+/// `expr`.
+fn c_label_expr(expr: &str) -> String {
+    format!(
+        "const char *report(int x, int y) {{\n  int a = x + y * 2;\n  int b = a - x * 3;\n  int c = b * a + y;\n  const char *label = {expr};\n  if (c > a && b < y) {{\n    return label + c;\n  }}\n  return label;\n}}\n"
+    )
+}
+
+/// A Python function of more than 50 tokens that assigns `label` the
+/// expression `expr`.
+fn python_label_expr(expr: &str) -> String {
+    format!(
+        "def report(x, y):\n    a = x + y * 2\n    b = a - x * 3\n    c = b * a + y\n    label = ({expr})\n    if c > a and b < y:\n        return label + str(c)\n    return label + str(a) + str(b)\n"
+    )
+}
+
+#[test]
+fn comments_between_quoted_parts_of_a_c_concatenation_do_not_change_the_form() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.c", &c_label_expr("\"a\" \"b\""));
+    write(dir.path(), "b.c", &c_label_expr("\"a\" /* one */ \"b\""));
+    write(
+        dir.path(),
+        "c.c",
+        &c_label_expr("\"a\"  /* one */\n   /* two */  \"b\""),
+    );
+    let out = analyze(dir.path());
+    assert_eq!(out["total"], 1, "{}", out["findings"]);
+    assert_eq!(out["findings"][0]["kind"], "exact");
+    assert_eq!(out["findings"][0]["variants"], 1);
+    assert_eq!(member_files(&out["findings"][0]).len(), 3);
+}
+
+#[test]
+fn comments_between_parts_of_a_python_interpolated_concatenation_do_not_change_the_form() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.py", &python_label_expr("f\"a{x}\" \"b\""));
+    write(
+        dir.path(),
+        "b.py",
+        &python_label_expr("f\"a{x}\"  # one\n        # two\n        \"b\""),
+    );
+    let out = analyze(dir.path());
+    assert_eq!(out["total"], 1, "{}", out["findings"]);
+    assert_eq!(out["findings"][0]["kind"], "exact");
+    assert_eq!(out["findings"][0]["variants"], 1);
+}
