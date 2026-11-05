@@ -15,6 +15,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "ignore",
+ "libc",
  "predicates",
  "regex",
  "rmcp",

@@ -203,7 +203,7 @@ impl FileSource for Counted<'_> {
         Ok(file)
     }
 
-    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
         self.inner.reread(rel)
     }
 }
@@ -743,7 +743,7 @@ mod tests {
             file
         }
 
-        fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
             self.inner.reread(rel)
         }
     }

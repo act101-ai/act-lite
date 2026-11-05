@@ -1,6 +1,7 @@
 //! Reading the files in scope: size bound, skipped files, parse failures and
 //! the removal of embedded test code, one file at a time.
 
+use super::classify::open_no_follow;
 use super::discovery::{Candidate, Skip};
 use super::embedded::{blank, test_regions};
 use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile};
@@ -94,7 +95,8 @@ pub trait FileSource: Send {
     fn next_file(&mut self) -> Result<Option<Parsed>, AnalyzeError>;
 
     /// Reads a file returned by `next_file` again, with the same blanking.
-    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError>;
+    /// A parse failure or test exclusion it finds is added to the evidence.
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError>;
 }
 
 /// A [`FileSource`] over a list of candidates.
@@ -179,7 +181,10 @@ impl FileSource for Reader {
         Ok(None)
     }
 
-    fn reread(&self, rel: &str) -> Result<Parsed, AnalyzeError> {
+    fn reread(&mut self, rel: &str) -> Result<Parsed, AnalyzeError> {
+        if self.cancel.is_cancelled() {
+            return Err(AnalyzeError::Cancelled);
+        }
         let failed = |cause: String| AnalyzeError::Failed {
             analysis: "analyze",
             cause,
@@ -188,12 +193,29 @@ impl FileSource for Reader {
             return Err(failed(format!("{rel} was not returned by this reader")));
         };
         match read_file(file, self.include_tests)? {
-            ReadResult::Parsed { parsed, .. } => Ok(parsed),
+            ReadResult::Parsed {
+                parsed,
+                parse_failures,
+                test_exclusions,
+            } => {
+                add_new(&mut self.outcome.parse_failures, parse_failures);
+                add_new(&mut self.outcome.test_exclusions, test_exclusions);
+                Ok(parsed)
+            }
             ReadResult::Skipped(skip) => Err(failed(format!(
                 "cannot read {rel} again: {}",
                 skip.file.reason
             ))),
             ReadResult::TestFile(_) => Err(failed(format!("{rel} is now a test file"))),
+        }
+    }
+}
+
+/// Adds each of `found` that `list` does not hold yet.
+fn add_new<T: PartialEq>(list: &mut Vec<T>, found: Vec<T>) {
+    for item in found {
+        if !list.contains(&item) {
+            list.push(item);
         }
     }
 }
@@ -249,10 +271,14 @@ fn skip(file: &Candidate, kind: SkipKind, reason: String) -> Skip {
 }
 
 /// The text of a regular file of at most [`MAX_FILE_BYTES`], or the skip that
-/// says why not. A file that is not regular is not opened.
+/// says why not. A symlink is not followed, and a file that is not regular is
+/// not read.
 fn read_content(file: &Candidate) -> Result<String, Skip> {
     let unreadable = |reason: String| skip(file, SkipKind::Unreadable, reason);
-    let meta = std::fs::metadata(&file.path)
+    let handle =
+        open_no_follow(&file.path).map_err(|err| unreadable(format!("cannot read file: {err}")))?;
+    let meta = handle
+        .metadata()
         .map_err(|err| unreadable(format!("cannot stat file: {err}")))?;
     if !meta.is_file() {
         return Err(unreadable("not a regular file".to_string()));
@@ -268,8 +294,9 @@ fn read_content(file: &Candidate) -> Result<String, Skip> {
         return Err(too_big(meta.len()));
     }
     let mut bytes = Vec::with_capacity(meta.len() as usize);
-    std::fs::File::open(&file.path)
-        .and_then(|f| f.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes))
+    handle
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|err| unreadable(format!("cannot read file: {err}")))?;
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(too_big(bytes.len() as u64));
@@ -402,6 +429,57 @@ mod tests {
         let skip = skipped(read_file(&candidate(dir.path(), "a.rs"), false));
         assert_eq!(skip.file.kind, SkipKind::Unreadable);
         assert!(!skip.file.reason.contains(dir.path().to_str().unwrap()));
+    }
+
+    /// The files discovery records in `root`.
+    #[cfg(unix)]
+    fn discovered(root: &Path) -> Vec<Candidate> {
+        use crate::analyze::discovery::{Includes, Scope, discover};
+        let scope = Scope::new(root, &[], &[], &[], Includes::default()).unwrap();
+        discover(root, &scope, &rust_only, &CancellationToken::new())
+            .unwrap()
+            .files
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_swapped_in_after_discovery_is_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "secret.rs", b"fn secret() {}\n");
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.rs", b"fn a() {}\n");
+        let files = discovered(dir.path());
+        assert_eq!(files.len(), 1);
+        fs::remove_file(dir.path().join("a.rs")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.rs"), dir.path().join("a.rs"))
+            .unwrap();
+        let skip = skipped(read_file(&files[0], false));
+        assert_eq!(skip.file.kind, SkipKind::Unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_swapped_in_after_discovery_is_not_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.rs", b"fn a() {}\n");
+        let files = discovered(dir.path());
+        assert_eq!(files.len(), 1);
+        fs::remove_file(dir.path().join("a.rs")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.path().join("a.rs"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let file = files[0].clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(skipped(read_file(&file, false)));
+        });
+        let skip = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("the read returns within 1 s");
+        assert_eq!(skip.file.kind, SkipKind::Unreadable);
+        assert_eq!(skip.file.reason, "not a regular file");
     }
 
     #[test]
@@ -635,6 +713,45 @@ mod tests {
         );
         assert!(!has_mod_tests(&again));
         drop(first);
+    }
+
+    #[test]
+    fn reread_after_cancel_is_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let cancel = CancellationToken::new();
+        let mut reader = Reader::new(&files, &rust_only, false, &cancel);
+        reader.next_file().unwrap().unwrap();
+        cancel.cancel();
+        assert!(matches!(
+            reader.reread("src/broken.rs"),
+            Err(AnalyzeError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn reread_records_a_new_parse_failure_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = conv(dir.path());
+        let mut reader = Reader::new(&files, &rust_only, false, &CancellationToken::new());
+        pulled(&mut reader);
+        write(
+            dir.path(),
+            "src/more.rs",
+            b"fn more() {\n    let c = ;\n}\n",
+        );
+        reader.reread("src/more.rs").unwrap();
+        reader.reread("src/more.rs").unwrap();
+        reader.reread("src/broken.rs").unwrap();
+        reader.reread("src/lib.rs").unwrap();
+        let out = reader.finish();
+        let failures: Vec<_> = out
+            .parse_failures
+            .iter()
+            .map(|f| (f.file.as_str(), f.range.start_line()))
+            .collect();
+        assert_eq!(failures, [("src/broken.rs", 4), ("src/more.rs", 2)]);
+        assert_eq!(out.test_exclusions.len(), 2);
     }
 
     #[test]
