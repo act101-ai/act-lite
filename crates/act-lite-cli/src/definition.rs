@@ -380,14 +380,51 @@ fn named_by_queries(grammar: Grammar) -> bool {
     )
 }
 
-/// The identifier at the 1-indexed position, then the texts of the
-/// `@reference` and `@name` captures that contain it, innermost first: a
-/// dotted name (a Nix `attrpath`, a Julia `field_expression`) follows the
-/// identifier inside it.
+/// The names at the 1-indexed position: the identifier there, else the
+/// innermost `@reference` or `@name` capture that contains it; then, in Nix
+/// and Julia, the dotted names around that identifier (each enclosing
+/// `attrpath` or `field_expression`), innermost first.
 fn names_at(source: &SourceFile, line: u32, column: u32) -> Vec<String> {
+    let tree = source.tree();
+    let bytes = tree.source().as_bytes();
+    let point = tree_sitter::Point {
+        row: line.saturating_sub(1) as usize,
+        column: column.saturating_sub(1) as usize,
+    };
+    let Some(leaf) = tree.root_node().descendant_for_point_range(point, point) else {
+        return Vec::new();
+    };
+    if !is_identifier_kind(leaf.kind()) {
+        return innermost_capture(source, line, column)
+            .into_iter()
+            .collect();
+    }
+    let mut names: Vec<String> = leaf
+        .utf8_text(bytes)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    let dotted = match source.grammar() {
+        Grammar::Nix => "attrpath",
+        Grammar::Julia => "field_expression",
+        _ => return names,
+    };
+    let mut node = leaf;
+    while let Some(parent) = node.parent().filter(|parent| parent.kind() == dotted) {
+        if let Ok(text) = parent.utf8_text(bytes) {
+            names.push(text.to_string());
+        }
+        node = parent;
+    }
+    names
+}
+
+/// The text of the innermost `@reference` (`references.scm`) or `@name`
+/// (`symbols.scm`) capture that contains the 1-indexed position.
+fn innermost_capture(source: &SourceFile, line: u32, column: u32) -> Option<String> {
     let support = source.grammar().language_support();
     let at = (line, column);
-    let mut captures: Vec<_> = [support.references_query(), support.symbols_query()]
+    [support.references_query(), support.symbols_query()]
         .into_iter()
         .filter_map(|query| act_lite_parser::execute_raw_query(source, query).ok())
         .flatten()
@@ -398,33 +435,14 @@ fn names_at(source: &SourceFile, line: u32, column: u32) -> Vec<String> {
                 && (start.line(), start.column()) <= at
                 && at < (end.line(), end.column())
         })
-        .collect();
-    captures.sort_by_key(|capture| {
-        let (start, end) = (capture.range.start(), capture.range.end());
-        (
-            std::cmp::Reverse((start.line(), start.column())),
-            (end.line(), end.column()),
-        )
-    });
-    let tree = source.tree();
-    let point = tree_sitter::Point {
-        row: line.saturating_sub(1) as usize,
-        column: column.saturating_sub(1) as usize,
-    };
-    let mut names: Vec<String> = tree
-        .root_node()
-        .descendant_for_point_range(point, point)
-        .filter(|node| is_identifier_kind(node.kind()))
-        .and_then(|node| node.utf8_text(tree.source().as_bytes()).ok())
-        .map(str::to_string)
-        .into_iter()
-        .collect();
-    for capture in captures {
-        if !names.contains(&capture.text) {
-            names.push(capture.text);
-        }
-    }
-    names
+        .min_by_key(|capture| {
+            let (start, end) = (capture.range.start(), capture.range.end());
+            (
+                std::cmp::Reverse((start.line(), start.column())),
+                (end.line(), end.column()),
+            )
+        })
+        .map(|capture| capture.text)
 }
 
 pub(crate) fn collect_definition_ranges_in_source(
@@ -540,13 +558,14 @@ pub(crate) enum DefinitionError {
 
 /// Resolves the definition of a symbol used at `line`/`column` of `source`.
 ///
-/// The names at the position are the identifier there and, in the grammars
-/// of [`named_by_queries`], every name capture around it. The symbol name is
-/// the non-blank `symbol` argument when it is none of them, else the
-/// outermost name at the position that has a declaration, else the
-/// innermost. Candidates are the declarations in the queried file plus
-/// every same-grammar file under `root` (unreadable siblings skipped), and
-/// the winner is the range closest to the position by [`range_priority`].
+/// The names at the position are the identifier there and, in Nix and
+/// Julia, the dotted names around it ([`names_at`]). A non-blank `symbol`
+/// argument that is none of them is looked up as given, except in the
+/// grammars of [`named_by_queries`], where it is not found. Otherwise the
+/// symbol is the outermost name at the position that has a declaration,
+/// else the innermost. Candidates are the declarations in the queried file
+/// plus every same-grammar file under `root` (unreadable siblings skipped),
+/// and the winner is the range closest to the position by [`range_priority`].
 pub(crate) fn resolve_definition(
     source: &SourceFile,
     root: &Path,
@@ -561,21 +580,26 @@ pub(crate) fn resolve_definition(
             .into_iter()
             .collect()
     };
-    let innermost = names.first().ok_or(DefinitionError::NoSymbolAtPosition)?;
-    let (symbol_name, candidates) =
-        if symbol.trim().is_empty() || names.iter().any(|name| name == symbol) {
-            names
-                .iter()
-                .rev()
-                .map(|name| (name.clone(), workspace_candidates(source, root, name)))
-                .find(|(_, candidates)| !candidates.is_empty())
-                .unwrap_or_else(|| (innermost.clone(), Vec::new()))
-        } else {
-            (
-                symbol.to_string(),
-                workspace_candidates(source, root, symbol),
-            )
-        };
+    if names.is_empty() {
+        return Err(DefinitionError::NoSymbolAtPosition);
+    }
+    let lookup = if symbol.trim().is_empty() || names.iter().any(|name| name == symbol) {
+        names
+    } else if named_by_queries(source.grammar()) {
+        return Err(DefinitionError::NotFound {
+            symbol: symbol.to_string(),
+        });
+    } else {
+        vec![symbol.to_string()]
+    };
+    let found = workspace_candidates(source, root, &lookup);
+    let (symbol_name, candidates) = lookup
+        .iter()
+        .cloned()
+        .zip(found)
+        .rev()
+        .find(|(_, candidates)| !candidates.is_empty())
+        .unwrap_or_else(|| (lookup[0].clone(), Vec::new()));
 
     let path = source.path();
     let best = candidates
@@ -587,15 +611,18 @@ pub(crate) fn resolve_definition(
     Ok((symbol_name, best))
 }
 
-/// The declarations of `symbol_name` in `source` and in every same-grammar
-/// file under `root`.
+/// The declarations of each of `names`, in order, in `source` and in every
+/// same-grammar file under `root`; each file is read and parsed once.
 fn workspace_candidates(
     source: &SourceFile,
     root: &Path,
-    symbol_name: &str,
-) -> Vec<act_lite_core::Range> {
+    names: &[String],
+) -> Vec<Vec<act_lite_core::Range>> {
     let path = source.path();
-    let mut candidates = collect_definition_ranges_in_source(source, symbol_name);
+    let mut candidates: Vec<_> = names
+        .iter()
+        .map(|name| collect_definition_ranges_in_source(source, name))
+        .collect();
     let mut workspace_paths = Vec::new();
     collect_workspace_paths(root, path, source.grammar(), &mut workspace_paths);
     for other in workspace_paths {
@@ -606,10 +633,9 @@ fn workspace_candidates(
         let Ok(other_source) = SourceFile::load(&other) else {
             continue;
         };
-        candidates.extend(collect_definition_ranges_in_source(
-            &other_source,
-            symbol_name,
-        ));
+        for (name, ranges) in names.iter().zip(&mut candidates) {
+            ranges.extend(collect_definition_ranges_in_source(&other_source, name));
+        }
     }
     candidates
 }
