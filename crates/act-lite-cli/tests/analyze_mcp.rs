@@ -438,8 +438,12 @@ fn cpu_seconds(pid: u32) -> f64 {
 }
 
 #[test]
-#[ignore = "local only: it builds a workspace that takes more than 5 seconds to analyze"]
 fn cancelled_call_stops_and_gets_no_response() {
+    // Local only: it needs a workspace that takes more than 5 seconds to analyze.
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: ACT_LITE_CHECK_PERF not set");
+        return;
+    }
     let ws = TempDir::new().unwrap();
     slow_workspace(ws.path());
     let mut session = Session::start(ws.path());
@@ -468,8 +472,12 @@ fn cancelled_call_stops_and_gets_no_response() {
 }
 
 #[test]
-#[ignore = "local only: it builds a workspace that takes more than 5 seconds to analyze"]
 fn running_analyses_do_not_block_the_serve_loop() {
+    // Local only: it needs a workspace that takes more than 5 seconds to analyze.
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: ACT_LITE_CHECK_PERF not set");
+        return;
+    }
     let ws = TempDir::new().unwrap();
     slow_workspace(ws.path());
     let mut session = Session::start(ws.path());
