@@ -413,6 +413,7 @@ fn top() void { const local = 1; _ = local; }
         ("function", "top"),
         ("variable", "v"),
         ("constant", "k"),
+        ("constant", "O"),
     ]);
     let kept = |set: BTreeSet<(String, String)>| -> BTreeSet<(String, String)> {
         set.into_iter()
@@ -512,5 +513,14 @@ fn callers_needs_a_language_server_on_cli_and_mcp() {
             "query type 'callers' needs a language server, and act-lite has none configured for Zig files"
         ),
         "{message}"
+    );
+}
+
+#[test]
+fn modified_containers_are_types_and_error_values_are_constants() {
+    let source = "const A = packed struct { a: u8 };\nconst e = error.Foo;\n";
+    assert_eq!(
+        skeleton_pairs(source),
+        pair_set(&[("struct", "A"), ("constant", "e")])
     );
 }
