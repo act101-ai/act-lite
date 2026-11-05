@@ -62,7 +62,7 @@ pub mod servers;
 pub mod types;
 pub mod watchdog;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../../tests/support/executable_script.rs"]
 mod executable_script;
 #[cfg(test)]
