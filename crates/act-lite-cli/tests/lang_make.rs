@@ -335,7 +335,9 @@ fn an_assignment_in_each_branch_is_reported_once_per_branch() {
 }
 
 /// Every path under `dir` with its modification time and, for a file, its bytes.
-fn listing(dir: &Path) -> Vec<(String, std::time::SystemTime, Option<Vec<u8>>)> {
+/// Every entry with its contents and, for a file, its modification time
+/// (a directory's own time moves on some file systems when it is read).
+fn listing(dir: &Path) -> Vec<(String, Option<std::time::SystemTime>, Option<Vec<u8>>)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(path) = stack.pop() {
@@ -349,7 +351,8 @@ fn listing(dir: &Path) -> Vec<(String, std::time::SystemTime, Option<Vec<u8>>)> 
                 .to_string_lossy()
                 .into_owned();
             let content = meta.is_file().then(|| std::fs::read(entry.path()).unwrap());
-            out.push((rel, meta.modified().unwrap(), content));
+            let modified = meta.is_file().then(|| meta.modified().unwrap());
+            out.push((rel, modified, content));
             if meta.is_dir() {
                 stack.push(entry.path());
             }

@@ -584,18 +584,21 @@ fn hidden_paths_are_seen_by_definition_and_outline_not_by_references() {
         "{definition}"
     );
     let outline = cli_json(ws.path(), &["query", "repo-outline"]);
-    let paths: Vec<&str> = outline["files"]
+    let paths: Vec<String> = outline["files"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|f| f["path"].as_str().unwrap())
+        .map(|f| f["path"].as_str().unwrap().replace('\\', "/"))
         .collect();
     for hidden in [
         ".eslintrc.json",
         ".devcontainer/devcontainer.json",
         ".Rprofile",
     ] {
-        assert!(paths.contains(&hidden), "{hidden} missing: {paths:?}");
+        assert!(
+            paths.iter().any(|p| p == hidden),
+            "{hidden} missing: {paths:?}"
+        );
     }
 }
 
