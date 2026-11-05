@@ -15,13 +15,18 @@ const VENDORED_DIRS: [&str; 7] = [
     "Carthage",
 ];
 
+/// Whether `name` is a directory name that marks vendored dependencies.
+pub fn is_vendored_name(name: &str) -> bool {
+    VENDORED_DIRS.contains(&name)
+}
+
 /// Whether `dir` is a vendored directory: a known name, or a Python virtual
 /// environment (a `pyvenv.cfg` file inside).
 pub fn is_vendored_dir(dir: &Path) -> bool {
     let named = dir
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| VENDORED_DIRS.contains(&n));
+        .is_some_and(is_vendored_name);
     named || is_regular_file(&dir.join("pyvenv.cfg"))
 }
 
@@ -185,6 +190,15 @@ mod tests {
         "Pods",
         "Carthage",
     ];
+
+    #[test]
+    fn vendored_names_match_by_name_alone() {
+        for name in VENDORED_NAMES {
+            assert!(is_vendored_name(name), "{name}");
+        }
+        assert!(!is_vendored_name("src"));
+        assert!(!is_vendored_name("vendors"));
+    }
 
     #[test]
     fn vendored_nested_name_uses_last_component() {
