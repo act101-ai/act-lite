@@ -303,3 +303,54 @@ fn julia_dotted_use_matches_the_whole_field_expression() {
     );
     assert_found(ws.path(), "a.jl", "show", 2, 6, "Base.show 1:1-1:10");
 }
+
+/// `answer` finished within five seconds, or the test fails.
+fn within_five_seconds(answer: impl FnOnce() -> Result<String, String> + Send + 'static) -> String {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(answer());
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("definition did not finish within 5 s")
+        .expect("definition failed")
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_back_to_the_root_do_not_multiply_the_walk() {
+    let ws = workspace(&[("a.py", "foo()\n"), ("b.py", "def foo():\n    pass\n")]);
+    std::fs::create_dir(ws.path().join("sub")).unwrap();
+    for link in ["up", "up2"] {
+        std::os::unix::fs::symlink("..", ws.path().join("sub").join(link)).unwrap();
+    }
+    let root = ws.path().to_path_buf();
+    let cli = within_five_seconds({
+        let root = root.clone();
+        move || cli_definition(&root, "a.py", "foo", 1, 1)
+    });
+    let mcp = within_five_seconds(move || mcp_definition(&root, "a.py", "foo", 1, 1));
+    assert_eq!(cli, "foo 1:5-1:8");
+    assert_eq!(mcp, cli);
+}
+
+#[test]
+fn a_sibling_over_the_size_cap_is_not_loaded() {
+    let ws = workspace(&[("a.py", "foo()\n"), ("big.py", "def foo():\n    pass\n")]);
+    let big = std::fs::OpenOptions::new()
+        .write(true)
+        .open(ws.path().join("big.py"))
+        .unwrap();
+    big.set_len(act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES + 1)
+        .unwrap();
+    assert_not_found(ws.path(), "a.py", "foo", 1, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_symlink_leaving_the_root_is_not_followed() {
+    let outside = workspace(&[("b.py", "def foo():\n    pass\n")]);
+    let ws = workspace(&[("a.py", "foo()\n")]);
+    std::os::unix::fs::symlink(outside.path().join("b.py"), ws.path().join("b.py")).unwrap();
+    assert_not_found(ws.path(), "a.py", "foo", 1, 1);
+}

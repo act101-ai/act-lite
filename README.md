@@ -387,7 +387,7 @@ the analyzers `analyze_patterns`, `analyze_hotspots` and `analyze_clones`
 `ready` or `not_installed`. MCP `skeleton` omits `import` entries for every
 language; `act-lite query skeleton` and `symbols-batch` list them.
 
-**Analyzer tools.** Each `analyze_*` tool (and `graph`) returns the same JSON
+**Analyzer tools.** Each `analyze_*` tool returns the same JSON
 as its `act-lite analyze` command (see [`act-lite analyze`](#act-lite-analyze)):
 for the same workspace root, language-server setting and parameters, the first
 content block, parsed, equals the command's stdout, parsed. The tool
@@ -429,10 +429,9 @@ positional arguments.
 | `analyze_patterns` | `act-lite analyze patterns` | `patterns` |
 | `analyze_hotspots` | `act-lite analyze hotspots` | `hotspots` |
 | `analyze_clones` | `act-lite analyze clones` | `clones` |
-| `analyze_cycles` | `act-lite analyze cycles` | `cycles` |
-| `analyze_coupling` | `act-lite analyze coupling` | `coupling` |
-| `analyze_impact` | `act-lite analyze impact` | `impact` |
-| `graph` | `act-lite analyze graph` | `graph` |
+
+The dependency analyzers (cycles, coupling, impact and graph) arrive in a later
+release.
 
 **Shared parameters.** Every analyzer takes these:
 
