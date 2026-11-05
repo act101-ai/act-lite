@@ -1094,7 +1094,13 @@ fn tools_list_is_the_readme_eight() {
         .unwrap_or_else(|| panic!("no tools in {reply}"));
     let mut names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     names.sort();
-    assert_eq!(names, README_TOOLS, "{reply}");
+    // Builds with debug assertions also serve the test analyzer.
+    let mut want = README_TOOLS.to_vec();
+    if cfg!(debug_assertions) {
+        want.push("analyze_fixture");
+        want.sort();
+    }
+    assert_eq!(names, want, "{reply}");
     for tool in tools {
         assert!(
             tool["description"].as_str().is_some_and(|d| !d.is_empty()),
