@@ -52,23 +52,54 @@ fn cmp_opt_range(a: Option<&CompactRange>, b: Option<&CompactRange>) -> Ordering
 /// Writes `path` relative to `root`: `/` separators, no leading `./`, each
 /// invalid UTF-8 sequence replaced by U+FFFD, `"."` for the root itself and a
 /// trailing `/` for a directory.
-pub fn rel_path(root: &Path, path: &Path, is_dir: bool) -> String {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    let parts: Vec<String> = rel
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect();
-    if parts.is_empty() {
-        return ".".to_string();
+///
+/// `.` and `..` are resolved lexically in both paths; the file system is not
+/// read. Fails when `path` is not under `root` after that.
+pub fn rel_path(root: &Path, path: &Path, is_dir: bool) -> Result<String, AnalyzeError> {
+    let root_parts = lexical(root);
+    let path_parts = lexical(path);
+    let Some(rel) = path_parts.strip_prefix(root_parts.as_slice()) else {
+        return Err(AnalyzeError::Failed {
+            analysis: "analyze",
+            cause: format!(
+                "path {} is not inside the workspace root {}",
+                path.display(),
+                root.display()
+            ),
+        });
+    };
+    if rel.is_empty() {
+        return Ok(".".to_string());
     }
-    let mut out = parts.join("/");
+    let mut out = rel
+        .iter()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
     if is_dir {
         out.push('/');
     }
-    out
+    Ok(out)
+}
+
+/// The components of `path` with `.` removed and each `..` applied to the
+/// component before it.
+fn lexical(path: &Path) -> Vec<Component<'_>> {
+    let mut parts = Vec::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => match parts.last() {
+                Some(Component::Normal(_)) => {
+                    parts.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => parts.push(c),
+            },
+            _ => parts.push(c),
+        }
+    }
+    parts
 }
 
 /// One result item of an analyzer.
@@ -473,9 +504,11 @@ impl<F: Finding> Envelope<F> {
     /// Sorts the findings by [`Finding::order`], cuts them to `limit`, and
     /// derives `total`, `truncated`, `complete` and `status`.
     ///
-    /// Fails when `evidence` has more than one source and a finding has no
-    /// source, or when an array in `details` has no sibling integer
-    /// `<name>_total`.
+    /// Fails when a serialized finding breaks the per-item `source` rule
+    /// (with several evidence sources, each finding has a `source` that is
+    /// one of them; with one source or none, no finding has `source`), or
+    /// when an array in `details` has no sibling integer `<name>_total` at
+    /// least its length.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         analysis: &'static str,
@@ -488,14 +521,8 @@ impl<F: Finding> Envelope<F> {
         details: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<Envelope<F>, AnalyzeError> {
         let failed = |cause: String| AnalyzeError::Failed { analysis, cause };
-        if evidence.sources.len() > 1
-            && let Some(f) = findings.iter().find(|f| f.source().is_none())
-        {
-            return Err(failed(format!(
-                "the finding in {} has no source, and the result has {} sources",
-                f.location().file,
-                evidence.sources.len()
-            )));
+        for f in &findings {
+            check_source(f, &evidence.sources).map_err(failed)?;
         }
         if let Some(details) = &details {
             check_totals(details).map_err(failed)?;
@@ -521,46 +548,131 @@ impl<F: Finding> Envelope<F> {
     }
 }
 
-/// Checks that every array in `map`, and in the objects it holds, has a
-/// sibling integer `<name>_total`.
+/// Checks the per-item `source` rule on the serialized finding.
+fn check_source<F: Finding>(finding: &F, sources: &[String]) -> Result<(), String> {
+    let file = &finding.location().file;
+    let value = serde_json::to_value(finding)
+        .map_err(|e| format!("the finding in {file} does not serialize: {e}"))?;
+    let source = value.as_object().and_then(|o| o.get("source"));
+    match (sources.len() > 1, source) {
+        (true, None) => Err(format!(
+            "the finding in {file} has no source, and the result has {} sources",
+            sources.len()
+        )),
+        (true, Some(s)) if !s.as_str().is_some_and(|s| sources.iter().any(|x| x == s)) => {
+            Err(format!(
+                "the finding in {file} has source {s}, which is not one of the evidence sources"
+            ))
+        }
+        (false, Some(s)) => Err(format!(
+            "the finding in {file} has source {s}, and the result has fewer than 2 sources"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Checks that every array in `map` has a sibling integer `<name>_total`
+/// that is at least its length, through nested objects and arrays. An array
+/// directly inside an array has no name, so it cannot have a total and is
+/// refused.
 fn check_totals(map: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
     for (name, value) in map {
-        match value {
-            serde_json::Value::Array(items) => {
-                let total = format!("{name}_total");
-                if !map.get(&total).is_some_and(|t| t.is_u64()) {
-                    return Err(format!(
-                        "details array `{name}` has no integer `{total}` beside it"
-                    ));
-                }
-                for item in items {
-                    if let serde_json::Value::Object(inner) = item {
-                        check_totals(inner)?;
-                    }
-                }
+        if let serde_json::Value::Array(items) = value {
+            let total = format!("{name}_total");
+            if !map
+                .get(&total)
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|t| t >= items.len() as u64)
+            {
+                return Err(format!(
+                    "details array `{name}` has no integer `{total}` of at least its length {} beside it",
+                    items.len()
+                ));
             }
-            serde_json::Value::Object(inner) => check_totals(inner)?,
-            _ => {}
         }
+        check_nested(name, value)?;
     }
     Ok(())
 }
 
-/// Rounds `x` half to even to 3 decimal places. An integral result is an
-/// integer; otherwise the number has no trailing zeros.
-///
-/// # Panics
-///
-/// Panics when `x` is not finite.
-pub fn decimal(x: f64) -> serde_json::Number {
-    assert!(x.is_finite(), "decimal requires a finite value, got {x}");
-    let text = format!("{x:.3}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    match text.parse::<i64>() {
-        Ok(n) => n.into(),
-        Err(_) => serde_json::Number::from_f64(text.parse().expect("formatted float"))
-            .expect("finite value"),
+fn check_nested(name: &str, value: &serde_json::Value) -> Result<(), String> {
+    match value {
+        serde_json::Value::Object(inner) => check_totals(inner),
+        serde_json::Value::Array(items) => items.iter().try_for_each(|item| match item {
+            serde_json::Value::Array(_) => Err(format!(
+                "details array `{name}` holds an array, which cannot have a `<name>_total`"
+            )),
+            _ => check_nested(name, item),
+        }),
+        _ => Ok(()),
     }
+}
+
+/// Rounds `x` half to even to 3 decimal places, applied to the shortest
+/// decimal form of `x` (the form that reads back as the same `f64`). An
+/// integral result is an integer when it fits `i64` or `u64`; otherwise the
+/// number has no trailing zeros.
+///
+/// Fails when `x` is not finite.
+pub fn decimal(x: f64) -> Result<serde_json::Number, AnalyzeError> {
+    if !x.is_finite() {
+        return Err(AnalyzeError::Failed {
+            analysis: "analyze",
+            cause: format!("a metric value is not finite: {x}"),
+        });
+    }
+    // `Display` of an `f64` is the shortest round-trip form, without exponent.
+    let text = x.abs().to_string();
+    let (int, frac) = text.split_once('.').unwrap_or((&text, ""));
+    let mut digits: Vec<u8> = int.bytes().chain(frac.bytes().take(3)).collect();
+    let kept = frac.len().min(3);
+    let rest = frac.as_bytes().get(3..).unwrap_or(&[]);
+    let round_up = match rest.first() {
+        Some(b'6'..=b'9') => true,
+        Some(b'5') => {
+            rest[1..].iter().any(|&d| d != b'0')
+                || digits.last().is_some_and(|d| (d - b'0') % 2 == 1)
+        }
+        _ => false,
+    };
+    let mut int_len = int.len();
+    if round_up {
+        let mut i = digits.len();
+        loop {
+            if i == 0 {
+                digits.insert(0, b'1');
+                int_len += 1;
+                break;
+            }
+            i -= 1;
+            if digits[i] == b'9' {
+                digits[i] = b'0';
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    let (int_digits, frac_digits) = digits.split_at(int_len);
+    let int_text = std::str::from_utf8(int_digits).expect("ascii digits");
+    let frac_text = std::str::from_utf8(&frac_digits[..kept]).expect("ascii digits");
+    let frac_text = frac_text.trim_end_matches('0');
+    let negative =
+        x.is_sign_negative() && (int_text.bytes().any(|d| d != b'0') || !frac_text.is_empty());
+    let sign = if negative { "-" } else { "" };
+    if frac_text.is_empty() {
+        let whole = format!("{sign}{int_text}");
+        if let Ok(n) = whole.parse::<i64>() {
+            return Ok(n.into());
+        }
+        if let Ok(n) = whole.parse::<u64>() {
+            return Ok(n.into());
+        }
+    }
+    let rounded: f64 = format!("{sign}{int_text}.{frac_text}0")
+        .parse()
+        .expect("decimal text");
+    Ok(serde_json::Number::from_f64(rounded).expect("finite value"))
 }
 
 /// The entries that left a scope empty, for the empty-scope error.
@@ -1185,12 +1297,43 @@ mod tests {
 
     #[test]
     fn decimal_rounds_half_to_even() {
-        let s = |x| serde_json::to_string(&decimal(x)).unwrap();
+        let s = |x| serde_json::to_string(&decimal(x).unwrap()).unwrap();
         assert_eq!(s(0.0625), "0.062");
         assert_eq!(s(0.1875), "0.188");
         assert_eq!(s(2.0), "2");
         assert_eq!(s(1.5), "1.5");
-        assert!(decimal(2.0).is_u64());
+        assert!(decimal(2.0).unwrap().is_u64());
+    }
+
+    #[test]
+    fn decimal_rounds_the_shortest_decimal_form() {
+        let s = |x| serde_json::to_string(&decimal(x).unwrap()).unwrap();
+        assert_eq!(s(0.0025), "0.002");
+        assert_eq!(s(1.0 / 400.0), "0.002");
+        assert_eq!(s(0.0005), "0");
+        assert_eq!(s(1.0 / 2000.0), "0");
+        assert_eq!(s(0.0015), "0.002");
+        assert_eq!(s(0.00051), "0.001");
+        assert_eq!(s(0.9995), "1");
+        assert_eq!(s(-0.0625), "-0.062");
+        assert_eq!(s(-0.0001), "0");
+    }
+
+    #[test]
+    fn decimal_integers_beyond_i64() {
+        let s = |x| serde_json::to_string(&decimal(x).unwrap()).unwrap();
+        assert_eq!(s(1e19), "10000000000000000000");
+        assert_eq!(s(-9e18), "-9000000000000000000");
+        assert_eq!(s(1e20), "1e+20");
+    }
+
+    #[test]
+    fn decimal_refuses_non_finite() {
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let err = decimal(x).unwrap_err();
+            assert!(matches!(err, AnalyzeError::Failed { .. }));
+            assert!(err.to_string().contains(&x.to_string()), "{err}");
+        }
     }
 
     fn worked_example_findings() -> Envelope<TestFinding> {
@@ -1374,6 +1517,69 @@ mod tests {
         )
     }
 
+    /// Reports a source through the trait but does not serialize it.
+    #[derive(Serialize)]
+    struct HiddenSource {
+        #[serde(flatten)]
+        location: Location,
+    }
+
+    impl Finding for HiddenSource {
+        fn location(&self) -> &Location {
+            &self.location
+        }
+        fn order(&self, other: &Self) -> Ordering {
+            self.location.cmp(&other.location)
+        }
+        fn source(&self) -> Option<&str> {
+            Some("tree-sitter")
+        }
+    }
+
+    fn with_sources<F: Finding>(
+        findings: Vec<F>,
+        sources: &[&str],
+    ) -> Result<Envelope<F>, AnalyzeError> {
+        Envelope::new(
+            "patterns",
+            findings,
+            Limit::DEFAULT,
+            Coverage::new(vec![], 1, 0),
+            Excluded::new(vec![]),
+            incomplete_none(),
+            Evidence::new(sources.iter().map(|s| s.to_string()).collect(), vec![]),
+            None,
+        )
+    }
+
+    #[test]
+    fn source_rule_is_checked_on_the_output() {
+        let hidden = HiddenSource {
+            location: Location {
+                file: "a.rs".into(),
+                range: None,
+            },
+        };
+        let err = with_sources(vec![hidden], &["lsp:rust-analyzer", "tree-sitter"])
+            .err()
+            .unwrap();
+        assert!(matches!(err, AnalyzeError::Failed { .. }), "{err}");
+
+        let mut bogus = finding("a.rs", None);
+        bogus.source = Some("bogus".into());
+        let err = with_sources(vec![bogus], &["lsp:rust-analyzer", "tree-sitter"])
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("bogus"), "{err}");
+
+        let mut single = finding("a.rs", None);
+        single.source = Some("tree-sitter".into());
+        let err = with_sources(vec![single], &["tree-sitter"]).err().unwrap();
+        assert!(matches!(err, AnalyzeError::Failed { .. }), "{err}");
+
+        assert!(with_sources(vec![finding("a.rs", None)], &["tree-sitter"]).is_ok());
+    }
+
     #[test]
     fn several_sources_need_a_source_on_every_finding() {
         let mut with = finding("a.rs", None);
@@ -1422,6 +1628,11 @@ mod tests {
         ));
         assert!(with_details(json!({"weights": [1, 2], "weights_total": "2"})).is_err());
         assert!(with_details(json!({"inner": {"weights": [1]}})).is_err());
+        assert!(with_details(json!({"w": [1, 2, 3], "w_total": 0})).is_err());
+        assert!(with_details(json!({"w": [1, 2, 3], "w_total": 3})).is_ok());
+        assert!(with_details(json!({"w": [[1, 2], [3]], "w_total": 2})).is_err());
+        assert!(with_details(json!({"w": [{"v": [1]}], "w_total": 1})).is_err());
+        assert!(with_details(json!({"w": [{"v": [1], "v_total": 1}], "w_total": 1})).is_ok());
         let env = with_details(json!({"weights": [1, 2], "weights_total": 2})).unwrap();
         assert_eq!(
             serde_json::to_value(&env).unwrap()["details"],
@@ -1432,17 +1643,32 @@ mod tests {
     #[test]
     fn rel_path_form() {
         let root = Path::new("/w");
-        assert_eq!(rel_path(root, Path::new("/w/src/a.rs"), false), "src/a.rs");
-        assert_eq!(
-            rel_path(root, Path::new("/w/./src/a.rs"), false),
-            "src/a.rs"
-        );
-        assert_eq!(rel_path(root, Path::new("/w"), true), ".");
-        assert_eq!(rel_path(root, Path::new("/w/vendor"), true), "vendor/");
-        assert_eq!(
-            rel_path(Path::new("."), Path::new("./src/x/a.rs"), false),
-            "src/x/a.rs"
-        );
+        let rel =
+            |root: &str, path: &str, is_dir| rel_path(Path::new(root), Path::new(path), is_dir);
+        assert_eq!(rel("/w", "/w/src/a.rs", false).unwrap(), "src/a.rs");
+        assert_eq!(rel("/w", "/w/./src/a.rs", false).unwrap(), "src/a.rs");
+        assert_eq!(rel_path(root, Path::new("/w"), true).unwrap(), ".");
+        assert_eq!(rel("/w", "/w/vendor", true).unwrap(), "vendor/");
+        assert_eq!(rel(".", "./src/x/a.rs", false).unwrap(), "src/x/a.rs");
+        assert_eq!(rel("/w", "/w/a/../b.rs", false).unwrap(), "b.rs");
+        assert_eq!(rel("/w/a/..", "/w/b/", true).unwrap(), "b/");
+    }
+
+    #[test]
+    fn rel_path_refuses_a_path_outside_the_root() {
+        let rel = |root: &str, path: &str| rel_path(Path::new(root), Path::new(path), false);
+        for (root, path) in [
+            ("/w", "/etc/passwd"),
+            ("/w", "/w/../etc/passwd"),
+            ("/w", "/wx/a.rs"),
+            ("/tmp/w", "/private/tmp/w/a.rs"),
+            ("/w", "a.rs"),
+        ] {
+            let err = rel(root, path).unwrap_err();
+            assert!(matches!(err, AnalyzeError::Failed { .. }), "{err}");
+            let text = err.to_string();
+            assert!(text.contains(root) && text.contains(path), "{text}");
+        }
     }
 
     #[cfg(unix)]
@@ -1452,7 +1678,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let path = Path::new("/w/src").join(OsStr::from_bytes(b"bad\xff.rs"));
         assert_eq!(
-            rel_path(Path::new("/w"), &path, false),
+            rel_path(Path::new("/w"), &path, false).unwrap(),
             "src/bad\u{FFFD}.rs"
         );
     }
