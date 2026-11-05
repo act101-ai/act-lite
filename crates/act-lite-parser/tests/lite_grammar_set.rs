@@ -46,6 +46,7 @@ fn grammar_set_is_exactly_the_lite_set() {
         "Nix",
         "Zig",
         "R",
+        "Julia",
     ]
     .into_iter()
     .collect();

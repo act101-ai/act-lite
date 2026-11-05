@@ -7,10 +7,11 @@ use crate::language::LanguageSupport;
 use crate::languages::{
     BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport,
     DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
-    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, KotlinSupport,
-    LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport, ProtobufSupport,
-    PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport, SqlSupport,
-    SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport, ZigSupport,
+    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, JuliaSupport,
+    KotlinSupport, LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport,
+    ProtobufSupport, PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport,
+    SqlSupport, SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
+    ZigSupport,
 };
 
 /// Supported language grammars.
@@ -55,6 +56,8 @@ pub enum Grammar {
     Json,
     /// JSONC — JSON with comments
     Jsonc,
+    /// Julia
+    Julia,
     /// Kotlin
     Kotlin,
     /// Lua
@@ -121,6 +124,7 @@ impl Grammar {
             Grammar::Jsx => "JSX",
             Grammar::Json => "JSON",
             Grammar::Jsonc => "JSONC",
+            Grammar::Julia => "Julia",
             Grammar::Kotlin => "Kotlin",
             Grammar::Lua => "Lua",
             Grammar::Make => "Make",
@@ -169,6 +173,7 @@ impl Grammar {
             Grammar::JavaScript => "javascript",
             Grammar::Jsx => "jsx",
             Grammar::Json | Grammar::Jsonc => "json",
+            Grammar::Julia => "julia",
             Grammar::Kotlin => "kotlin",
             Grammar::Lua => "lua",
             Grammar::Make => "make",
@@ -218,6 +223,7 @@ impl Grammar {
             Grammar::Jsx => &JsxSupport,
             Grammar::Json => &JsonSupport,
             Grammar::Jsonc => &JsoncSupport,
+            Grammar::Julia => &JuliaSupport,
             Grammar::Kotlin => &KotlinSupport,
             Grammar::Lua => &LuaSupport,
             Grammar::Make => &MakeSupport,
@@ -400,6 +406,7 @@ impl Grammar {
             "jsx" => Some(Grammar::Jsx),
             "json" => Some(Grammar::Json),
             "jsonc" | "code-workspace" => Some(Grammar::Jsonc),
+            "jl" => Some(Grammar::Julia),
             "kt" | "kts" => Some(Grammar::Kotlin),
             "lua" => Some(Grammar::Lua),
             "mk" | "mak" => Some(Grammar::Make),
@@ -658,6 +665,18 @@ mod tests {
         assert_eq!(Grammar::R.query_dir(), "r");
         assert!(matches!(
             Grammar::R.category(),
+            act_lite_core::registry::LanguageCategory::Dynamic
+        ));
+    }
+
+    #[test]
+    fn julia_extension_query_dir_and_category() {
+        assert_eq!(Grammar::from_extension("jl"), Some(Grammar::Julia));
+        assert_eq!(Grammar::from_extension("JL"), None);
+        assert_eq!(Grammar::Julia.name(), "Julia");
+        assert_eq!(Grammar::Julia.query_dir(), "julia");
+        assert!(matches!(
+            Grammar::Julia.category(),
             act_lite_core::registry::LanguageCategory::Dynamic
         ));
     }
@@ -948,7 +967,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            39,
+            40,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

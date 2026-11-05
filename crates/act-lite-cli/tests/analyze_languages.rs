@@ -21,6 +21,17 @@ fn r_branchy() -> String {
     source
 }
 
+/// A `@testset` holding one `@test` and one Julia function with ten `if`s:
+/// complexity 11.
+fn julia_testset() -> String {
+    let mut source = String::from("@testset \"t\" begin\n    @test 1 == 1\n    function f(x)\n");
+    for _ in 0..10 {
+        source.push_str("        if x > 0; x = 0; end\n");
+    }
+    source.push_str("        x\n    end\nend\n");
+    source
+}
+
 /// One `fn` and one `test "t"` block with ten `if`s: complexity 11.
 fn zig_with_a_test() -> String {
     let mut source =
@@ -141,6 +152,31 @@ fn r_testthat_files_are_tests_and_package_sources_are_not() {
             ),
             "hotspots" => {
                 assert_eq!(out["findings"][0]["file"], "R/test_x.R", "{out}");
+                assert_eq!(out["findings"][0]["top_functions"][0]["function"], "f");
+            }
+            _ => assert_eq!(out["findings"], json!([]), "{out}"),
+        }
+    }
+}
+
+#[test]
+fn julia_testset_in_a_source_file_is_not_a_test() {
+    let ws = workspace(&[("src/a.jl", &julia_testset())]);
+    let mut mcp = Mcp::start(ws.path());
+    for analyzer in ANALYZERS {
+        let out = both(ws.path(), &mut mcp, analyzer, &[], json!({}));
+        assert_eq!(out["excluded"]["tests"], json!([]), "{analyzer}: {out}");
+        assert_eq!(out["coverage"]["analyzed_files"], 1, "{analyzer}: {out}");
+        match analyzer {
+            "patterns" => assert_eq!(
+                out["findings"],
+                json!([{"file": "src/a.jl", "range": "3:5-15:8", "rule": "excessive_branching",
+                        "function": "f", "metric": "complexity", "value": 11, "threshold": 10,
+                        "metrics": {"lines": 13, "nesting": 1, "complexity": 11, "parameters": 1}}]),
+                "{out}"
+            ),
+            "hotspots" => {
+                assert_eq!(out["findings"][0]["file"], "src/a.jl", "{out}");
                 assert_eq!(out["findings"][0]["top_functions"][0]["function"], "f");
             }
             _ => assert_eq!(out["findings"], json!([]), "{out}"),

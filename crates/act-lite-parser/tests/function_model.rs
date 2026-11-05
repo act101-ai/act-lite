@@ -462,6 +462,26 @@ fn table_kinds(grammar: Grammar) -> &'static [&'static str] {
             "repeat_statement",
             "binary_operator",
         ],
+        Grammar::Julia => &[
+            "function_definition",
+            "assignment",
+            "macro_definition",
+            "arrow_function_expression",
+            "do_clause",
+            "signature",
+            "argument_list",
+            "call_expression",
+            "typed_expression",
+            "where_expression",
+            "if_statement",
+            "elseif_clause",
+            "for_statement",
+            "while_statement",
+            "try_statement",
+            "catch_clause",
+            "ternary_expression",
+            "binary_expression",
+        ],
         _ => &[],
     }
 }
@@ -492,9 +512,9 @@ fn node_kinds_are_the_table_kinds_and_exist_in_the_grammar() {
 }
 
 #[test]
-fn twenty_two_languages_are_supported() {
+fn twenty_three_languages_are_supported() {
     let names: Vec<&str> = supported().iter().map(|g| g.name()).collect();
-    assert_eq!(names.len(), 22, "{names:?}");
+    assert_eq!(names.len(), 23, "{names:?}");
     for grammar in Grammar::all() {
         assert_eq!(
             function_model::supports(grammar),
@@ -528,7 +548,7 @@ impl From<&Function> for Expected {
     }
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 23] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -539,6 +559,7 @@ const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
     ("java", "java"),
     ("javascript", "js"),
     ("jsx", "jsx"),
+    ("julia", "jl"),
     ("kotlin", "kt"),
     ("lua", "lua"),
     ("php", "php"),
@@ -588,7 +609,7 @@ fn over_and_under_fixtures_match_their_expected_values() {
     }
     grammars.sort_by_key(|g| g.name());
     grammars.dedup();
-    assert_eq!(grammars.len(), 22, "{grammars:?}");
+    assert_eq!(grammars.len(), 23, "{grammars:?}");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -796,7 +817,7 @@ fn java_instance_initializer_is_unnamed() {
 
 #[test]
 fn else_if_adds_a_decision_and_no_nesting() {
-    let cases: [(Grammar, &str); 31] = [
+    let cases: [(Grammar, &str); 35] = [
         (
             Grammar::Bash,
             "f() {\n  if a; then b; elif c; then d; fi\n}\n",
@@ -885,6 +906,19 @@ fn else_if_adds_a_decision_and_no_nesting() {
             Grammar::R,
             "f <- function() { if (a) {} else if (b) { if (c) {} } }",
         ),
+        (Grammar::Julia, "function f() if a elseif b end end"),
+        (
+            Grammar::Julia,
+            "function f()\n  if a\n  else\n    if b end\n  end\nend\n",
+        ),
+        (
+            Grammar::Julia,
+            "function f() if a else if b if (c) end end end end",
+        ),
+        (
+            Grammar::Julia,
+            "function f() if a elseif b if (c) end end end",
+        ),
     ];
     for (i, (grammar, source)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
@@ -937,6 +971,7 @@ fn declarations_without_a_body_are_not_functions() {
     assert!(functions(Grammar::Rust, "trait T { fn s(&self); }\n").is_empty());
     assert!(functions(Grammar::Swift, "protocol P { func g() }\n").is_empty());
     assert!(functions(Grammar::Zig, "extern fn g(a: u8) void;\n").is_empty());
+    assert!(functions(Grammar::Julia, "function f end\nx = 1\nx::Int = 2\n").is_empty());
     assert!(functions(Grammar::Dockerfile, "FROM alpine\nRUN true\n").is_empty());
     assert!(
         functions(
@@ -1149,7 +1184,7 @@ fn functions_iterates_lazily_in_location_order() {
 // in location order, expected count).
 #[test]
 fn parameter_forms() {
-    let cases: [(Grammar, &str, usize, u32); 35] = [
+    let cases: [(Grammar, &str, usize, u32); 41] = [
         (Grammar::C, "int f(void) { return 0; }", 0, 0),
         (Grammar::C, "int f(int a, ...) { return 0; }", 0, 2),
         (
@@ -1255,6 +1290,12 @@ fn parameter_forms() {
         (Grammar::R, "f <- function(x, k = 2, ...) x", 0, 3),
         (Grammar::R, "f <- function() 1", 0, 0),
         (Grammar::R, "lapply(v, function(y) y)", 0, 1),
+        (Grammar::Julia, "function f(x, y=1; z=2, w...) end", 0, 4),
+        (Grammar::Julia, "f(x, y)::Int = x", 0, 2),
+        (Grammar::Julia, "macro m(a, b) end", 0, 2),
+        (Grammar::Julia, "f = (x, y) -> x", 0, 2),
+        (Grammar::Julia, "f = x -> x", 0, 1),
+        (Grammar::Julia, "map(v) do; 1; end", 0, 0),
     ];
     for (i, (grammar, source, index, expected)) in cases.iter().enumerate() {
         let fs = functions(*grammar, source);
@@ -1353,6 +1394,24 @@ fn names_of_special_forms() {
             None,
         ]
     );
+    assert_eq!(
+        names(
+            Grammar::Julia,
+            "function f(x) x end\ng(x)::Int = x\nh(x::T) where {T} = x\nBase.show(io, x) = 1\n+(a, b) = 1\np{T}(x::T) = 1\nmacro m(ex) ex end\nfunction (x) x end\nmap(v) do y\n  y\nend\nk = x -> x\n",
+        ),
+        vec![
+            Some("f".to_string()),
+            Some("g".to_string()),
+            Some("h".to_string()),
+            Some("show".to_string()),
+            None,
+            Some("p".to_string()),
+            Some("m".to_string()),
+            None,
+            None,
+            None,
+        ]
+    );
 }
 
 // A multi-line string counts every line it spans, blank lines inside it included.
@@ -1432,7 +1491,7 @@ fn php_keyword_operators_are_case_insensitive() {
 #[test]
 fn anonymous_functions_are_unnamed_functions() {
     let m = |nesting, complexity| metrics(1, nesting, complexity, Some(1));
-    let cases: [(Grammar, &str, &str, &str, usize, Metrics); 28] = [
+    let cases: [(Grammar, &str, &str, &str, usize, Metrics); 31] = [
         (
             Grammar::Cpp,
             "void g() { auto l = ",
@@ -1656,6 +1715,30 @@ fn anonymous_functions_are_unnamed_functions() {
             "\n",
             0,
             m(0, 2),
+        ),
+        (
+            Grammar::Julia,
+            "f = ",
+            "x -> x > 0 ? 1 : 0",
+            "\n",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Julia,
+            "map(v) ",
+            "do x; x > 0 ? 1 : 0; end",
+            "\n",
+            0,
+            m(0, 2),
+        ),
+        (
+            Grammar::Julia,
+            "f = ",
+            "function (x) if x 1 else 0 end end",
+            "\n",
+            0,
+            m(1, 2),
         ),
     ];
     let mut failures = Vec::new();
