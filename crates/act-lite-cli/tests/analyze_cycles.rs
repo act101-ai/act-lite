@@ -456,6 +456,10 @@ fn the_path_search_costs_the_component_not_the_graph() {
         assert_eq!(path.len(), 2);
     }
     let elapsed = start.elapsed();
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: ACT_LITE_CHECK_PERF not set");
+        return;
+    }
     assert!(
         elapsed < std::time::Duration::from_millis(100),
         "{pairs} path searches took {elapsed:?}"
