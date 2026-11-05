@@ -2,13 +2,16 @@
 //! each with a shortest witness cycle through its first file.
 //! Every case runs the analyzer on a synthetic workspace.
 
-use act_lite_cli::analyze::cycles::CyclesAnalyzer;
-use act_lite_cli::analyze::deps::supports;
+use act_lite_cli::analyze::cycles::{CyclesAnalyzer, witness};
+use act_lite_cli::analyze::deps::{Edge, Evidence, supports};
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::envelope::AnalyzeError;
 use act_lite_cli::analyze::read::{FileSource, Parsed, Reader, SupportReader};
 use act_lite_cli::analyze::run::{Analyzer, Request, RunContext, run};
+use act_lite_core::CompactRange;
+use act_lite_parser::deps::RelationshipKind;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
@@ -26,17 +29,20 @@ fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 fn request_for(root: &Path, paths: &[String]) -> Request {
-    Request::new(root, paths, &[], &[], Includes::default(), 100).unwrap()
+    request_limited(root, paths, 100)
+}
+
+fn request_limited(root: &Path, paths: &[String], limit: u32) -> Request {
+    Request::new(root, paths, &[], &[], Includes::default(), limit).unwrap()
+}
+
+fn run_request(request: &Request) -> Value {
+    let envelope = run(&CyclesAnalyzer, request, &CancellationToken::new()).unwrap();
+    serde_json::to_value(envelope).unwrap()
 }
 
 fn cycles_in(root: &Path, paths: &[String]) -> Value {
-    let envelope = run(
-        &CyclesAnalyzer,
-        &request_for(root, paths),
-        &CancellationToken::new(),
-    )
-    .unwrap();
-    serde_json::to_value(envelope).unwrap()
+    run_request(&request_for(root, paths))
 }
 
 fn cycles(root: &Path) -> Value {
@@ -132,6 +138,11 @@ fn the_ts_fixture_has_one_cycle_and_an_incomplete_result() {
     );
     let unresolved = out["incomplete"]["unresolved"].as_array().unwrap();
     assert_eq!(unresolved.len(), 2);
+    assert_eq!(
+        out["details"]["not_followed"],
+        json!([{"file": "src/style.css"}])
+    );
+    assert_eq!(out["details"]["not_followed_total"], 1);
 }
 
 #[test]
@@ -158,12 +169,15 @@ fn the_witness_is_the_shortest_cycle_through_the_first_file() {
     let finding = &out["findings"][0];
     assert_eq!(finding["members_total"], 3);
     assert_eq!(finding["edges_total"], 4);
-    let path = finding["path"].as_array().unwrap();
-    let hops: Vec<(&str, &str)> = path
-        .iter()
-        .map(|s| (s["file"].as_str().unwrap(), s["to"].as_str().unwrap()))
-        .collect();
-    assert_eq!(hops, [("src/a.ts", "src/b.ts"), ("src/b.ts", "src/a.ts")]);
+    assert_eq!(
+        finding["path"],
+        json!([
+            {"file": "src/a.ts", "range": "1:1-1:14", "kind": "import",
+             "specifier": "./b", "to": "src/b.ts"},
+            {"file": "src/b.ts", "range": "2:1-2:14", "kind": "import",
+             "specifier": "./a", "to": "src/a.ts"},
+        ])
+    );
     assert_eq!(finding["path_total"], 2);
 }
 
@@ -183,6 +197,23 @@ fn findings_are_ordered_by_size_then_file() {
     assert_eq!(findings[0]["members_total"], 3);
     assert_eq!(findings[1]["file"], "src/a.ts");
     assert_eq!(findings[1]["members_total"], 2);
+    assert_eq!(out["details"]["cyclic_files"], 5);
+}
+
+#[test]
+fn the_limit_cuts_findings_but_not_the_totals() {
+    let ws = workspace(&[
+        ("src/a.ts", "import './b';\n"),
+        ("src/b.ts", "import './a';\n"),
+        ("src/c.ts", "import './d';\n"),
+        ("src/d.ts", "import './e';\n"),
+        ("src/e.ts", "import './c';\n"),
+    ]);
+    let out = run_request(&request_limited(ws.path(), &[], 1));
+    let findings = out["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["file"], "src/c.ts");
+    assert_eq!(out["total"], 2);
     assert_eq!(out["details"]["cyclic_files"], 5);
 }
 
@@ -209,11 +240,22 @@ fn rust_containment_is_no_cycle_until_the_parent_uses_the_child() {
         "use crate::X;\npub struct Y;\n",
     ));
     let out = cycles(ws.path());
+    assert_eq!(out["status"], "findings");
+    assert_eq!(out["complete"], true);
     assert_eq!(out["total"], 1);
+    let finding = &out["findings"][0];
+    assert_eq!(files_of(&finding["members"]), ["src/a.rs", "src/lib.rs"]);
+    assert_eq!(finding["edges_total"], 2);
     assert_eq!(
-        files_of(&out["findings"][0]["members"]),
-        ["src/a.rs", "src/lib.rs"]
+        finding["path"],
+        json!([
+            {"file": "src/a.rs", "range": "1:1-1:14", "kind": "use",
+             "specifier": "crate::X", "to": "src/lib.rs"},
+            {"file": "src/lib.rs", "range": "1:1-1:7", "kind": "module",
+             "specifier": "a", "to": "src/a.rs"},
+        ])
     );
+    assert_eq!(finding["path_total"], 2);
 }
 
 #[test]
@@ -233,10 +275,20 @@ fn a_cycle_of_sixty_files_is_bounded_to_twenty_entries() {
     let ws = workspace(&files);
     let out = cycles(ws.path());
     let finding = &out["findings"][0];
+    let first_twenty: Vec<String> = (0..20).map(|i| format!("src/g{i:02}.ts")).collect();
+    assert_eq!(files_of(&finding["members"]), first_twenty);
     assert_eq!(finding["members_total"], 60);
-    assert_eq!(finding["members"].as_array().unwrap().len(), 20);
+    let path = finding["path"].as_array().unwrap();
+    assert_eq!(path.len(), 20);
+    assert_eq!(path[0]["file"], "src/g00.ts");
+    for (i, step) in path.iter().enumerate() {
+        assert_eq!(step["file"], format!("src/g{i:02}.ts"));
+        assert_eq!(step["to"], format!("src/g{:02}.ts", i + 1));
+    }
+    for pair in path.windows(2) {
+        assert_eq!(pair[0]["to"], pair[1]["file"]);
+    }
     assert_eq!(finding["path_total"], 60);
-    assert_eq!(finding["path"].as_array().unwrap().len(), 20);
     assert_eq!(out["details"]["cyclic_files"], 60);
 }
 
@@ -322,4 +374,90 @@ fn a_token_cancelled_before_the_run_gives_the_cancelled_error() {
     cancel.cancel();
     let result = run(&CyclesAnalyzer, &request_for(ws.path(), &[]), &cancel);
     assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+}
+
+#[test]
+fn not_followed_lists_at_most_one_hundred_targets() {
+    let imports: String = (0..101)
+        .map(|i| format!("import '../out/b{i:03}';\n"))
+        .collect();
+    let targets: Vec<(String, String)> = (0..101)
+        .map(|i| {
+            (
+                format!("out/b{i:03}.ts"),
+                "export const b = 1;\n".to_string(),
+            )
+        })
+        .collect();
+    let mut files: Vec<(&str, &str)> = vec![("in/a.ts", imports.as_str())];
+    files.extend(targets.iter().map(|(p, c)| (p.as_str(), c.as_str())));
+    let ws = workspace(&files);
+    let out = cycles_in(ws.path(), &["in".to_string()]);
+    let listed = files_of(&out["details"]["not_followed"]);
+    let expected: Vec<String> = (0..100).map(|i| format!("out/b{i:03}.ts")).collect();
+    assert_eq!(listed, expected);
+    assert_eq!(out["details"]["not_followed_total"], 101);
+}
+
+#[test]
+fn a_module_only_edge_to_a_file_outside_the_paths_is_listed_as_not_followed() {
+    let ws = workspace(&crate_files("mod a;\npub struct X;\n", "use crate::X;\n"));
+    let out = cycles_in(ws.path(), &["src/lib.rs".to_string()]);
+    assert_eq!(out["status"], "no_findings");
+    assert_eq!(out["complete"], true);
+    assert_eq!(
+        out["details"]["not_followed"],
+        json!([{"file": "src/a.rs"}])
+    );
+    assert_eq!(out["details"]["not_followed_total"], 1);
+}
+
+#[test]
+fn a_cancelled_token_stops_the_path_search() {
+    let (edges, out) = two_cycles(1);
+    let refs: Vec<&Edge> = edges.iter().collect();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let result = witness(&out, &refs, &[0, 1], &cancel);
+    assert!(matches!(result, Err(AnalyzeError::Cancelled)));
+}
+
+/// `pairs` independent two-file cycles: node `2k` and node `2k + 1` import
+/// each other, and edge `n` leaves node `n`.
+fn two_cycles(pairs: usize) -> (Vec<Edge>, Vec<Vec<(usize, usize)>>) {
+    let n = 2 * pairs;
+    let edges = (0..n)
+        .map(|i| Edge {
+            file: format!("src/f{i:05}.js"),
+            to: format!("src/f{:05}.js", i ^ 1),
+            to_analyzed: true,
+            kinds: BTreeSet::from([RelationshipKind::Import]),
+            evidence: vec![Evidence {
+                range: CompactRange::new(1, 1, 1, 14),
+                kind: RelationshipKind::Import,
+                specifier: "./x".to_string(),
+            }],
+            evidence_total: 1,
+        })
+        .collect();
+    let out = (0..n).map(|i| vec![(i ^ 1, i)]).collect();
+    (edges, out)
+}
+
+#[test]
+fn the_path_search_costs_the_component_not_the_graph() {
+    let pairs = 10_000;
+    let (edges, out) = two_cycles(pairs);
+    let refs: Vec<&Edge> = edges.iter().collect();
+    let cancel = CancellationToken::new();
+    let start = std::time::Instant::now();
+    for k in 0..pairs {
+        let path = witness(&out, &refs, &[2 * k, 2 * k + 1], &cancel).unwrap();
+        assert_eq!(path.len(), 2);
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "{pairs} path searches took {elapsed:?}"
+    );
 }
