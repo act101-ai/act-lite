@@ -370,3 +370,112 @@ fn the_standard_library_list() {
         assert!(!STDLIB_MODULES.contains(&name), "{name}");
     }
 }
+
+#[test]
+fn a_broken_dependency_file_is_read_for_a_standard_library_name() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pyproject.toml", "[project\n");
+    write(ws.path(), "main.py", "import os\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "os"),
+        unresolved("pyproject.toml could not be read")
+    );
+    let inputs = &graph.common_details()["resolution_inputs"];
+    assert_eq!(inputs[0]["file"], "pyproject.toml");
+    assert!(inputs[0]["error"].is_string());
+}
+
+fn not_declared(name: &str) -> Outcome {
+    unresolved(&format!(
+        "{name} is not a standard-library module, a declared dependency or a module under the roots"
+    ))
+}
+
+#[test]
+fn a_setup_cfg_url_line_declares_no_name() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "setup.cfg",
+        "[options]\ninstall_requires =\n    https://example.com/pkg.whl\n    file: reqs.txt\n",
+    );
+    write(ws.path(), "main.py", "import https\nimport file\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "https"), not_declared("https"));
+    assert_eq!(outcome(&graph, "main.py", "file"), not_declared("file"));
+}
+
+#[test]
+fn a_blank_line_does_not_end_install_requires() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "setup.cfg",
+        "[options]\ninstall_requires =\n    alpha\n\n    beta\n",
+    );
+    write(ws.path(), "main.py", "import beta\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "beta"), Outcome::External);
+}
+
+#[test]
+fn a_name_with_a_url_declares_the_name() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "requirements.txt",
+        "alpha@https://x.org/alpha.whl\n",
+    );
+    write(ws.path(), "main.py", "import alpha\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "alpha"), Outcome::External);
+}
+
+#[test]
+fn a_byte_order_mark_does_not_hide_the_first_name() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "requirements.txt", "\u{feff}alpha\n");
+    write(ws.path(), "main.py", "import alpha\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "alpha"), Outcome::External);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_workspace_is_external() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    write(tmp.path(), "outside/ext/__init__.py", "");
+    write(tmp.path(), "outside/far.py", "");
+    write(&root, "pkg/__init__.py", "");
+    write(&root, "main.py", "import ext\nimport pkg.far\n");
+    std::os::unix::fs::symlink(tmp.path().join("outside/ext"), root.join("ext")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("outside/far.py"), root.join("pkg/far.py")).unwrap();
+    let graph = build(&root, &[]);
+    assert_eq!(outcome(&graph, "main.py", "ext"), Outcome::External);
+    assert_eq!(outcome(&graph, "main.py", "pkg.far"), Outcome::External);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_directory_inside_a_root_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "app/__init__.py", "");
+    write(ws.path(), "app/sub/x.py", "");
+    write(
+        ws.path(),
+        "app/main.py",
+        "import app.sub.x\nimport app.sub\n",
+    );
+    write(ws.path(), "app/other.py", "from app import sub\n");
+    let sub = ws.path().join("app/sub");
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o000)).unwrap();
+    let graph = build(ws.path(), &["app/main.py", "app/other.py"]);
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o755)).unwrap();
+    let reason = unresolved("app/sub/ could not be read");
+    assert_eq!(outcome(&graph, "app/main.py", "app.sub.x"), reason);
+    assert_eq!(outcome(&graph, "app/main.py", "app.sub"), reason);
+    assert_eq!(outcome(&graph, "app/other.py", "app.sub"), reason);
+}
