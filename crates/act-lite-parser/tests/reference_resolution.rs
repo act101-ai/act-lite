@@ -413,6 +413,7 @@ fn reference_ranges_preserve_anchor_validation_errors() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn walk_reference_siblings_discloses_unreadable_sibling() {
     // chmod 000 on an owned file denies the read even for the owner, so the
