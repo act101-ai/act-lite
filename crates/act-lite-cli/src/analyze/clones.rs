@@ -115,8 +115,8 @@ pub struct CloneFinding {
     pub members_total: u64,
     /// The number of distinct exact forms.
     pub variants: u32,
-    /// The node count of the renamed form: orders a wrapper before the
-    /// node it wraps at the same location.
+    /// The subject's node count: orders a wrapper before the node it wraps
+    /// at the same location.
     #[serde(skip)]
     nodes: u32,
 }
@@ -144,6 +144,8 @@ struct Candidate {
     grammar: Grammar,
     range: CompactRange,
     tokens: u32,
+    /// The nodes of the subtree, comments left out; a replaced literal's
+    /// nodes all count, so a proper ancestor always has more.
     nodes: u32,
     exact: u128,
     blind: u128,
@@ -205,10 +207,12 @@ impl Analyzer for ClonesAnalyzer {
         for members in &mut classes {
             members.sort_by_key(|&i| location(i));
         }
+        // A proper ancestor has more nodes than its descendant, so a class
+        // is decided before every class with a member inside its largest.
+        let largest = |m: &[usize]| m.iter().map(|&i| candidates[i].nodes).max();
         classes.sort_by(|a, b| {
-            candidates[b[0]]
-                .nodes
-                .cmp(&candidates[a[0]].nodes)
+            largest(b)
+                .cmp(&largest(a))
                 .then_with(|| location(a[0]).cmp(&location(b[0])))
         });
 
@@ -481,7 +485,7 @@ fn walk<'t>(
                 let identifier = is_identifier_token(grammar, &node, text);
                 let blind = if identifier {
                     start(b'I', node).finish128().as_u128()
-                } else if literals.contains(&node.kind()) {
+                } else if is_literal(node, literals) {
                     lit
                 } else {
                     exact
@@ -506,10 +510,9 @@ fn walk<'t>(
                 nodes: done.nodes,
                 identifier: done.identifier,
             };
-            if literals.contains(&node.kind()) && !summary.identifier {
+            if is_literal(node, literals) && !summary.identifier {
                 summary.blind = lit;
                 summary.tokens = 1;
-                summary.nodes = 1;
             }
             let Some(parent) = stack.last_mut() else {
                 return Ok(());
@@ -569,7 +572,7 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
                 h.write_u8(n.is_named() as u8);
                 put(&mut h, n.kind().as_bytes());
                 h.write_u32(k);
-            } else if literals.contains(&n.kind()) {
+            } else if is_literal(n, literals) {
                 h.write_u8(b'$');
             } else {
                 h.write_u8(b'L');
@@ -577,7 +580,7 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
                 put(&mut h, n.kind().as_bytes());
                 put(&mut h, text[n.byte_range()].as_bytes());
             }
-        } else if literals.contains(&n.kind()) && !holds_identifier(n, grammar, text) {
+        } else if is_literal(n, literals) && !holds_identifier(n, grammar, text) {
             h.write_u8(b'$');
         } else {
             h.write_u8(b'(');
@@ -595,6 +598,12 @@ fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
             h.write_u8(b')');
         }
     }
+}
+
+/// Whether `node` is a literal: a named node of a Table L kind. A keyword
+/// token of the same kind (TypeScript `string`) is not.
+fn is_literal(node: Node, literals: &[&str]) -> bool {
+    node.is_named() && literals.contains(&node.kind())
 }
 
 /// Whether `node`'s subtree holds an identifier token outside comments.
@@ -791,7 +800,11 @@ mod tests {
             let language = grammar.language_support().ts_language();
             assert!(!literal_kinds(grammar).is_empty(), "{grammar:?}");
             for kind in literal_kinds(grammar) {
-                if tree_sitter::Query::new(&language, &format!("({kind}) @probe")).is_err() {
+                let id = language.id_for_node_kind(kind, true);
+                if tree_sitter::Query::new(&language, &format!("({kind}) @probe")).is_err()
+                    || id == 0
+                    || !language.node_kind_is_named(id)
+                {
                     missing.push(format!("{grammar:?}: {kind}"));
                 }
             }

@@ -998,3 +998,53 @@ fn focus_on_a_test_file_or_a_data_file_is_not_analyzed() {
         json!(["data.json", "tests/copy.py"])
     );
 }
+
+/// A TypeScript function of 52 tokens whose parameters and result have type
+/// `ty`; its body has 35.
+fn typed_ts(ty: &str) -> String {
+    format!(
+        "function f(a: {ty}, b: {ty}, c: {ty}): {ty} {{\n  let x = a * 2 + b * 3 - c / 4;\n  let y = x * 5 + b * 6 - c / 7;\n  return y;\n}}\n"
+    )
+}
+
+#[test]
+fn type_keywords_are_not_literals() {
+    for (one, other) in [("string", "number"), ("string", "boolean")] {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.ts", &typed_ts(one));
+        write(dir.path(), "b.ts", &typed_ts(other));
+        assert_eq!(
+            analyze(dir.path())["status"],
+            "no_findings",
+            "{one} {other}"
+        );
+    }
+    let dir = tempfile::tempdir().unwrap();
+    // 52 tokens; the body has 31.
+    let php = |ty: &str| {
+        format!(
+            "<?php\nfunction f({ty} $a, {ty} $b, {ty} $c, {ty} $d): {ty} {{\n    $x = $a * 2 + $b;\n    $z = $x * 8 - $b + $c;\n    return $z;\n}}\n"
+        )
+    };
+    write(dir.path(), "a.php", &php("string"));
+    write(dir.path(), "b.php", &php("float"));
+    assert_eq!(analyze(dir.path())["status"], "no_findings");
+    write(dir.path(), "c.php", &php("float"));
+    assert_eq!(analyze(dir.path())["total"], 1);
+}
+
+#[test]
+fn a_clone_inside_a_replaced_literal_is_not_reported_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let sum: Vec<String> = (1..=30).map(|n| n.to_string()).collect();
+    let function = format!(
+        "def f(a, b):\n    x = a * 2 + b * 3 - a / 4\n    x = x * 5 + b * 6 - a / 7\n    x = x * 8 + b * 9 - a / 10\n    y = x * 2 + b\n    return f\"{{{}}}\"\n",
+        sum.join(" + ")
+    );
+    write(dir.path(), "a.py", &function);
+    write(dir.path(), "b.py", &function);
+    let out = analyze(dir.path());
+    assert_eq!(out["total"], 1, "{}", out["findings"]);
+    assert_eq!(out["findings"][0]["tokens"], 56);
+    assert_eq!(out["findings"][0]["range"], "1:1-6:155");
+}
