@@ -30,6 +30,7 @@ rpassword = "7"
 schemars = "1.2"
 serde.workspace = true
 serde_json.workspace = true
+siphasher = "1.0.1"
 tokio.workspace = true
 tokio-util = "0.7"
 tracing.workspace = true
