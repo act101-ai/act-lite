@@ -97,6 +97,9 @@ impl Resolver for TestResolver {
             cx.input_error(input, "does not parse".to_string());
             return Outcome::Resolved(Vec::new());
         }
+        if let Some(path) = spec.strip_prefix("vendored:") {
+            return Outcome::Unresolved(cx.vendored(path).to_string());
+        }
         if spec == "failed:" {
             let first = cx.input_failed(Family::JsTs).unwrap_or("none");
             return Outcome::Unresolved(first.to_string());
@@ -632,4 +635,33 @@ fn an_absolute_path_does_not_normalize() {
     let graph = graph(ws.path());
     assert!(graph.edges().is_empty());
     assert_eq!(graph.common_details()["relationships"]["external"], 1);
+}
+
+#[test]
+fn a_vendored_path_has_a_vendored_name_or_a_pyvenv_marker_on_its_way() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "src/a.ts",
+        "import 'vendored:node_modules/x/i.js';\nimport 'vendored:lib/.venv/p/m.py';\nimport 'vendored:src/vendors/k.ts';\nimport 'vendored:src/b.ts';\nimport 'vendored:a/pyvenv.cfg';\n",
+    );
+    write(ws.path(), "lib/.venv/pyvenv.cfg", "home = /usr\n");
+    write(ws.path(), "a/pyvenv.cfg", "home = /usr\n");
+    let cancel = CancellationToken::new();
+    let graph = build(ws.path(), &[], &TestResolver::new(), &cancel).unwrap();
+    let answers: Vec<String> = graph
+        .unresolved(&|_| true)
+        .into_iter()
+        .map(|u| format!("{} {}", u.target, u.reason))
+        .collect();
+    assert_eq!(
+        answers,
+        [
+            "vendored:node_modules/x/i.js true",
+            "vendored:lib/.venv/p/m.py true",
+            "vendored:src/vendors/k.ts false",
+            "vendored:src/b.ts false",
+            "vendored:a/pyvenv.cfg true",
+        ]
+    );
 }
