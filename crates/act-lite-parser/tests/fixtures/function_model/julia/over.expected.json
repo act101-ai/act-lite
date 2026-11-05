@@ -1,0 +1,58 @@
+[
+  {
+    "name": "f",
+    "range": "1:1-52:4",
+    "lines": 52,
+    "nesting": 5,
+    "complexity": 11,
+    "parameters": 6
+  },
+  {
+    "name": null,
+    "range": "20:13-20:23",
+    "lines": 1,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": "g",
+    "range": "53:1-53:18",
+    "lines": 1,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": "h",
+    "range": "54:1-54:22",
+    "lines": 1,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": "twice",
+    "range": "55:1-57:4",
+    "lines": 3,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": "k",
+    "range": "58:1-60:4",
+    "lines": 1,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": null,
+    "range": "58:15-60:4",
+    "lines": 3,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  }
+]

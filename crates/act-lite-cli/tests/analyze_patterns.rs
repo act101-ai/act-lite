@@ -224,7 +224,7 @@ fn a6_two_rules_on_one_function_sort_by_rule() {
     );
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 23] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -235,6 +235,7 @@ const FIXTURE_LANGUAGES: [(&str, &str); 22] = [
     ("java", "java"),
     ("javascript", "js"),
     ("jsx", "jsx"),
+    ("julia", "jl"),
     ("kotlin", "kt"),
     ("lua", "lua"),
     ("php", "php"),

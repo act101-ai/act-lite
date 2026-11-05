@@ -105,6 +105,11 @@ fn zig_extension() {
 }
 
 #[test]
+fn julia_extension() {
+    by_extension(&["jl"], "a = 1\n", "Julia");
+}
+
+#[test]
 fn r_upper_case_extension() {
     by_extension(&["R"], "a <- 1\n", "R");
 }

@@ -663,6 +663,18 @@ mod tests {
     }
 
     #[test]
+    fn julia_extension_query_dir_and_category() {
+        assert_eq!(Grammar::from_extension("jl"), Some(Grammar::Julia));
+        assert_eq!(Grammar::from_extension("JL"), None);
+        assert_eq!(Grammar::Julia.name(), "Julia");
+        assert_eq!(Grammar::Julia.query_dir(), "julia");
+        assert!(matches!(
+            Grammar::Julia.category(),
+            act_lite_core::registry::LanguageCategory::Dynamic
+        ));
+    }
+
+    #[test]
     fn jsonc_name_query_dir_and_category() {
         assert_eq!(Grammar::Jsonc.name(), "JSONC");
         assert_eq!(Grammar::Jsonc.query_dir(), "json");
@@ -948,7 +960,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            39,
+            40,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

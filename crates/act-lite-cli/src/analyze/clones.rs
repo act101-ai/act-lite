@@ -878,7 +878,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(covered, 22);
+        assert_eq!(covered, 23);
         assert!(missing.is_empty(), "{missing:#?}");
     }
 

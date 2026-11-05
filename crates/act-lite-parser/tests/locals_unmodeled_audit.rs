@@ -20,6 +20,7 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Jsx",
     "Json",
     "Jsonc",
+    "Julia",
     "Kotlin",
     "Lua",
     "Make",
