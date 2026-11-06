@@ -154,14 +154,42 @@ pub struct ReferencesWalk {
     pub skipped: Vec<SkippedFile>,
 }
 
-fn path_is_reference_sibling(anchor: &Path, path: &Path, grammar: Grammar) -> bool {
-    grammar.walk_reads(anchor, path)
+fn path_is_reference_sibling(anchor: &Path, path: &Path, grammars: &[Grammar]) -> bool {
+    grammars
+        .iter()
+        .any(|grammar| grammar.walk_reads(anchor, path))
 }
 
 pub fn walk_reference_siblings(
     root: &Path,
     anchor: &Path,
     grammar: Grammar,
+    max_files: usize,
+    max_file_bytes: u64,
+) -> Result<ReferencesWalk> {
+    walk_reference_siblings_of(root, anchor, &[grammar], max_files, max_file_bytes)
+}
+
+/// The grammars whose files a `references` walk from the 1-indexed position
+/// of `anchor` reads: the anchor's own grammar, and, at a position in a
+/// region of a component file, the region's language too.
+pub fn reference_walk_grammars(anchor: &SourceFile, line: u32, column: u32) -> Vec<Grammar> {
+    let mut grammars = vec![anchor.grammar()];
+    if let Some(byte) = byte_at_position(anchor, line, column)
+        && let crate::regions::Position::Region(index) = crate::regions::position_at(anchor, byte)
+        && let Some(tree) = anchor.region_trees().iter().find(|t| t.region == index)
+    {
+        grammars.push(tree.grammar);
+    }
+    grammars
+}
+
+/// [`walk_reference_siblings`] over the files of any of `grammars`: every
+/// candidate of the union counts against `max_files`.
+pub fn walk_reference_siblings_of(
+    root: &Path,
+    anchor: &Path,
+    grammars: &[Grammar],
     max_files: usize,
     max_file_bytes: u64,
 ) -> Result<ReferencesWalk> {
@@ -194,7 +222,7 @@ pub fn walk_reference_siblings(
         };
         let path = entry.path();
         if entry.depth() > 0 && entry.path_is_symlink() {
-            let family_relevant = path_is_reference_sibling(anchor, path, grammar);
+            let family_relevant = path_is_reference_sibling(anchor, path, grammars);
             let reason = match std::fs::metadata(path) {
                 Err(err) => Some(format!("symlink target unreadable: {err}")),
                 Ok(meta) if meta.is_file() && !family_relevant => None,
@@ -208,7 +236,7 @@ pub fn walk_reference_siblings(
             }
             continue;
         }
-        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammar) {
+        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammars) {
             continue;
         }
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1008,6 +1036,9 @@ pub fn execute_references_for_symbol(
     line: u32,
     column: u32,
 ) -> Result<QueryResult> {
+    if source.grammar().is_component() {
+        return component_references_across(source, &[], name, line, column);
+    }
     let mut node = node_at_byte_position(source, line, column).ok_or_else(|| {
         crate::ParserError::InvalidPosition {
             file: source.path().to_path_buf(),
@@ -1057,6 +1088,12 @@ fn node_at_byte_position(
     line: u32,
     column: u32,
 ) -> Option<tree_sitter::Node<'_>> {
+    byte_at_position(source, line, column).map(|byte| source.tree().node_at_byte(byte))
+}
+
+/// The byte offset of a 1-indexed line and byte column, or `None` when the
+/// position lies outside the file or past the end of its line.
+fn byte_at_position(source: &SourceFile, line: u32, column: u32) -> Option<usize> {
     if line == 0 || column == 0 {
         return None;
     }
@@ -1076,7 +1113,7 @@ fn node_at_byte_position(
             if column_offset > line_end - line_start {
                 return None;
             }
-            return Some(source.tree().node_at_byte(line_start + column_offset));
+            return Some(line_start + column_offset);
         }
 
         if line_end == bytes.len() {
@@ -1104,6 +1141,9 @@ pub fn execute_references_for_symbol_across(
     line: u32,
     column: u32,
 ) -> Result<QueryResult> {
+    if anchor.grammar().is_component() {
+        return component_references_across(anchor, siblings, name, line, column);
+    }
     let mut node = node_at_byte_position(anchor, line, column).ok_or_else(|| {
         crate::ParserError::InvalidPosition {
             file: anchor.path().to_path_buf(),
@@ -1130,6 +1170,105 @@ pub fn execute_references_for_symbol_across(
     let mut references = collect_references_matching(anchor, Some(name))?;
     for sibling in siblings {
         references.extend(collect_references_matching(sibling, Some(name))?);
+    }
+
+    references.sort_by(|a, b| {
+        a.file()
+            .cmp(b.file())
+            .then_with(|| a.line().cmp(&b.line()))
+            .then_with(|| a.column().cmp(&b.column()))
+    });
+    references.dedup_by(|a, b| a.file() == b.file() && a.byte_offset() == b.byte_offset());
+
+    Ok(QueryResult::References {
+        references,
+        skipped_files: Vec::new(),
+        source: ReferenceSource::TreeSitter,
+    })
+}
+
+/// [`execute_references_for_symbol_across`] from a component file. At a
+/// position in a template expression the name is not found. At a position
+/// in the outer document, the anchor is checked on the outer tree, and the
+/// sites are the outer-structure sites of the anchor and of every sibling of
+/// the same component grammar. At a position in a region of language L, the
+/// anchor is checked on the region tree, and the sites are those of every
+/// region of L of the anchor and of each sibling of the same component
+/// grammar, and of every sibling in L.
+fn component_references_across(
+    anchor: &SourceFile,
+    siblings: &[SourceFile],
+    name: &str,
+    line: u32,
+    column: u32,
+) -> Result<QueryResult> {
+    use crate::regions::{Position, node_at_byte, outside_structure, position_at};
+    let byte = byte_at_position(anchor, line, column).ok_or_else(|| {
+        crate::ParserError::InvalidPosition {
+            file: anchor.path().to_path_buf(),
+            line,
+            column,
+        }
+    })?;
+    let not_found = || crate::ParserError::SymbolNotFound {
+        name: name.to_string(),
+        file: anchor.path().to_path_buf(),
+    };
+    let text = anchor.content();
+    let component = anchor.grammar();
+    let anchored = |grammar: Grammar, mut node: tree_sitter::Node| loop {
+        if node_declares_name(grammar, node, text.as_bytes(), name) {
+            return true;
+        }
+        match node.parent() {
+            Some(parent) => node = parent,
+            None => return false,
+        }
+    };
+    let files = std::iter::once(anchor).chain(siblings);
+    let mut references = Vec::new();
+    match position_at(anchor, byte) {
+        Position::TemplateExpression => return Err(not_found()),
+        Position::Outer => {
+            let node = node_at_byte(anchor.tree().root_node(), byte);
+            if outside_structure(component, node, text) || !anchored(component, node) {
+                return Err(not_found());
+            }
+            for file in files.filter(|file| file.grammar() == component) {
+                references.extend(collect_references_matching(file, Some(name))?);
+            }
+        }
+        Position::Region(index) => {
+            let tree = anchor
+                .region_trees()
+                .iter()
+                .find(|tree| tree.region == index)
+                .ok_or_else(not_found)?;
+            let language = tree.grammar;
+            if !anchored(language, node_at_byte(tree.tree.root_node(), byte)) {
+                return Err(not_found());
+            }
+            for file in files {
+                if file.grammar() == component {
+                    for region in file.region_trees().iter().filter(|t| t.grammar == language) {
+                        references.extend(
+                            tree_reference_ranges_matching(
+                                language,
+                                region.tree.root_node(),
+                                file.content(),
+                                file.path(),
+                                Some(name),
+                                None,
+                            )?
+                            .into_iter()
+                            .map(|range| range.start().clone()),
+                        );
+                    }
+                } else if file.grammar() == language {
+                    references.extend(collect_references_matching(file, Some(name))?);
+                }
+            }
+        }
     }
 
     references.sort_by(|a, b| {
@@ -1367,16 +1506,35 @@ fn collect_reference_ranges_matching(
     exclude_byte_range: Option<(usize, usize)>,
 ) -> Result<Vec<Range>> {
     check_source_format(source)?;
+    tree_reference_ranges_matching(
+        source.grammar(),
+        source.tree().root_node(),
+        source.content(),
+        source.path(),
+        expected_name,
+        exclude_byte_range,
+    )
+}
 
-    let support = source.grammar().language_support();
+/// The reference sites of one tree of a file, parsed with `grammar`: the
+/// file's own tree or a region tree. `content` is the whole file. In the
+/// outer tree of a component file, a site where nothing is reported
+/// ([`crate::regions::outside_structure`]) is not a site.
+fn tree_reference_ranges_matching(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    content: &str,
+    path: &Path,
+    expected_name: Option<&str>,
+    exclude_byte_range: Option<(usize, usize)>,
+) -> Result<Vec<Range>> {
+    let support = grammar.language_support();
 
     let query_source = support.references_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let query = compiled::compiled(grammar, query_source)?;
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, content.as_bytes());
 
     let mut references = Vec::new();
 
@@ -1385,15 +1543,15 @@ fn collect_reference_ranges_matching(
             let capture_name = &query.capture_names()[capture.index as usize];
             if *capture_name == "reference" {
                 let node = capture.node;
-                let text = node.utf8_text(source.content().as_bytes()).unwrap_or("");
+                if grammar.is_component()
+                    && crate::regions::outside_structure(grammar, node, content)
+                {
+                    continue;
+                }
+                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
                 let name = expected_name.unwrap_or("");
-                let classified = classify_composed_reference(
-                    source.grammar(),
-                    node,
-                    source.content().as_bytes(),
-                    text,
-                    name,
-                );
+                let classified =
+                    classify_composed_reference(grammar, node, content.as_bytes(), text, name);
                 // The definition's own node is not a reference — but only
                 // composed carriers skip: a PLAIN identifier at the anchor IS
                 // the long-standing contract (the anchor file's def span is
@@ -1415,13 +1573,13 @@ fn collect_reference_ranges_matching(
                         for (start_off, end_off) in occurrences {
                             let base = node.start_byte();
                             let start_loc = Location::full(
-                                source.path().to_path_buf(),
+                                path.to_path_buf(),
                                 node.start_position().row as u32 + 1,
                                 node.start_position().column as u32 + 1 + (start_off as u32),
                                 base + start_off,
                             );
                             let end_loc = Location::full(
-                                source.path().to_path_buf(),
+                                path.to_path_buf(),
                                 node.start_position().row as u32 + 1,
                                 node.start_position().column as u32 + 1 + (end_off as u32),
                                 base + end_off,
@@ -1432,7 +1590,7 @@ fn collect_reference_ranges_matching(
                     // Composed refusals fire only when a name is in play.
                     ComposedReference::Unmodeled(form) => {
                         return Err(crate::ParserError::UnmodeledReferenceForm {
-                            file: source.path().to_path_buf(),
+                            file: path.to_path_buf(),
                             line: node.start_position().row as u32 + 1,
                             form,
                         });
@@ -1443,13 +1601,13 @@ fn collect_reference_ranges_matching(
                             continue;
                         }
                         let start_loc = Location::full(
-                            source.path().to_path_buf(),
+                            path.to_path_buf(),
                             node.start_position().row as u32 + 1,
                             node.start_position().column as u32 + 1,
                             node.start_byte(),
                         );
                         let end_loc = Location::full(
-                            source.path().to_path_buf(),
+                            path.to_path_buf(),
                             node.end_position().row as u32 + 1,
                             node.end_position().column as u32 + 1,
                             node.end_byte(),
@@ -3129,6 +3287,49 @@ interface Baz {}
                 other => panic!("{name}: expected Symbol, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn a_region_walk_counts_component_and_plain_candidates_together_against_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["A.vue", "B.vue", "c.ts", "d.ts", "e.js", "F.svelte"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let anchor = dir.path().join("A.vue");
+        let grammars = [Grammar::Vue, Grammar::TypeScript];
+        let walk = walk_reference_siblings_of(dir.path(), &anchor, &grammars, 3, u64::MAX).unwrap();
+        let mut names: Vec<String> = walk
+            .siblings
+            .iter()
+            .map(|s| s.path().file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["B.vue", "c.ts", "d.ts"]);
+        match walk_reference_siblings_of(dir.path(), &anchor, &grammars, 2, u64::MAX) {
+            Err(crate::ParserError::ReferencesWalkCap {
+                candidates,
+                max_files,
+                ..
+            }) => assert_eq!((candidates, max_files), (3, 2)),
+            other => panic!(
+                "expected the walk cap, got {:?}",
+                other.map(|w| w.siblings.len())
+            ),
+        }
+    }
+
+    #[test]
+    fn a_region_position_walks_the_region_language_too() {
+        let text = "<script setup lang=\"ts\">\nconst a = 1\n</script>\n<template><p id=\"x\"/></template>\n";
+        let source = SourceFile::from_content("A.vue", text.to_string(), Grammar::Vue).unwrap();
+        assert_eq!(
+            reference_walk_grammars(&source, 2, 7),
+            [Grammar::Vue, Grammar::TypeScript]
+        );
+        assert_eq!(reference_walk_grammars(&source, 4, 18), [Grammar::Vue]);
+        let ts =
+            SourceFile::from_content("a.ts", "const a = 1\n".into(), Grammar::TypeScript).unwrap();
+        assert_eq!(reference_walk_grammars(&ts, 1, 7), [Grammar::TypeScript]);
     }
 
     #[test]

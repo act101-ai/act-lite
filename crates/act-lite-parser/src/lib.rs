@@ -44,7 +44,8 @@ pub use query::{
     ReferencesWalk, SkeletonResult, SkippedFile, SuggestionInfo, SymbolResult, execute_query,
     execute_raw_query, execute_reference_ranges_for_symbol_across, execute_references,
     execute_references_for_symbol, execute_references_for_symbol_across, execute_skeleton,
-    execute_symbol, execute_symbols, walk_reference_siblings,
+    execute_symbol, execute_symbols, reference_walk_grammars, walk_reference_siblings,
+    walk_reference_siblings_of,
 };
 pub use source_file::{ParseOptions, SourceFile, StopFn, open_regular_within, read_regular_text};
 pub use symbol_id::SymbolId;

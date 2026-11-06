@@ -151,12 +151,13 @@ pub async fn execute(
             }
 
             // Tree-sitter fallback: a name-level (not binding-level)
-            // cross-file baseline over same-grammar files in the workspace.
-            // The result's `source` field says `tree-sitter`.
-            let walk = act_lite_parser::walk_reference_siblings(
+            // cross-file baseline over same-grammar files in the workspace
+            // (from a component's region, also the files of the region's
+            // language). The result's `source` field says `tree-sitter`.
+            let walk = act_lite_parser::walk_reference_siblings_of(
                 &workspace_root,
                 file,
-                source.grammar(),
+                &act_lite_parser::reference_walk_grammars(&source, *line, *column),
                 act_lite_parser::MAX_REFERENCE_WALK_FILES,
                 act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES,
             )?;

@@ -110,11 +110,93 @@ pub fn view(source: &str, region: &Region) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// Where a byte of a component file lies, for `references` and
+/// `definition`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    /// In the content of a parsed region: the index of the region in
+    /// [`crate::SourceFile::regions`].
+    Region(usize),
+    /// In the outer document, not in a template expression.
+    Outer,
+    /// In a template expression, or in the content of a `<script>`,
+    /// `<style>` or frontmatter that is not parsed.
+    TemplateExpression,
+}
+
+/// Where `byte` lies in `file`. Every byte of a file that is not a component
+/// is [`Position::Outer`].
+pub fn position_at(file: &crate::SourceFile, byte: usize) -> Position {
+    let grammar = file.grammar();
+    if !grammar.is_component() {
+        return Position::Outer;
+    }
+    for tree in file.region_trees() {
+        if file.regions()[tree.region]
+            .content
+            .as_ref()
+            .is_some_and(|content| content.contains(&byte))
+        {
+            return Position::Region(tree.region);
+        }
+    }
+    let mut node = Some(node_at_byte(file.tree().root_node(), byte));
+    while let Some(current) = node {
+        let kind = current.kind();
+        let parent = current.parent();
+        let unparsed_content = matches!(kind, "raw_text" | "frontmatter_js_block")
+            && parent.is_some_and(|parent| {
+                matches!(
+                    parent.kind(),
+                    "script_element" | "style_element" | "frontmatter"
+                )
+            });
+        if unparsed_content || expression_kinds(grammar).contains(&kind) {
+            return Position::TemplateExpression;
+        }
+        if matches!(kind, "element" | "template_element") {
+            return Position::Outer;
+        }
+        node = parent;
+    }
+    Position::Outer
+}
+
+/// The outer-tree node kinds whose content is a template expression.
+fn expression_kinds(grammar: Grammar) -> &'static [&'static str] {
+    match grammar {
+        Grammar::Vue => &["interpolation", "directive_attribute"],
+        Grammar::Svelte => &["expression", "svelte_raw_text"],
+        Grammar::Astro => &[
+            "html_interpolation",
+            "attribute_interpolation",
+            "attribute_backtick_string",
+        ],
+        _ => &[],
+    }
+}
+
+/// The innermost node below `root` whose byte range holds `byte` (start
+/// inclusive, end exclusive); `root` when no child holds it.
+pub fn node_at_byte(root: tree_sitter::Node<'_>, byte: usize) -> tree_sitter::Node<'_> {
+    let mut node = root;
+    'descend: loop {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.start_byte() <= byte && byte < child.end_byte() {
+                node = child;
+                continue 'descend;
+            }
+        }
+        return node;
+    }
+}
+
 /// Whether a node of a component file's outer tree lies where nothing is
 /// reported: below an ERROR node, or, in a Vue file, inside a custom block
 /// or a `<template>` whose first `lang` is not `html`. The block itself (the
 /// top-level element) and its start tag are not inside it.
-pub(crate) fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str) -> bool {
+pub fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str) -> bool {
     let mut top = None;
     let mut ancestor = node.parent();
     while let Some(current) = ancestor {
@@ -303,6 +385,48 @@ mod tests {
                 "{grammar:?}"
             );
         }
+    }
+
+    fn position(name: &str, grammar: Grammar, text: &str, before: &str) -> Position {
+        let file = crate::SourceFile::from_content(name, text.to_string(), grammar).unwrap();
+        position_at(&file, text.find(before).unwrap())
+    }
+
+    #[test]
+    fn a_position_is_in_a_parsed_region_the_outer_document_or_a_template_expression() {
+        let vue = "<script setup lang=\"ts\">\nconst count = 1\n</script>\n<script lang=\"coffee\">\nx = 1\n</script>\n<template>\n  <p id=\"app\" @click=\"go(count)\">{{ count }}</p>\n  <div><script>var y = 2</script></div>\n</template>\n";
+        let at = |before| position("A.vue", Grammar::Vue, vue, before);
+        assert_eq!(at("count = 1"), Position::Region(0));
+        assert_eq!(at("x = 1"), Position::TemplateExpression);
+        assert_eq!(at("app"), Position::Outer);
+        assert_eq!(at("go(count)"), Position::TemplateExpression);
+        assert_eq!(at("count }}"), Position::TemplateExpression);
+        assert_eq!(at("var y"), Position::TemplateExpression);
+        assert_eq!(at("<script setup"), Position::Outer);
+
+        let svelte = "<script lang=\"ts\">let count = 1;</script>\n{#if count > 1}<p class=\"a {count}\" id=\"i\">{count}</p>{/if}\n";
+        let at = |before| position("A.svelte", Grammar::Svelte, svelte, before);
+        assert_eq!(at("count = 1"), Position::Region(0));
+        assert_eq!(at("count > 1"), Position::TemplateExpression);
+        assert_eq!(at("count}\""), Position::TemplateExpression);
+        assert_eq!(at("count}</p>"), Position::TemplateExpression);
+        assert_eq!(at("i\">"), Position::Outer);
+
+        let astro = "---\nconst t = 1;\n---\n<ul>{[t].map((n) => <li id=\"q\">{n}</li>)}</ul>\n<p class={t} title=`x`>t</p>\n<script type=\"application/ld+json\">{\"a\": 1}</script>\n";
+        let at = |before| position("A.astro", Grammar::Astro, astro, before);
+        assert_eq!(at("t = 1"), Position::Region(0));
+        assert_eq!(at("[t]"), Position::TemplateExpression);
+        assert_eq!(at("q\""), Position::Outer);
+        assert_eq!(at("n}</li>"), Position::TemplateExpression);
+        assert_eq!(at("t} title"), Position::TemplateExpression);
+        assert_eq!(at("x`"), Position::TemplateExpression);
+        assert_eq!(at("\"a\""), Position::TemplateExpression);
+
+        let ts = "const count = 1;\n";
+        assert_eq!(
+            position("a.ts", Grammar::TypeScript, ts, "count"),
+            Position::Outer
+        );
     }
 
     #[test]

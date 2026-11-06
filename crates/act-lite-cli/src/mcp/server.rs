@@ -581,10 +581,10 @@ impl ActLiteServer {
 
         // No language server answer: fall back to the name-level tree-sitter
         // baseline over same-grammar files, and say so.
-        let walk = act_lite_parser::walk_reference_siblings(
+        let walk = act_lite_parser::walk_reference_siblings_of(
             &self.root,
             &path,
-            grammar,
+            &act_lite_parser::reference_walk_grammars(&source, position.0, position.1),
             act_lite_parser::MAX_REFERENCE_WALK_FILES,
             act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES,
         )
@@ -931,6 +931,9 @@ fn resolve_symbol_position(
     source: &act_lite_parser::SourceFile,
     symbol: &str,
 ) -> Option<(u32, u32)> {
+    if source.grammar().is_component() {
+        return component_symbol_position(source, symbol);
+    }
     if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source)
         && let Some(found) = symbols.iter().find(|s| s.name() == symbol)
     {
@@ -938,6 +941,60 @@ fn resolve_symbol_position(
         return Some((start.line(), start.column()));
     }
     find_symbol_position(source.content(), symbol)
+}
+
+/// The position of `symbol` in a component file: the first symbol of that
+/// name in a region, else the first in the outer document; else the first
+/// whole-identifier occurrence that is not in a template expression. The
+/// column counts bytes.
+fn component_symbol_position(
+    source: &act_lite_parser::SourceFile,
+    symbol: &str,
+) -> Option<(u32, u32)> {
+    use act_lite_parser::regions::{Position, position_at};
+    if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source) {
+        let in_region = |start: &act_lite_core::Location| {
+            start
+                .byte_offset()
+                .is_some_and(|byte| matches!(position_at(source, byte), Position::Region(_)))
+        };
+        let named: Vec<_> = symbols.iter().filter(|s| s.name() == symbol).collect();
+        if let Some(found) = named
+            .iter()
+            .find(|s| in_region(s.range().start()))
+            .or(named.first())
+        {
+            let start = found.range().start();
+            return Some((start.line(), start.column()));
+        }
+    }
+    if symbol.is_empty() {
+        return None;
+    }
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let content = source.content();
+    let mut line_start = 0;
+    for (line_idx, line) in content.split('\n').enumerate() {
+        let mut from = 0;
+        while let Some(hit) = line[from..].find(symbol) {
+            let start = from + hit;
+            let end = start + symbol.len();
+            let before_ok = line[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !is_ident(c));
+            let after_ok = line[end..].chars().next().is_none_or(|c| !is_ident(c));
+            if before_ok
+                && after_ok
+                && position_at(source, line_start + start) != Position::TemplateExpression
+            {
+                return Some((line_idx as u32 + 1, start as u32 + 1));
+            }
+            from = end;
+        }
+        line_start += line.len() + 1;
+    }
+    None
 }
 
 /// Finds the first whole-identifier occurrence of `symbol` (1-indexed line
