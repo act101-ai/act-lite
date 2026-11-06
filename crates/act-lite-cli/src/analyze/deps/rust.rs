@@ -158,6 +158,10 @@ impl Resolver for RustResolver {
         if rel.kind == RelationshipKind::Include {
             return include(cx, file, rel);
         }
+        // Every tree that reaches the file resolves the relationship, in root
+        // order: the targets of all trees that resolve it, else `external`
+        // when a tree gives it, else the reason of the first tree.
+        let mut targets: Option<BTreeSet<String>> = None;
         let mut first = None;
         if let Some(package) = &package {
             let roots = roots(cx, package);
@@ -177,13 +181,19 @@ impl Resolver for RustResolver {
                     ))
                 });
                 match outcome {
+                    Some(Outcome::Resolved(found)) => {
+                        targets.get_or_insert_default().extend(found);
+                    }
                     Some(Outcome::Unresolved(reason)) => {
                         first.get_or_insert(Outcome::Unresolved(reason));
                     }
-                    Some(outcome) => return outcome,
+                    Some(Outcome::External) => first = Some(Outcome::External),
                     None => {}
                 }
             }
+        }
+        if let Some(targets) = targets {
+            return Outcome::Resolved(targets.into_iter().collect());
         }
         first.unwrap_or_else(|| {
             with_tree(cx, file, true, |cx, tree| {

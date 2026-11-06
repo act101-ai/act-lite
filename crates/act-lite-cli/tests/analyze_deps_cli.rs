@@ -937,6 +937,30 @@ fn a_path_attribute_outside_the_parent_directory_gives_its_use_edge() {
 }
 
 #[test]
+fn a_use_in_several_crate_trees_gives_an_edge_from_each_tree() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    for (root_file, imp) in [("src/lib.rs", "imp_lib.rs"), ("src/main.rs", "imp_bin.rs")] {
+        write(
+            root,
+            root_file,
+            &format!("#[path = \"../shared.rs\"]\nmod shared;\n#[path = \"{imp}\"]\nmod imp;\n"),
+        );
+        write(root, &format!("src/{imp}"), "pub struct Thing;\n");
+    }
+    write(root, "shared.rs", "use crate::imp::Thing;\n");
+    let v = graph(root, &["--limit", "1000"]);
+    assert_eq!(kinds(edge(&v, "shared.rs", "src/imp_bin.rs")), ["use"]);
+    assert_eq!(kinds(edge(&v, "shared.rs", "src/imp_lib.rs")), ["use"]);
+    assert_eq!(unresolved(&v), []);
+}
+
+#[test]
 fn a_main_that_is_a_directory_resolves_to_its_index() {
     let ws = workspace();
     let root = ws.path();
