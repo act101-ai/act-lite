@@ -1171,3 +1171,24 @@ fn a_fifo_is_not_a_package_file() {
         Outcome::Resolved(vec!["lib/l.go".to_string()])
     );
 }
+
+/// A file under no go.mod does not resolve into a sibling module: without
+/// an importing module there is no module context for the import.
+#[test]
+fn a_file_under_no_go_mod_does_not_resolve_into_a_sibling_module() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\t_ \"example.com/lib\"\n)\n",
+    );
+    write(root, "lib/go.mod", "module example.com/lib\n");
+    write(root, "lib/lib.go", "package lib\n");
+    let graph = graph(root);
+    assert_eq!(outcome(&graph, "main.go", "fmt"), Outcome::External);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Unresolved("file is under no go.mod in the workspace".to_string())
+    );
+}

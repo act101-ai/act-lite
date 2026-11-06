@@ -137,18 +137,22 @@ impl Resolver for GoResolver {
                 valid.push((path, files));
             }
         }
+        // Without an importing module there is no module context: a path
+        // that is not standard library is unresolved even when a workspace
+        // module declares it.
+        let standard = import
+            .split('/')
+            .next()
+            .is_some_and(|first| !first.contains('.'));
+        if own_dir.is_none() && !standard {
+            return Outcome::Unresolved("file is under no go.mod in the workspace".to_string());
+        }
         match valid.len() {
             1 => Outcome::Resolved(valid.remove(0).1),
             0 if replaced_away => Outcome::External,
             0 if !unvendored => {
-                let standard = import
-                    .split('/')
-                    .next()
-                    .is_some_and(|first| !first.contains('.'));
                 if standard {
                     Outcome::External
-                } else if own_dir.is_none() {
-                    Outcome::Unresolved("file is under no go.mod in the workspace".to_string())
                 } else if let Some(skip) = cx.workspace_skipped().first() {
                     Outcome::Unresolved(format!("{} could not be read", skip.file.file))
                 } else {
