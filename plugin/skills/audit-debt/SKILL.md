@@ -79,7 +79,7 @@ Ranking: <details.formula>.
 - <kind> clone, <tokens> tokens, <members_total> members: …
 ### Dependency cycles
 <total> cycles over <cyclic_files> files.
-- <members_total> files, <edges_total> edges: <path as a → b → … → a>
+- <members_total> files, <edges_total> edges: <path as <file> → <to> → …>[ (path of <path_total> steps, <n> shown)]; members: <file>, …[ (members not all shown)]
 ### Most coupled files
 | File | Fan-in | Fan-out | Instability | Unresolved |
 Instability = fan_out / (fan_in + fan_out). Fan-in counts only files in <scope>.
@@ -114,10 +114,14 @@ A clone class shows that code has the same syntax tree, apart from formatting, c
   truncation (`total` against what is shown); then the sentence above. A
   result with `complete: false` can miss findings in that evidence; say so.
 - **Dependency cycles:** `total` and `details.cyclic_files` of the step-4a
-  result, then one line per finding, in result order: `members_total`,
-  `edges_total` and the `members` as a path `a → b → … → a`; when
-  `members_total` is more than the members listed, add "and <n> more". With
-  no cycle, write "No cycle."
+  result, then one line per finding, in result order: `members_total` and
+  `edges_total`; the `path` steps, from the cycle's `file` back to it, written
+  as `<file> → <to>` steps (the first step's `file`, then each step's `to`),
+  with "(path of <path_total> steps, <n> shown)" when `path_total` is more
+  than the <n> steps shown; and the `members`, listed separately, with
+  "(members not all shown)" when `members_total` is more than the members
+  listed. The `members` are sorted by path, not in traversal order: never
+  write them as a path. With no cycle, write "No cycle."
 - **Most coupled files:** one row per step-4b finding, in result order: File,
   Fan-in, Fan-out, Instability and Unresolved are `file`, `fan_in`, `fan_out`,
   `instability` and `unresolved`. Then the formula line and the fan-in scope
