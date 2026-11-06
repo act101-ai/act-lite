@@ -382,6 +382,13 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
     let Some(tokens) = all.get(1..all.len().saturating_sub(1)) else {
         return;
     };
+    // A comment is no token: it keeps a pending attribute and does not split
+    // a declaration.
+    let tokens: Vec<Node> = tokens
+        .iter()
+        .copied()
+        .filter(|t| !matches!(t.kind(), "line_comment" | "block_comment"))
+        .collect();
     let kind_at = |j: usize| tokens.get(j).map(|t| t.kind());
     // The `#[path]` value among the attributes read since the last item.
     let mut attribute_path = None;

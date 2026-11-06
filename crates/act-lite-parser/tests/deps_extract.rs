@@ -454,6 +454,41 @@ fn a_path_attribute_inside_a_macro_applies_to_the_next_mod() {
 }
 
 #[test]
+fn comments_inside_a_macro_keep_a_path_attribute() {
+    let file = parse(
+        Grammar::Rust,
+        r#"wrapper! {
+    #[path = "other.rs"] /* note */ mod x;
+    #[path = "y.rs"] // c
+    mod /* a */ y // b
+    ;
+    #[path = "z.rs"]
+    /// doc
+    mod z;
+}
+"#,
+    );
+    let expected = vec![
+        Relationship {
+            path_attribute: Some("other.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "x", "2:37-2:43")
+        },
+        Relationship {
+            path_attribute: Some("y.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "y", "4:5-5:6")
+        },
+        Relationship {
+            path_attribute: Some("z.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "z", "8:5-8:11")
+        },
+    ];
+    assert_eq!(deps::extract(&file), expected);
+}
+
+#[test]
 fn computed_specifiers_are_kept_with_their_text() {
     let rust = parse(
         Grammar::Rust,
