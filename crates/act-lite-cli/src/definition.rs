@@ -382,8 +382,10 @@ fn named_by_queries(grammar: Grammar) -> bool {
 
 /// The names at the 1-indexed position: the identifier there, else the
 /// innermost `@reference` or `@name` capture that contains it; then, in Nix
-/// and Julia, the dotted names around that identifier (each enclosing
-/// `attrpath` or `field_expression`), innermost first.
+/// and Julia, the names around that identifier (each enclosing `attrpath`,
+/// or Julia `field_expression`, `parametrized_type_expression` or
+/// `parenthesized_expression`, climbing through a `typed_expression`),
+/// innermost first.
 fn names_at(source: &SourceFile, line: u32, column: u32) -> Vec<String> {
     let tree = source.tree();
     let bytes = tree.source().as_bytes();
@@ -404,14 +406,24 @@ fn names_at(source: &SourceFile, line: u32, column: u32) -> Vec<String> {
         .map(str::to_string)
         .into_iter()
         .collect();
-    let dotted = match source.grammar() {
-        Grammar::Nix => "attrpath",
-        Grammar::Julia => "field_expression",
+    let enclosing: &[&str] = match source.grammar() {
+        Grammar::Nix => &["attrpath"],
+        Grammar::Julia => &[
+            "field_expression",
+            "parametrized_type_expression",
+            "parenthesized_expression",
+            "typed_expression",
+        ],
         _ => return names,
     };
     let mut node = leaf;
-    while let Some(parent) = node.parent().filter(|parent| parent.kind() == dotted) {
-        if let Ok(text) = parent.utf8_text(bytes) {
+    while let Some(parent) = node
+        .parent()
+        .filter(|parent| enclosing.contains(&parent.kind()))
+    {
+        if parent.kind() != "typed_expression"
+            && let Ok(text) = parent.utf8_text(bytes)
+        {
             names.push(text.to_string());
         }
         node = parent;
