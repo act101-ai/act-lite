@@ -506,7 +506,7 @@ pub(crate) fn collect_definition_ranges_in_source(
 /// The declarations named `symbol_name` in one tree of a file, parsed with
 /// `grammar`: the file's own tree or a region tree. `text` is the whole
 /// file. In the outer tree of a component file, a declaration where nothing
-/// is reported ([`act_lite_parser::regions::outside_structure`]) is not one.
+/// is reported ([`act_lite_parser::regions::StructureFilter`]) is not one.
 fn definition_ranges_in_tree(
     root_node: Node<'_>,
     grammar: Grammar,
@@ -514,6 +514,7 @@ fn definition_ranges_in_tree(
     path: &Path,
     symbol_name: &str,
 ) -> Vec<act_lite_core::Range> {
+    let filter = act_lite_parser::regions::StructureFilter::new(grammar, root_node, text);
     let mut stack = vec![root_node];
     let mut ranges = Vec::new();
     while let Some(node) = stack.pop() {
@@ -524,8 +525,7 @@ fn definition_ranges_in_tree(
         };
         if let Some(name_node) = name_node
             && name_text(name_node, grammar, text) == symbol_name
-            && !(grammar.is_component()
-                && act_lite_parser::regions::outside_structure(grammar, name_node, text))
+            && !filter.hides(name_node)
         {
             ranges.push(node_to_range(path, name_node, text));
         }

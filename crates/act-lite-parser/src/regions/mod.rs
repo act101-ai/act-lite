@@ -357,6 +357,71 @@ pub fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str
     }
 }
 
+/// [`outside_structure`] for every node of one outer tree, computed in one
+/// walk: a lookup does not walk the node's ancestors.
+pub struct StructureFilter {
+    hidden: std::collections::HashSet<usize>,
+}
+
+impl StructureFilter {
+    pub fn new(grammar: Grammar, root: tree_sitter::Node, source: &str) -> Self {
+        let mut hidden = std::collections::HashSet::new();
+        if !grammar.is_component() {
+            return StructureFilter { hidden };
+        }
+        /// What the strict ancestors of a node decide: below an ERROR node;
+        /// inside a top-level Vue block whose content is not structure; in
+        /// that block's start tag.
+        #[derive(Clone, Copy, Default)]
+        struct Context {
+            in_error: bool,
+            hidden_block: bool,
+            in_start_tag: bool,
+        }
+        // (node, the context its ancestors give it, whether it is a child of
+        // the root).
+        let mut stack: Vec<(tree_sitter::Node, Context, bool)> = Vec::new();
+        let mut cursor = root.walk();
+        for child in root.children(&mut cursor) {
+            stack.push((child, Context::default(), true));
+        }
+        while let Some((node, context, top_level)) = stack.pop() {
+            if context.in_error || (context.hidden_block && !context.in_start_tag) {
+                hidden.insert(node.id());
+            }
+            let mut inner = Context {
+                in_error: context.in_error || node.kind() == "ERROR",
+                ..context
+            };
+            if top_level && grammar == Grammar::Vue {
+                inner.hidden_block = match node.kind() {
+                    "element" => true,
+                    "template_element" => {
+                        vue::template_lang(node, source).is_some_and(|lang| lang != "html")
+                    }
+                    _ => false,
+                };
+            }
+            let mut cursor = node.walk();
+            for (i, child) in node.children(&mut cursor).enumerate() {
+                let mut child_context = inner;
+                if top_level && grammar == Grammar::Vue {
+                    // The first child of a top-level block is its start tag.
+                    child_context.in_start_tag =
+                        i == 0 && matches!(child.kind(), "start_tag" | "self_closing_tag");
+                }
+                stack.push((child, child_context, false));
+            }
+        }
+        StructureFilter { hidden }
+    }
+
+    /// Whether `node` lies where nothing is reported.
+    pub fn hides(&self, node: tree_sitter::Node) -> bool {
+        self.hidden.contains(&node.id())
+    }
+}
+
 /// Whether `node` lies in the start tag of `element`.
 fn within_start_tag(element: tree_sitter::Node, node: tree_sitter::Node) -> bool {
     // The start tag is the element's first child.

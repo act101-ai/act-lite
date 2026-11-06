@@ -536,6 +536,7 @@ fn tree_declarations(
     let query = compiled::compiled(grammar, support.skeleton_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(&query, root_node, text.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, text);
 
     let mut declarations = Vec::new();
 
@@ -617,9 +618,8 @@ fn tree_declarations(
             decl_node = Some(node);
         }
 
-        if grammar.is_component()
-            && let Some(node) = decl_node.or(name_node)
-            && crate::regions::outside_structure(grammar, node, text)
+        if let Some(node) = decl_node.or(name_node)
+            && filter.hides(node)
         {
             continue;
         }
@@ -755,6 +755,7 @@ fn tree_symbols(
     let query = compiled::compiled(grammar, support.symbols_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(&query, root_node, text.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, text);
 
     let mut symbols = Vec::new();
     let mut suppressed: Vec<(String, Range)> = Vec::new();
@@ -818,9 +819,8 @@ fn tree_symbols(
             None => kinded_definition.map(|(node, suffix)| (node, symbol_kind_from_suffix(suffix))),
         };
 
-        if grammar.is_component()
-            && let Some((node, _)) = resolved
-            && crate::regions::outside_structure(grammar, node, text)
+        if let Some((node, _)) = resolved
+            && filter.hides(node)
         {
             continue;
         }
@@ -1535,6 +1535,7 @@ fn tree_reference_ranges_matching(
 
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut matches = cursor.matches(&query, root_node, content.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, content);
 
     let mut references = Vec::new();
 
@@ -1543,9 +1544,7 @@ fn tree_reference_ranges_matching(
             let capture_name = &query.capture_names()[capture.index as usize];
             if *capture_name == "reference" {
                 let node = capture.node;
-                if grammar.is_component()
-                    && crate::regions::outside_structure(grammar, node, content)
-                {
+                if filter.hides(node) {
                     continue;
                 }
                 let text = node.utf8_text(content.as_bytes()).unwrap_or("");
