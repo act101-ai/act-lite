@@ -658,6 +658,35 @@ fn a_replace_directive_replaces_the_workspace_modules_of_its_path() {
 }
 
 #[test]
+fn a_replace_to_a_bare_dot_directory_is_a_local_replacement() {
+    for replace in [
+        "replace example.com/lib => ..\n",
+        "replace example.com/lib => ../\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "go.mod", "module example.com/lib\n");
+        write(root, "lib.go", "package lib\n");
+        write(
+            root,
+            "app/go.mod",
+            &format!("module example.com/app\n\nrequire example.com/lib v1.0.0\n\n{replace}"),
+        );
+        write(
+            root,
+            "app/main.go",
+            "package main\n\nimport \"example.com/lib\"\n",
+        );
+        let graph = graph(root);
+        assert_eq!(
+            outcome(&graph, "app/main.go", "example.com/lib"),
+            Outcome::Resolved(vec!["lib.go".to_string()]),
+            "{replace}"
+        );
+    }
+}
+
+#[test]
 fn a_replace_directive_outside_the_workspace_makes_its_path_external() {
     for replace in [
         "replace example.com/lib => ../../external-lib\n",

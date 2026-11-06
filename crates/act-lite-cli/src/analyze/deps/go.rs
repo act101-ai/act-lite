@@ -229,7 +229,12 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
         let replaces = replaces
             .into_iter()
             .map(|(path, target)| {
-                let relative = target.starts_with("./") || target.starts_with("../");
+                // Go's modfile treats `.`, `..` and paths starting `./` or
+                // `../` as directories.
+                let relative = target == "."
+                    || target == ".."
+                    || target.starts_with("./")
+                    || target.starts_with("../");
                 let local = relative.then(|| cx.normalize(dir, &target)).flatten();
                 (path, local)
             })

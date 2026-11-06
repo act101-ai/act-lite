@@ -999,7 +999,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   directory. A `replace` in the importing file's `go.mod`, with or without a
   version, replaces its module path whatever its target: other workspace
   modules that declare the same path are never candidates. A relative path
-  inside the workspace makes its directory the only directory of that module
+  (`.`, `..`, or one starting with `./` or `../`) inside the workspace makes its directory the only directory of that module
   path; a relative path outside the workspace, or a module path with a
   version, makes an import under the replaced path `external`. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
