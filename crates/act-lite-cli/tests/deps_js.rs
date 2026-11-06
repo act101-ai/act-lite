@@ -684,9 +684,32 @@ fn a_main_that_names_a_directory() {
     ]);
     let graph = build(ws.path());
     assert_eq!(outcome(&graph, "src/p.ts"), resolved("packages/p/index.ts"));
+    assert_eq!(outcome(&graph, "src/q.ts"), resolved("packages/q/sub.ts"));
+}
+
+#[test]
+fn a_main_that_is_a_directory_resolves_to_its_index_before_the_package_index() {
+    let ws = workspace(&[
+        ("pkg/package.json", r#"{"main":"lib"}"#),
+        ("pkg/lib/index.js", ""),
+        ("pkg/index.js", ""),
+        ("slash/package.json", r#"{"main":"lib/"}"#),
+        ("slash/lib.js", ""),
+        ("slash/lib/index.js", ""),
+        ("slash/index.js", ""),
+        ("only/package.json", r#"{"main":"lib/"}"#),
+        ("only/lib/index.js", ""),
+        ("only/index.js", ""),
+        ("src/pkg.ts", "import '../pkg';\n"),
+        ("src/slash.ts", "import '../slash';\n"),
+        ("src/only.ts", "import '../only';\n"),
+    ]);
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "src/pkg.ts"), resolved("pkg/lib/index.js"));
+    assert_eq!(outcome(&graph, "src/slash.ts"), resolved("slash/lib.js"));
     assert_eq!(
-        outcome(&graph, "src/q.ts"),
-        resolved("packages/q/sub/index.ts")
+        outcome(&graph, "src/only.ts"),
+        resolved("only/lib/index.js")
     );
 }
 
