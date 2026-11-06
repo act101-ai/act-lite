@@ -108,7 +108,12 @@ below. Never stash, reset, check out or commit.
    - (b) touches a resolution input or a discovery input: a file named
      `package.json`, `go.mod` or `Cargo.toml`, any `*.json` file (a `tsconfig`
      `extends` target can have any name), `.gitignore`, `.git/info/exclude`,
-     `pyvenv.cfg` or `CACHEDIR.TAG`;
+     `pyvenv.cfg` or `CACHEDIR.TAG`. (b) also holds when the change touches
+     any file listed in the `analyze_cycles` result's
+     `details.resolution_inputs` (for example a `tsconfig` `extends` target
+     named `base.jsonc` or with no extension). When
+     `details.resolution_inputs_total` is more than the entries shown, every
+     cycle is kept;
    - (c) changes a `.rs` file that contains a module declaration (`mod
      <name>;` or `mod <name> {`, also inside a macro invocation) or a
      `#[path` attribute, before or after the change (the Rust module tree); or
