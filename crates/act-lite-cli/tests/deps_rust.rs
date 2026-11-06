@@ -369,6 +369,26 @@ fn a_path_attribute_inside_a_macro_replaces_the_probe() {
 }
 
 #[test]
+fn a_comment_inside_a_macro_keeps_the_path_attribute() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "wrapper! { #[path = \"other.rs\"] /* note */ mod x; }\n",
+    );
+    write(root, "src/other.rs", "");
+    write(root, "src/x.rs", "");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "x"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(pairs(&graph), [edge("src/lib.rs", "src/other.rs")]);
+}
+
+#[test]
 fn a_use_through_a_missing_module_file() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();

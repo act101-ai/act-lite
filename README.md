@@ -882,7 +882,7 @@ recovered tree.
 | Rust | `use` declaration, one per leaf path (`use a::{b, c::d}` gives `a::b` and `a::c::d`; `self` in a list gives the list's prefix; `use a::*` gives `a`; `use a::b as c` gives `a::b`) | `use` | the leaf path | the declaration |
 | Rust | `extern crate x;` | `extern_crate` | the name | the declaration |
 | Rust | `include!`, `include_str!`, `include_bytes!` | `include` | the string literal, or the argument's text when it is not a string literal (`unresolved`) | the invocation |
-| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe | from the first token (`pub`, `mod` or `use`) to the `;` |
+| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
 
 The kinds are `dynamic_import`, `extern_crate`, `from_import`, `import`,
 `include`, `module`, `reexport`, `require`, `type_import` and `use`. A Python `from __future__ import …` is not a relationship.
@@ -956,9 +956,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `__init__.py` is a namespace package (it exists, with no file). `import
   a.b.c` uses the first root under which `a` is a module or regular package,
   else the first under which it is a namespace package. `from X import n`
-  targets `X`'s file when a top-level statement of it binds `n` (an
-  annotation binds only with a value: `n: int = 1` binds, `n: int` does
-  not; `global n` does not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
+  targets `X`'s file when a top-level statement of it binds `n` (a
+  `match` binds the capture names of its `case` patterns, such as `case n:`
+  or `case [_, n]:`, and the names its case bodies bind; an annotation binds
+  only with a value: `n: int = 1` binds, `n: int` does not; `global n` does
+  not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
   is `unresolved` outside a package (`relative import outside a package`) or
   above the top-level package (`relative import beyond the top-level

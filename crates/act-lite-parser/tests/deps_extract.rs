@@ -454,6 +454,41 @@ fn a_path_attribute_inside_a_macro_applies_to_the_next_mod() {
 }
 
 #[test]
+fn comments_inside_a_macro_keep_a_path_attribute() {
+    let file = parse(
+        Grammar::Rust,
+        r#"wrapper! {
+    #[path = "other.rs"] /* note */ mod x;
+    #[path = "y.rs"] // c
+    mod /* a */ y // b
+    ;
+    #[path = "z.rs"]
+    /// doc
+    mod z;
+}
+"#,
+    );
+    let expected = vec![
+        Relationship {
+            path_attribute: Some("other.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "x", "2:37-2:43")
+        },
+        Relationship {
+            path_attribute: Some("y.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "y", "4:5-5:6")
+        },
+        Relationship {
+            path_attribute: Some("z.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "z", "8:5-8:11")
+        },
+    ];
+    assert_eq!(deps::extract(&file), expected);
+}
+
+#[test]
 fn computed_specifiers_are_kept_with_their_text() {
     let rust = parse(
         Grammar::Rust,
@@ -567,6 +602,46 @@ fn python_loop_targets_and_with_aliases_bound_at_top_level() {
         deps::module_names(&file).names,
         names(&[
             "h", "i", "j", "k", "l", "m", "o", "p", "q", "r", "s", "t", "u"
+        ])
+    );
+}
+
+#[test]
+fn python_match_captures_and_case_bodies_bound_at_top_level() {
+    let file = parse(
+        Grammar::Python,
+        r#"match x:
+    case _:
+        n = 1
+    case [a, (b, *c)] if g:
+        pass
+    case P(k=d, j={'key': e, **f}):
+        pass
+    case Color.RED | Q(h):
+        pass
+    case _ as i:
+        pass
+    case [*_]:
+        pass
+    case o:
+        def p():
+            inner = 1
+        class C:
+            attr = 2
+if True:
+    match z:
+        case s:
+            pass
+def q():
+    match y:
+        case r:
+            pass
+"#,
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&[
+            "C", "a", "b", "c", "d", "e", "f", "h", "i", "n", "o", "p", "q", "s"
         ])
     );
 }

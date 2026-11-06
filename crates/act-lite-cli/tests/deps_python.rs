@@ -223,6 +223,23 @@ fn an_annotation_without_a_value_does_not_beat_a_submodule() {
 }
 
 #[test]
+fn a_match_statement_in_the_package_file_beats_a_submodule() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "pkg/__init__.py",
+        "match 1:\n    case _:\n        n = 1\n",
+    );
+    write(ws.path(), "pkg/n.py", "");
+    write(ws.path(), "a.py", "from pkg import n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "a.py", "pkg.n"),
+        resolved(&["pkg/__init__.py"])
+    );
+}
+
+#[test]
 fn a_global_statement_does_not_beat_a_submodule() {
     let ws = tempfile::tempdir().unwrap();
     write(ws.path(), "pkg/__init__.py", "global n\n");
