@@ -128,6 +128,11 @@ impl Parser {
         let tree = self
             .inner
             .parse_with_options(&mut input, None, Some(options));
+        if tree.is_none() {
+            // A halted parse is resumed by the next call unless the parser is
+            // reset, so the next text would get this text's partial tree.
+            self.inner.reset();
+        }
 
         match tree {
             Some(t) => Ok(t),
@@ -201,6 +206,35 @@ impl Default for Parser {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_parse_after_a_timeout_starts_from_the_new_text() {
+        // A large region times out; the next region of the same grammar must
+        // not resume the halted parse.
+        let big: String = (0..20_000)
+            .map(|i| format!("function f{i}() {{ return {i}; }}\n"))
+            .collect();
+        let small = "let a = 1;\n";
+        let text = format!("{big}{small}");
+        let mut parser = Parser::new();
+        parser.set_timeout(Some(Duration::from_nanos(1)));
+        assert!(matches!(
+            parser.parse_region(&text, Grammar::JavaScript, 0..big.len()),
+            Err(ParserError::ParseTimeout { .. })
+        ));
+        parser.set_timeout(None);
+        let after = parser
+            .parse_region(&text, Grammar::JavaScript, big.len()..text.len())
+            .unwrap();
+        let fresh = Parser::new()
+            .parse_region(&text, Grammar::JavaScript, big.len()..text.len())
+            .unwrap();
+        assert_eq!(after.root_node().to_sexp(), fresh.root_node().to_sexp());
+        assert_eq!(
+            after.root_node().byte_range(),
+            fresh.root_node().byte_range()
+        );
+    }
     use super::*;
 
     #[test]
