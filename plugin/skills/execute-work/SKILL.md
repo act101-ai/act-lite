@@ -118,8 +118,8 @@ Each stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session: a `demanding`-tier reviewer for the graph stage and for a `demanding` node,
-   else `normal`. Tell it to find defects, not to approve. Give it the
+   session: a `judgment` reviewer for the graph stage and for a `judgment`
+   node, else `implementation`. Tell it to find defects, not to approve. Give it the
    artifact, the spec section it answers, the contracts it touches, and the
    review focus. It reports each finding with its location, the failure it
    causes, and the evidence.
@@ -137,10 +137,13 @@ Each stage has three steps:
 1. Find the graph (§1).
 2. Read its state (counts per state, the ready set, the schedule, the stuck
    nodes) and validate it (format §7). Both must pass before any work.
-3. Remove the checkouts whose node is `DONE` or `DROPPED` (§5.5 step 4).
-4. Start each scheduled node (§5.2). `IN-PROGRESS` nodes continue at the
+3. If the session offers `work_begin`, call it with `unit` set to the
+   program (the graph's directory name, with no node id), `round` 1, an
+   empty `check` and no `files`. If the tool is absent, skip this step.
+4. Remove the checkouts whose node is `DONE` or `DROPPED` (§5.5 step 4).
+5. Start each scheduled node (§5.2). `IN-PROGRESS` nodes continue at the
    first unchecked step of their plan.
-5. Decide each stuck node: re-plan a `BLOCKED` node (§5.2 step 6); re-edge
+6. Decide each stuck node: re-plan a `BLOCKED` node (§5.2 step 6); re-edge
    or drop a node that depends on a `DROPPED` node. Without these decisions
    the graph never completes.
 
@@ -167,13 +170,20 @@ never edit it.
    - Acceptance passes and the stage passes: keep (§5.5).
    - Otherwise: start a new round on the same branch, driven by the failure
      output and the confirmed findings. From the second round, set the
-     node's Tier to `demanding`.
+     node's Capability to `judgment`.
    - After three failed rounds: discard the node's branch and checkout, set
      `BLOCKED(<diagnosis>)`, and re-plan the node (split it, change its scope
      or its approach) before any further attempt. When the new plan is
      committed, set the node `PLANNED`; the round count starts again.
+   - After the keep or discard: if the session offers a tool named
+     `work_verdict`, call it with `unit` and `round` from the node's header
+     (§5.3), `verdict` (`keep`, `discard` or `blocked`) and `findings` (the
+     number of confirmed findings of the node's verification stage). The
+     verdict is `keep` for a kept node, `discard` for a failed round and
+     `blocked` for a node set `BLOCKED`. If the tool is absent, skip this
+     step.
 
-### 5.3 Implementers, reviewers and tiers
+### 5.3 Implementers, reviewers and capabilities
 
 When the session can delegate, each running node gets one fresh implementer
 in its checkout, and its verification stage gets one fresh reviewer. Each
@@ -181,17 +191,57 @@ handoff carries the node file, the graph header, the contracts the node
 touches, and an output contract: status, commits, the Acceptance output, and
 any finding. Otherwise the controller runs the nodes itself, one at a time.
 
-A node's Tier was chosen at creation. A node this skill creates (§5.4) or
-re-plans gets its Tier by the same criteria: the work's complexity, nuance
-and technicality.
+Every handoff to an implementer, a planner or a reviewer begins with these
+four lines, in this order and spelling. Write them even when no tool reads
+them.
 
-| Tier | Work |
+```
+Unit: <program>:<node id>[:<part>]
+Round: <n>
+Check: <one literal shell command that runs the node's Acceptance check, or empty>
+Files: <comma-separated repository-relative paths the node may change; a path ending in / is a directory>
+```
+
+- `program` is the graph's directory name (`docs/work/<program>/`); `node
+  id` is the ledger's id; `part` is optional: `review` for the node's
+  verification-stage reviewer, `plan` for a planning handoff. Each segment
+  matches `[A-Za-z0-9][A-Za-z0-9._-]*`, at most 48 characters. A handoff for
+  the whole graph (the graph-level verification stage, §5.6) writes `graph`
+  in place of the node id.
+- `Round` is the node's current round: 1 on the first attempt; §5.2 step 6
+  increments it.
+- `Check` is one command as the implementer types it, with no `&&`, `||`,
+  `;` or pipe in it. The node's Acceptance line stays as it is; the header
+  gives its command form. A tool that verifies the check ran compares the
+  executed command with this text, and allows only a leading `cd <dir> &&`
+  and a trailing `2>&1`, `| tee <file>` or `| cat`.
+- `Files` is the plan's exact paths for the node plus
+  `docs/work/<program>/nodes/<id>.md`, never `graph.md`.
+- A reviewer's handoff has part `review`, an empty `Check:` and an empty
+  `Files:`. A planning handoff has part `plan`, an empty `Check:`, and the
+  node file in `Files:`.
+
+After the header, each handoff instructs:
+"If the session offers a tool named `work_begin`, call it first, once, with
+`unit`, `round`, `check` and `files` from the header above. If the tool is
+absent, skip this step."
+
+A node's Capability was chosen at creation. A node this skill creates (§5.4)
+or re-plans gets its Capability by the same criteria: the work's complexity,
+nuance and technicality.
+
+| Capability | Work |
 |---|---|
-| `simple` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `normal` | Ordinary implementation from a complete plan; node reviews. |
-| `demanding` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `lookup` | Read-only work: find files, trace code, summarize, classify, extract; run a check and report its output. Changes no file. |
+| `mechanical` | Small edits the plan fully decides: copying, renaming, fixtures, docs that restate code. |
+| `implementation` | Ordinary implementation from a complete plan; node reviews. |
+| `judgment` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
 
-A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the tier.
+A node that edits files is never `lookup`.
+
+A capability names the class of task. A session maps it to the subagent or model it uses for that class of task — `judgment` for demanding or nuanced coding work, `implementation` for normal coding work, `mechanical` and `lookup` for simple work — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the capability.
+
+Choose the subagent by its capability as the session describes it; do not set a model on the call when the session describes subagents.
 
 ### 5.4 Found issues
 
@@ -223,7 +273,7 @@ from one breaks the main checkout.
 When every node is `DONE` or `DROPPED`:
 
 1. Run the verification stage (§4) over the whole branch, from where it left
-   the default branch to its head, at the `demanding` tier, with the
+   the default branch to its head, with a `judgment` reviewer and the
    header's review focus. Confirmed findings become nodes and run through
    §5.2.
 2. When the stage passes, deliver the branch in §2 precedence: the
