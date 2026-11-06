@@ -963,7 +963,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
 - **Python.** A file's *own root* is the parent of the topmost directory of the
   chain of directories with `__init__.py` above it, or its own directory when
   that has no `__init__.py`. The *roots*, in order, are the own root, the
-  workspace root, and `src/` when it is a directory. `a.b.c` exists under a
+  workspace root, and `src/` when it is a directory. A module name is
+  resolved as its identifiers joined by `.`, without the whitespace and line
+  continuations between them (`import pkg . sub` resolves `pkg.sub`); the
+  `specifier` keeps the written text. `a.b.c` exists under a
   root as `a/b/c/__init__.py`, else `a/b/c.py`; a directory without
   `__init__.py` is a namespace package (it exists, with no file). `import
   a.b.c` uses the first root under which `a` is a module or regular package,

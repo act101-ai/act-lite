@@ -634,3 +634,43 @@ fn a_module_in_a_virtual_environment_is_no_top_level_candidate() {
 fn a_pyvenv_cfg_marks_a_directory_of_any_name_as_vendored() {
     assert_eq!(requests_in_a_virtual_environment("env"), Outcome::External);
 }
+
+#[test]
+fn a_module_name_is_resolved_without_its_spaces_and_line_continuations() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pkg/__init__.py", "");
+    write(ws.path(), "pkg/sub.py", "v = 1\n");
+    write(ws.path(), "pkg/r.py", "v = 1\n");
+    write(
+        ws.path(),
+        "main.py",
+        "import pkg . sub\nfrom pkg . sub import v\nfrom pkg .\\\n sub import v\n",
+    );
+    write(ws.path(), "pkg/x/__init__.py", "");
+    write(
+        ws.path(),
+        "pkg/x/y.py",
+        "from . . r import v\nfrom .. sub import v\n",
+    );
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg . sub"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg . sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg .\\\n sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "pkg/x/y.py", ". . r.v"),
+        resolved(&["pkg/r.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "pkg/x/y.py", ".. sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
+}

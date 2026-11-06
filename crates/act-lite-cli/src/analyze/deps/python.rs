@@ -320,11 +320,14 @@ impl Resolver for PythonResolver {
     }
 
     fn resolve(&self, file: &str, rel: &Relationship, cx: &mut ResolveCx<'_>) -> Outcome {
+        // The value is the module name without whitespace, comments and
+        // line continuations; the specifier keeps the written text.
+        let value = rel.value.as_deref().unwrap_or(&rel.specifier);
         match rel.kind {
-            RelationshipKind::Import => import(cx, file, &rel.specifier),
+            RelationshipKind::Import => import(cx, file, value),
             RelationshipKind::FromImport => {
                 let name = rel.imported.as_deref().unwrap_or_default();
-                from_import(cx, file, module_of(&rel.specifier, name), name)
+                from_import(cx, file, module_of(value, name), name)
             }
             _ => Outcome::Unresolved("not a Python import".to_string()),
         }
