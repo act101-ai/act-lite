@@ -772,3 +772,84 @@ fn a_module_name_is_resolved_without_its_spaces_and_line_continuations() {
         resolved(&["pkg/sub.py"])
     );
 }
+
+/// `pkg/__init__.py` is a symlink to `target`; `pkg/n.py` has `import main`
+/// and `other/n.py` is empty; `main.py` holds `main`.
+#[cfg(unix)]
+fn symlinked_initializer(target: &str, target_text: &str, main: &str) -> tempfile::TempDir {
+    let ws = tempfile::tempdir().unwrap();
+    fs::create_dir(ws.path().join(".git")).unwrap();
+    write(ws.path(), target, target_text);
+    write(ws.path(), "other/n.py", "");
+    write(ws.path(), "pkg/n.py", "import main\n");
+    write(ws.path(), "main.py", main);
+    std::os::unix::fs::symlink(
+        Path::new("..").join(target),
+        ws.path().join("pkg/__init__.py"),
+    )
+    .unwrap();
+    ws
+}
+
+#[cfg(unix)]
+#[test]
+fn a_submodule_is_looked_up_in_the_package_directory_not_beside_a_symlinked_initializer() {
+    let ws = symlinked_initializer("other/__init__.py", "", "from pkg import n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "pkg.n"), resolved(&["pkg/n.py"]));
+    assert!(edges(&graph).contains(&("main.py".to_string(), "pkg/n.py".to_string())));
+    assert_eq!(cycles(ws.path()), vec![vec!["main.py", "pkg/n.py"]]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dotted_import_through_a_symlinked_initializer_stays_in_the_package_directory() {
+    let ws = symlinked_initializer("other/__init__.py", "", "import pkg.n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "pkg.n"), resolved(&["pkg/n.py"]));
+    assert_eq!(cycles(ws.path()), vec![vec!["main.py", "pkg/n.py"]]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_name_bound_in_a_symlinked_initializer_resolves_to_its_target() {
+    let ws = symlinked_initializer(
+        "lib/impl.py",
+        "n = 1\n",
+        "from pkg import n\nfrom pkg import m\nimport pkg\n",
+    );
+    write(ws.path(), "lib/m.py", "");
+    write(ws.path(), "pkg/m.py", "");
+    write(ws.path(), "pkg/k.py", "from . import m\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg.n"),
+        resolved(&["lib/impl.py"])
+    );
+    assert_eq!(outcome(&graph, "main.py", "pkg.m"), resolved(&["pkg/m.py"]));
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg"),
+        resolved(&["lib/impl.py"])
+    );
+    assert_eq!(outcome(&graph, "pkg/k.py", ".m"), resolved(&["pkg/m.py"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_directory_resolves_to_the_files_of_its_target() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "other/__init__.py", "");
+    write(ws.path(), "other/n.py", "");
+    write(ws.path(), "main.py", "from link import n\n");
+    write(ws.path(), "dotted.py", "import link.n\n");
+    std::os::unix::fs::symlink("other", ws.path().join("link")).unwrap();
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "link.n"),
+        resolved(&["other/n.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "dotted.py", "link.n"),
+        resolved(&["other/n.py"])
+    );
+}

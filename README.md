@@ -973,7 +973,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   must be a package (a regular package or a namespace package) in the one
   before it, the package checked before a module file. A module file there
   stops the search: with `a.py` and `a/b.py` but no `a/__init__.py`,
-  `import a.b` is `unresolved` (`a is not a package`). `import
+  `import a.b` is `unresolved` (`a is not a package`). The submodules
+  of a regular package are found in its directory as written, also when its
+  `__init__.py` is a symlink to a file elsewhere; that file is read and
+  reported at its own path. `import
   a.b.c` uses the first root under which `a` is a module or regular package,
   else the first under which it is a namespace package. `from X import n`
   targets `X`'s file when its top-level statements leave `n` bound (a
