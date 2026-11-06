@@ -262,6 +262,16 @@ fn cmake_variable_use_resolves_to_the_variable_not_the_enclosing_argument() {
 }
 
 #[test]
+fn cmake_use_resolves_to_a_quoted_or_bracketed_declaration_content() {
+    let ws = workspace(&[(
+        "CMakeLists.txt",
+        "set(\"FOO\" 1)\nset([[BAR]] 2)\nmessage(${FOO} ${BAR})\n",
+    )]);
+    assert_found(ws.path(), "CMakeLists.txt", "FOO", 3, 11, "FOO 1:6-1:9");
+    assert_found(ws.path(), "CMakeLists.txt", "BAR", 3, 18, "BAR 2:7-2:10");
+}
+
+#[test]
 fn cmake_command_names_match_case_sensitively() {
     let ws = workspace(&[(
         "CMakeLists.txt",
