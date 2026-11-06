@@ -232,10 +232,11 @@ fn a_typed_or_commented_zig_import_is_never_a_candidate() {
 fn zig_extern_and_struct_literal_declarations_are_candidates() {
     let ws = workspace(&[(
         "x.zig",
-        "extern var errno: c_int;\nconst value = struct { y: u8 }{ .y = 1 };\nfn f() void {\n    _ = errno;\n    _ = value;\n}\n",
+        "extern var errno: c_int;\nconst value = struct { y: u8 }{ .y = 1 };\nextern const lim2: u8 // c = 1\n;\nfn f() void {\n    _ = errno;\n    _ = value;\n    _ = lim2;\n}\n",
     )]);
-    assert_found(ws.path(), "x.zig", "errno", 4, 9, "errno 1:12-1:17");
-    assert_found(ws.path(), "x.zig", "value", 5, 9, "value 2:7-2:12");
+    assert_found(ws.path(), "x.zig", "errno", 6, 9, "errno 1:12-1:17");
+    assert_found(ws.path(), "x.zig", "value", 7, 9, "value 2:7-2:12");
+    assert_found(ws.path(), "x.zig", "lim2", 8, 9, "lim2 3:14-3:18");
 }
 
 #[test]
