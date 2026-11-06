@@ -1469,3 +1469,171 @@ fn an_inline_module_with_a_rejected_path_has_no_directory() {
     );
     assert!(pairs(&graph).is_empty());
 }
+
+#[test]
+fn a_use_in_a_block_local_module_resolves_inside_it() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nfn f() {\n    mod inner {\n        mod a {\n            pub struct A;\n        }\n        use self::a::A;\n    }\n}\n",
+    );
+    write(root, "src/a.rs", "use crate::f;\npub struct A;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "self::a::A"),
+        resolved(&["src/lib.rs"]),
+        "the block-local module `a`, in the file itself"
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/a.rs"),
+        ["module"],
+        "no `use` from the block-local module to src/a.rs"
+    );
+    assert_eq!(kinds_of(&graph, "src/a.rs", "src/lib.rs"), ["use"]);
+}
+
+#[test]
+fn a_use_in_a_body_finds_the_items_of_the_body_first() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod x;\n",
+            "pub struct Top;\n",
+            "pub fn f() {\n",
+            "    mod x {\n",
+            "        pub struct Inner;\n",
+            "    }\n",
+            "    struct Local;\n",
+            "    use self::x::Outer;\n",
+            "    use x::Inner;\n",
+            "    use self::x::Inner as Wrong;\n",
+            "    use self::Top;\n",
+            "    use self::Local as Missing;\n",
+            "}\n",
+            "pub struct S;\n",
+            "impl S {\n",
+            "    fn m(&self) {\n",
+            "        mod q {\n",
+            "            pub struct Q;\n",
+            "        }\n",
+            "        use q::Q;\n",
+            "    }\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/x.rs", "pub struct Outer;\n");
+    write(root, "src/q.rs", "pub struct Q;\n");
+    let graph = graph(root);
+    let of = |spec| outcome(&graph, "src/lib.rs", spec);
+    assert_eq!(
+        of("self::x::Outer"),
+        resolved(&["src/x.rs"]),
+        "`self` in a body is the module that holds the body"
+    );
+    assert_eq!(of("x::Inner"), resolved(&["src/lib.rs"]));
+    assert_eq!(
+        of("self::x::Inner"),
+        unresolved("Inner is neither a module nor an item of src/x.rs")
+    );
+    assert_eq!(of("self::Top"), resolved(&["src/lib.rs"]));
+    assert_eq!(
+        of("self::Local"),
+        unresolved("Local is neither a module nor an item of src/lib.rs"),
+        "an item of the body is not an item of the module"
+    );
+    assert_eq!(of("q::Q"), resolved(&["src/lib.rs"]), "a method body");
+    assert_eq!(pairs(&graph), [edge("src/lib.rs", "src/x.rs")]);
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/x.rs"),
+        ["module", "use"]
+    );
+}
+
+#[test]
+fn super_and_nested_blocks_follow_the_block_local_scopes() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod deep;\n",
+            "pub struct Top;\n",
+            "pub fn f() {\n",
+            "    pub struct Local;\n",
+            "    mod deep {\n",
+            "        pub struct D;\n",
+            "    }\n",
+            "    mod inner {\n",
+            "        use super::Top;\n",
+            "        use super::a::A;\n",
+            "        use super::Local;\n",
+            "        use deep::Hidden;\n",
+            "        mod helper {\n",
+            "            pub struct H;\n",
+            "        }\n",
+            "        pub fn g() {\n",
+            "            struct G;\n",
+            "            use self::helper::H;\n",
+            "            mod nested {\n",
+            "                use super::super::Top as Again;\n",
+            "            }\n",
+            "        }\n",
+            "    }\n",
+            "    {\n",
+            "        {\n",
+            "            use deep::D;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct A;\n");
+    write(root, "src/deep.rs", "pub struct D;\n");
+    let graph = graph(root);
+    let of = |spec| outcome(&graph, "src/lib.rs", spec);
+    assert_eq!(
+        of("super::Top"),
+        resolved(&["src/lib.rs"]),
+        "`super` of a block-local module is the module that holds the body"
+    );
+    assert_eq!(of("super::a::A"), resolved(&["src/a.rs"]));
+    assert_eq!(
+        of("super::Local"),
+        unresolved("Local is neither a module nor an item of src/lib.rs")
+    );
+    assert_eq!(
+        of("deep::Hidden"),
+        unresolved("first path segment is not a module, crate or dependency: deep"),
+        "a block-local module does not see the body around it"
+    );
+    assert_eq!(of("self::helper::H"), resolved(&["src/lib.rs"]));
+    assert_eq!(
+        of("super::super::Top"),
+        resolved(&["src/lib.rs"]),
+        "`super` goes out one block-local module, then to the module"
+    );
+    assert_eq!(
+        of("deep::D"),
+        resolved(&["src/lib.rs"]),
+        "a nested block sees the items of the blocks around it"
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/a.rs"),
+        ["module", "use"]
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/deep.rs"),
+        ["module"],
+        "no `use` reaches the module file `deep`"
+    );
+}

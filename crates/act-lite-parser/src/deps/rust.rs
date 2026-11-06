@@ -1,6 +1,7 @@
 //! Rust: `mod x;`, the leaves of each `use` tree, `extern crate`, the
 //! `include!` family, the `mod` and `use` forms inside a module-level macro
-//! invocation, and the names a module file declares.
+//! invocation, the names a module file declares, and the blocks of its
+//! bodies that declare items (block-local scopes).
 //!
 //! tree-sitter leaves a macro body as a flat `token_tree`. Wrapper macros
 //! (`cfg_rt! { pub mod a; pub use a::B; }`) pass their items through, so at
@@ -20,8 +21,8 @@ use act_lite_core::CompactRange;
 use tree_sitter::Node;
 
 use super::{
-    InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, nodes, range_of,
-    rust_value, text, unquote,
+    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, nodes,
+    range_of, rust_value, text, unquote,
 };
 use crate::{Grammar, Parser};
 
@@ -130,13 +131,16 @@ fn macro_relationships(item: MacroItem) -> Vec<Relationship> {
     }
 }
 
-/// The names declared at the module level of the file, and its inline
-/// modules with their own names.
+/// The names declared at the module level of the file, its inline modules
+/// with their own names, and the blocks with items of each.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
-    declared(root, source)
+    declared(root, source, false)
 }
 
-fn declared(container: Node, source: &str) -> ModuleNames {
+/// The names that the items of `container` declare. In a block, only the
+/// items and inline modules count: a `use` there, an `extern crate` and a
+/// macro invocation declare nothing.
+fn declared(container: Node, source: &str, block: bool) -> ModuleNames {
     let mut names = ModuleNames::default();
     let mut cursor = container.walk();
     for item in container.named_children(&mut cursor) {
@@ -158,10 +162,11 @@ fn declared(container: Node, source: &str) -> ModuleNames {
                         name,
                         range: range_of(item),
                         path_attribute: path_attribute(item, source),
-                        names: declared(body, source),
+                        names: declared(body, source, false),
                     });
                 }
             }
+            _ if block => {}
             "extern_crate_declaration" => {
                 if let Some(alias) = item.child_by_field_name("alias") {
                     names.names.insert(unraw(text(alias, source)).to_string());
@@ -201,7 +206,39 @@ fn declared(container: Node, source: &str) -> ModuleNames {
             _ => {}
         }
     }
+    blocks_in(container, source, &mut names.blocks);
     names
+}
+
+/// The blocks with items under `node`, not inside another such block or an
+/// inline module; a block without items gives the blocks inside it.
+fn blocks_in(node: Node, source: &str, found: &mut Vec<BlockModule>) {
+    let mut stack: Vec<Node> = {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor).collect()
+    };
+    stack.reverse();
+    while let Some(child) = stack.pop() {
+        match child.kind() {
+            "mod_item" => {}
+            "block" => {
+                let names = declared(child, source, true);
+                if names.names.is_empty() {
+                    found.extend(names.blocks);
+                } else {
+                    found.push(BlockModule {
+                        range: range_of(child),
+                        names,
+                    });
+                }
+            }
+            _ => {
+                let mut cursor = child.walk();
+                let children: Vec<Node> = child.named_children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev());
+            }
+        }
+    }
 }
 
 fn declare_leaf(names: &mut ModuleNames, leaf: Leaf) {
