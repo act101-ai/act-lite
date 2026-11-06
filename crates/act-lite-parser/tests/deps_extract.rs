@@ -575,6 +575,7 @@ fn python_names_bound_at_top_level() {
         inline: vec![],
         blocks: vec![],
         uses: vec![],
+        files: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -790,14 +791,17 @@ mod outl;
                         inline: vec![],
                         blocks: vec![],
                         uses: vec![],
+                        files: vec![],
                     },
                 }],
                 blocks: vec![],
                 uses: vec![],
+                files: vec![],
             },
         }],
         blocks: vec![],
         uses: vec![],
+        files: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -839,6 +843,7 @@ impl S {
         inline,
         blocks,
         uses: vec![],
+        files: vec![],
     };
     let block = |at: &str, names| BlockModule {
         range: range(at),
@@ -1306,4 +1311,28 @@ fn a_rust_path_attribute_is_decoded() {
         .map(|m| m.path_attribute)
         .collect();
     assert_eq!(inline, [some("in"), Some(Err(InvalidLiteral))]);
+}
+
+#[test]
+fn a_mod_declaration_in_a_body_is_a_file_module_of_its_scope() {
+    let file = parse(
+        Grammar::Rust,
+        "mod top;\nfn f() {\n    #[path = \"b.rs\"]\n    mod a;\n    mod inner {\n        mod c;\n    }\n}\n",
+    );
+    let module = deps::module_names(&file);
+    assert_eq!(
+        module.files,
+        [],
+        "a `mod x;` outside a body is no file module of a scope"
+    );
+    let [block] = module.blocks.as_slice() else {
+        panic!("one block: {module:?}");
+    };
+    assert_eq!(block.names.names, names(&["a", "inner"]));
+    assert_eq!(block.names.files, [("a".to_string(), range("4:5-4:11"))]);
+    let [inner] = block.names.inline.as_slice() else {
+        panic!("one inline module: {block:?}");
+    };
+    assert_eq!(inner.names.names, names(&["c"]));
+    assert_eq!(inner.names.files, [("c".to_string(), range("6:9-6:15"))]);
 }

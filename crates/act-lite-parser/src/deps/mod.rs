@@ -103,6 +103,10 @@ pub struct ModuleNames {
     /// Rust, for a block or an inline module inside a body: the leaves of
     /// its `use` declarations, in location order.
     pub uses: Vec<UseBinding>,
+    /// Rust, for a block or an inline module inside a body: its `mod x;`
+    /// declarations, by name and declaration range, in location order.
+    /// Their names are also in `names`.
+    pub files: Vec<(String, CompactRange)>,
 }
 
 /// A Rust block (a function, closure or other block body) that declares an

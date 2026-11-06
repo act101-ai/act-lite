@@ -1069,6 +1069,19 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   only its own names, the crates, and `crate`, `self` and `super` paths
   apply. A path that stays inside the body targets the file itself, which is
   a self-relationship: it is `resolved` and gives no edge.
+  A `mod x;` inside a body belongs to that body's scope, as an inline module
+  there does. rustc loads its file only through `#[path]`, so without one the
+  declaration is `unresolved` (`a file module inside a block needs a #[path]
+  attribute`). The `#[path]` is relative to the directory that a `#[path]`
+  outside the body would use, plus one directory for each inline module of
+  the body around the declaration (its own `#[path]`, else its name). The
+  declaration is a `module` relationship to the file, and the file is in the
+  crate tree, but `x` is not a child of the module around the body:
+  `crate::x` from elsewhere does not reach it, and a path inside the body
+  finds it first (`fn f() { #[path = "b.rs"] mod a; use a::Thing; }`
+  targets `b.rs`). In that file, `super` is the inline module of the body
+  around the declaration, else the module that holds the body; it does not
+  see the body's own items.
   A file is in a crate tree when that tree's modules reach it, through any
   `#[path]`, not by its directory: an example, bench or test root that loads
   `src/shared.rs` has it in its tree. The trees of every workspace crate

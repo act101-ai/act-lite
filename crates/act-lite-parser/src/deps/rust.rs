@@ -154,10 +154,11 @@ fn declared(container: Node, source: &str, block: bool, in_body: bool) -> Module
                 }
             }
             "mod_item" => {
-                if let Some(body) = item.child_by_field_name("body")
-                    && let Some(name) = item.child_by_field_name("name")
-                {
-                    let name = unraw(text(name, source)).to_string();
+                let Some(name) = item.child_by_field_name("name") else {
+                    continue;
+                };
+                let name = unraw(text(name, source)).to_string();
+                if let Some(body) = item.child_by_field_name("body") {
                     names.names.insert(name.clone());
                     names.inline.push(InlineModule {
                         name,
@@ -165,6 +166,9 @@ fn declared(container: Node, source: &str, block: bool, in_body: bool) -> Module
                         path_attribute: path_attribute(item, source),
                         names: declared(body, source, false, in_body),
                     });
+                } else if in_body {
+                    names.names.insert(name.clone());
+                    names.files.push((name, range_of(item)));
                 }
             }
             "use_declaration" if in_body => {
