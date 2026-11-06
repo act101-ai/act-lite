@@ -1242,3 +1242,33 @@ fn comments_between_parts_of_a_python_interpolated_concatenation_do_not_change_t
     assert_eq!(out["findings"][0]["kind"], "exact");
     assert_eq!(out["findings"][0]["variants"], 1);
 }
+
+/// A JavaScript function of 55 tokens.
+const MIX: &str = "function mix(a, b, c, d, e, f) {
+  const s = a * b - c * d + e * f
+  const t = s * 2 - a + b - c + d
+  return t + e + f - s * 3
+}
+";
+
+#[test]
+fn a_member_of_a_component_script_region_has_the_region_language() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "plain.js", MIX);
+    write(dir.path(), "plain.ts", MIX);
+    write(
+        dir.path(),
+        "Mix.vue",
+        &format!("<script>\n{MIX}</script>\n"),
+    );
+    let out = analyze(dir.path());
+    assert_eq!(out["total"], 1, "{out}");
+    let finding = &out["findings"][0];
+    assert_eq!(finding["language"], "JavaScript");
+    assert_eq!(finding["tokens"], 55);
+    assert_eq!(
+        finding["members"],
+        json!([{"file": "Mix.vue", "range": "2:1-6:2", "variant": 1},
+               {"file": "plain.js", "range": "1:1-5:2", "variant": 1}])
+    );
+}

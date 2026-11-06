@@ -538,3 +538,165 @@ fn whole_details_of_a_component_workspace() {
         })
     );
 }
+
+fn clones(root: &Path, args: &[&str]) -> Value {
+    run(root, "clones", args).unwrap()
+}
+
+/// The `(file, range)` of each member of each class.
+fn classes(out: &Value) -> Vec<Vec<(String, String)>> {
+    out["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| places(&f["members"]))
+        .collect()
+}
+
+#[test]
+fn clones_finds_check_in_every_script_region_and_the_typescript_file() {
+    let dir = analyzer_workspace();
+    let out = clones(dir.path(), &[]);
+    assert_eq!(out["total"], 1, "{out}");
+    let finding = &out["findings"][0];
+    assert_eq!(finding["kind"], "exact");
+    assert_eq!(finding["language"], "TypeScript");
+    assert_eq!(finding["tokens"], 53);
+    assert_eq!(finding["members_total"], 4);
+    assert_eq!(
+        classes(&out),
+        vec![vec![
+            place("Big.astro", "2:1-6:2"),
+            place("Big.svelte", "2:3-6:4"),
+            place("Big.vue", "7:1-11:2"),
+            place("util.ts", "1:8-5:2"),
+        ]]
+    );
+    assert_eq!(out["complete"], true);
+}
+
+#[test]
+fn clones_focus_on_a_component_file_reports_its_class_and_lists_every_region_not_analyzed() {
+    let dir = analyzer_workspace();
+    let out = clones(dir.path(), &["--focus", "Big.vue"]);
+    assert_eq!(out["total"], 1, "{out}");
+    assert_eq!(out["details"]["focus"], json!(["Big.vue"]));
+    assert_eq!(out["details"]["focus_not_analyzed"], json!([]));
+    assert_eq!(
+        classes(&out),
+        vec![vec![
+            place("Big.vue", "7:1-11:2"),
+            place("Big.astro", "2:1-6:2"),
+            place("Big.svelte", "2:3-6:4"),
+            place("util.ts", "1:8-5:2"),
+        ]]
+    );
+    assert_eq!(
+        out["details"]["regions_not_analyzed"],
+        json!([legacy_entry("Legacy.vue")])
+    );
+    assert_eq!(out["details"]["regions_not_analyzed_total"], 1);
+}
+
+/// Template markup of more than 50 tokens.
+fn markup() -> String {
+    (0..10)
+        .map(|i| format!("  <p class=\"row\" id=\"r{i}\">text {i}</p>\n"))
+        .collect()
+}
+
+#[test]
+fn template_markup_is_never_a_clone_candidate() {
+    let template = format!("<template>\n<div>\n{}</div>\n</template>\n", markup());
+    let svelte = format!("<div>\n{}</div>\n", markup());
+    let astro = format!("---\n---\n<div>\n{}</div>\n", markup());
+    let dir = workspace(&[
+        ("A.vue", &template),
+        ("B.vue", &template),
+        ("A.svelte", &svelte),
+        ("B.svelte", &svelte),
+        ("A.astro", &astro),
+        ("B.astro", &astro),
+    ]);
+    let out = clones(dir.path(), &[]);
+    assert_eq!(out["status"], "no_findings", "{out}");
+    assert_eq!(out["details"]["candidates"], 0);
+
+    // The same markup beside a duplicated script region: only the region
+    // function is a class.
+    let script = format!("<script setup lang=\"ts\">\n{}</script>\n", lines(&CHECK));
+    let with_script = format!("{template}{script}");
+    let dir = workspace(&[("A.vue", &with_script), ("B.vue", &with_script)]);
+    let out = clones(dir.path(), &[]);
+    assert_eq!(
+        classes(&out),
+        vec![vec![
+            place("A.vue", "16:1-20:2"),
+            place("B.vue", "16:1-20:2")
+        ]],
+        "{out}"
+    );
+    assert_eq!(out["findings"][0]["language"], "TypeScript");
+}
+
+#[test]
+fn region_clone_candidates_equal_those_of_the_region_view() {
+    let fixture = |name: &str| fs::read_to_string(Path::new(FIXTURES).join(name)).unwrap();
+    let big = analyzer_workspace();
+    let analyzer = |name: &str| fs::read_to_string(big.path().join(name)).unwrap();
+    let mix = format!(
+        "<script>\n{}</script>\n",
+        lines(&[
+            "function mix(a, b, c, d, e, f) {",
+            "  const s = a * b - c * d + e * f",
+            "  const t = s * 2 - a + b - c + d",
+            "  return t + e + f - s * 3",
+            "}",
+        ])
+    );
+    // Each component file and the ranges of the functions of 50 tokens or
+    // more in its script regions.
+    let files: Vec<(&str, String, Vec<&str>)> = vec![
+        ("Counter.vue", fixture("Counter.vue"), vec![]),
+        ("Counter.svelte", fixture("Counter.svelte"), vec![]),
+        ("Card.astro", fixture("Card.astro"), vec![]),
+        ("Big.vue", analyzer("Big.vue"), vec!["7:1-11:2"]),
+        ("Big.svelte", analyzer("Big.svelte"), vec!["2:3-6:4"]),
+        ("Big.astro", analyzer("Big.astro"), vec!["2:1-6:2"]),
+        ("Mix.vue", mix, vec!["2:1-6:2"]),
+    ];
+    let mut checked = 0;
+    let mut regions = 0;
+    for (name, text, expected) in &files {
+        let grammar = Grammar::from_path(Path::new(name)).unwrap();
+        let source = SourceFile::from_content(*name, text.clone(), grammar).unwrap();
+        let mut found = Vec::new();
+        for region in source.regions() {
+            if region.kind == RegionKind::Style || region.state != RegionState::WellFormed {
+                continue;
+            }
+            let RegionLanguage::Supported(language) = &region.language else {
+                continue;
+            };
+            regions += 1;
+            let view_name = format!("view.{}", extension(*language));
+            let dir = workspace(&[(name, text), (&view_name, &view(text, region))]);
+            let out = clones(dir.path(), &[]);
+            for class in classes(&out) {
+                assert_eq!(class.len(), 2, "{name}: {class:?}");
+                let (c, v) = (&class[0], &class[1]);
+                assert_eq!(c.0, *name, "{class:?}");
+                assert_eq!(v.0, view_name, "{class:?}");
+                assert_eq!(c.1, v.1, "{class:?}");
+                let e = &region.element;
+                let outer = (e.start_line(), e.start_col(), e.end_line(), e.end_col());
+                assert!(inside(&c.1, outer), "{name}: {class:?}");
+                found.push(c.1.clone());
+            }
+        }
+        assert_eq!(&found, expected, "{name}");
+        checked += found.len();
+    }
+    assert_eq!(regions, 11);
+    assert_eq!(checked, 4);
+}

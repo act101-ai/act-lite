@@ -1,7 +1,7 @@
 //! The `clones` analyzer: syntax subtrees duplicated across the analyzed files.
 
 use super::envelope::{AnalyzeError, Finding, Location, rel_path};
-use super::read::{FileSource, Parsed};
+use super::read::{CodeUnit, FileSource};
 use super::run::{Analysis, Analyzer, Request};
 use crate::mcp::path_error::enrich_not_found_error;
 use act_lite_core::CompactRange;
@@ -181,10 +181,12 @@ impl Analyzer for ClonesAnalyzer {
         while let Some(parsed) = source.next_file()? {
             let file = files.len() as u32;
             let first = candidates.len();
-            walk(&parsed, cancel, |_, c| {
-                candidates.push(Candidate { file, ..c });
-                Ok(())
-            })?;
+            for unit in parsed.code() {
+                walk(unit, cancel, |_, c| {
+                    candidates.push(Candidate { file, ..c });
+                    Ok(())
+                })?;
+            }
             files.push(File {
                 rel: parsed.rel,
                 first,
@@ -347,20 +349,22 @@ fn renamed_hashes(
         }
         let parsed = source.reread(&file.rel)?;
         let mut ordinal = 0;
-        walk(&parsed, cancel, |node, found| {
-            let index = file.first + ordinal;
-            let Some(kept) = own.get(ordinal) else {
-                return Err(changed(&file.rel));
-            };
-            if kept.range != found.range || kept.exact != found.exact {
-                return Err(changed(&file.rel));
-            }
-            if shared(kept) {
-                renamed.insert(index, renamed_hash(node, &parsed));
-            }
-            ordinal += 1;
-            Ok(())
-        })?;
+        for unit in parsed.code() {
+            walk(unit, cancel, |node, found| {
+                let index = file.first + ordinal;
+                let Some(kept) = own.get(ordinal) else {
+                    return Err(changed(&file.rel));
+                };
+                if kept.range != found.range || kept.exact != found.exact {
+                    return Err(changed(&file.rel));
+                }
+                if shared(kept) {
+                    renamed.insert(index, renamed_hash(node, unit));
+                }
+                ordinal += 1;
+                Ok(())
+            })?;
+        }
         if ordinal != own.len() {
             return Err(changed(&file.rel));
         }
@@ -447,16 +451,18 @@ impl Open<'_> {
     }
 }
 
-/// Hashes every node of the file bottom-up, comments left out, and calls
+/// Hashes every node of one unit of code bottom-up (a file's tree, or a
+/// script region tree of a component file), comments left out, and calls
 /// `found` for each candidate in post-order: a named node other than the
-/// root, with no ERROR or MISSING node, of at least [`MIN_TOKENS`] tokens.
+/// unit's root, with no ERROR or MISSING node, of at least [`MIN_TOKENS`]
+/// tokens. A candidate's language is the unit's.
 fn walk<'t>(
-    parsed: &'t Parsed,
+    unit: CodeUnit<'t>,
     cancel: &CancellationToken,
     mut found: impl FnMut(Node<'t>, Candidate) -> Result<(), AnalyzeError>,
 ) -> Result<(), AnalyzeError> {
-    let grammar = parsed.source.grammar();
-    let text = parsed.source.content();
+    let grammar = unit.grammar;
+    let text = unit.source;
     let literals = literal_kinds(grammar);
     let lit = literal();
     let open = |node: Node<'t>| {
@@ -475,7 +481,7 @@ fn walk<'t>(
             identifier: false,
         }
     };
-    let root = parsed.source.tree().root_node();
+    let root = unit.tree.root_node();
     let mut cursor = root.walk();
     let mut stack = vec![open(root)];
     let mut count = 0;
@@ -566,9 +572,9 @@ fn range(node: Node) -> CompactRange {
 /// The hash of `node`'s renamed form, in one pass over its subtree: each
 /// identifier token numbered by the first appearance of its text, each
 /// literal that holds no identifier token replaced.
-fn renamed_hash(node: Node, parsed: &Parsed) -> u128 {
-    let grammar = parsed.source.grammar();
-    let text = parsed.source.content();
+fn renamed_hash(node: Node, unit: CodeUnit) -> u128 {
+    let grammar = unit.grammar;
+    let text = unit.source;
     let literals = literal_kinds(grammar);
     let mut names: HashMap<&str, u32> = HashMap::new();
     let mut h = hasher();
