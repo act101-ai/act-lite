@@ -322,7 +322,7 @@ pub(super) fn mods_in_text(text_: &str) -> Vec<String> {
 
 /// The leaves of a `use` tree: `a::{b, c::d}` gives `a::b` and `a::c::d`;
 /// `self` in a list gives the list's prefix; `a::*` gives `a`; `a::b as c`
-/// gives `a::b`.
+/// gives `a::b`; `::{a, b::c}` gives `::a` and `::b::c`.
 fn use_leaves(node: Node, source: &str) -> Vec<Leaf> {
     let mut leaves = Vec::new();
     collect_leaves(node, source, "", &mut leaves);
@@ -357,8 +357,12 @@ fn collect_leaves(node: Node, source: &str, prefix: &str, leaves: &mut Vec<Leaf>
             leaves.push(leaf(path, true));
         }
         "scoped_use_list" => {
+            // `::{a, b}` keeps its leading `::`: each leaf names a crate.
+            let mut cursor = node.walk();
+            let rooted = node.children(&mut cursor).any(|c| c.kind() == "::");
             let prefix = match node.child_by_field_name("path") {
                 Some(path) => join(prefix, &path_text(path, source)),
+                None if rooted && prefix.is_empty() => "::".to_string(),
                 None => prefix.to_string(),
             };
             if let Some(list) = node.child_by_field_name("list") {
@@ -381,6 +385,8 @@ fn collect_leaves(node: Node, source: &str, prefix: &str, leaves: &mut Vec<Leaf>
 fn join(prefix: &str, rest: &str) -> String {
     if prefix.is_empty() {
         rest.to_string()
+    } else if prefix == "::" {
+        format!("::{rest}")
     } else {
         format!("{prefix}::{rest}")
     }

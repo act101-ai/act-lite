@@ -241,6 +241,21 @@ fn a_match_statement_in_the_package_file_beats_a_submodule() {
 }
 
 #[test]
+fn an_import_continued_on_the_next_line_in_the_package_file_beats_a_submodule() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pkg/__init__.py", "import top \\\n .leaf\n");
+    write(ws.path(), "pkg/top.py", "");
+    write(ws.path(), "top/__init__.py", "");
+    write(ws.path(), "top/leaf.py", "");
+    write(ws.path(), "consumer.py", "from pkg import top\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "consumer.py", "pkg.top"),
+        resolved(&["pkg/__init__.py"])
+    );
+}
+
+#[test]
 fn a_global_statement_does_not_beat_a_submodule() {
     let ws = tempfile::tempdir().unwrap();
     write(ws.path(), "pkg/__init__.py", "global n\n");

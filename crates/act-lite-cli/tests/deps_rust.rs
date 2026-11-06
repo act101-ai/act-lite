@@ -2114,3 +2114,26 @@ fn a_macro_in_a_body_declares_in_the_body_scope() {
         "src/x.rs is not in the tree"
     );
 }
+
+#[test]
+fn a_leading_path_separator_before_a_use_list_names_a_crate() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "edition = \"2021\"\n");
+    write(
+        root,
+        "src/lib.rs",
+        "pub struct Root;\nmod std;\nuse ::{std::fmt};\nw! { use ::{std::fmt as f}; }\n",
+    );
+    write(root, "src/std.rs", "pub mod fmt {}\nuse crate::Root;\n");
+    let graph = graph(root);
+    let outcomes: Vec<Outcome> = graph
+        .relationships_of("src/lib.rs")
+        .iter()
+        .filter(|r| r.relationship.specifier == "::std::fmt")
+        .map(|r| r.outcome.clone())
+        .collect();
+    assert_eq!(outcomes, [Outcome::External, Outcome::External]);
+    assert_eq!(kinds_of(&graph, "src/lib.rs", "src/std.rs"), ["module"]);
+    assert_eq!(kinds_of(&graph, "src/std.rs", "src/lib.rs"), ["use"]);
+}

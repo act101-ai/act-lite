@@ -1060,6 +1060,30 @@ fn a_use_in_a_block_local_module_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_leading_path_separator_before_a_use_list_gives_no_edge_and_no_cycle() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "pub struct Root;\nmod std;\nuse ::{std::fmt};\n",
+    );
+    write(root, "src/std.rs", "pub mod fmt {}\nuse crate::Root;\n");
+    let v = graph(root, &[]);
+    assert_eq!(kinds(edge(&v, "src/lib.rs", "src/std.rs")), ["module"]);
+    assert_eq!(kinds(edge(&v, "src/std.rs", "src/lib.rs")), ["use"]);
+    assert_eq!(unresolved(&v), []);
+    let cycles = analyze(root, "cycles", &[]);
+    assert_eq!(cycles["findings"], json!([]));
+    assert_eq!(cycles["status"], "no_findings");
+}
+
+#[test]
 fn a_use_through_a_use_binding_in_a_body_gives_no_edge_and_no_cycle() {
     let ws = workspace();
     let root = ws.path();
