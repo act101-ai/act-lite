@@ -54,45 +54,62 @@ pub fn blank(content: &str, regions: &[TestRegion]) -> String {
     String::from_utf8(bytes).expect("blanking a UTF-8 span keeps the text UTF-8")
 }
 
-fn collect(parent: Node, content: &str, regions: &mut Vec<TestRegion>) {
-    let mut cursor = parent.walk();
-    let mut first_attribute: Option<Node> = None;
-    let mut is_test = false;
-    let mut is_cfg_test_item = false;
-    for node in parent.children(&mut cursor) {
+fn collect(root: Node, content: &str, regions: &mut Vec<TestRegion>) {
+    // One entry per level being walked: its first attribute, and whether the
+    // attributes since then mark a test function or a `cfg(test)` item.
+    let mut levels: Vec<(Option<Node>, bool, bool)> = vec![(None, false, false)];
+    let mut cursor = root.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    loop {
+        let node = cursor.node();
+        let (first_attribute, is_test, is_cfg_test_item) =
+            levels.last_mut().expect("a level is open while walking");
         match node.kind() {
             "attribute_item" => {
                 first_attribute.get_or_insert(node);
                 let attribute = attribute(node);
-                is_cfg_test_item |= is_cfg_test(attribute, content);
-                is_test |= is_test_attribute(attribute, content);
+                *is_cfg_test_item |= is_cfg_test(attribute, content);
+                *is_test |= is_test_attribute(attribute, content);
             }
             kind if kind.contains("comment") => {}
             kind => {
-                if let Some(first) = first_attribute.take()
-                    && (is_cfg_test_item || (is_test && kind == "function_item"))
+                let first = first_attribute.take();
+                let is_region = *is_cfg_test_item || (*is_test && kind == "function_item");
+                *is_test = false;
+                *is_cfg_test_item = false;
+                if let Some(first) = first
+                    && is_region
                 {
                     regions.push(region(first.start_position(), first.start_byte(), node));
-                    is_test = false;
-                    is_cfg_test_item = false;
+                } else if cursor.goto_first_child() {
+                    levels.push((None, false, false));
                     continue;
                 }
-                is_test = false;
-                is_cfg_test_item = false;
-                collect(node, content, regions);
+            }
+        }
+        while !cursor.goto_next_sibling() {
+            levels.pop();
+            if levels.is_empty() || !cursor.goto_parent() {
+                return;
             }
         }
     }
 }
 
 /// One region per Zig `test_declaration`, from `test` to its closing `}`.
-fn collect_zig(parent: Node, regions: &mut Vec<TestRegion>) {
-    let mut cursor = parent.walk();
-    for node in parent.named_children(&mut cursor) {
+fn collect_zig(root: Node, regions: &mut Vec<TestRegion>) {
+    let mut cursor = root.walk();
+    let mut stack: Vec<Node> = root.named_children(&mut cursor).collect();
+    stack.reverse();
+    while let Some(node) = stack.pop() {
         if node.kind() == "test_declaration" {
             regions.push(region(node.start_position(), node.start_byte(), node));
         } else {
-            collect_zig(node, regions);
+            let start = stack.len();
+            stack.extend(node.named_children(&mut cursor));
+            stack[start..].reverse();
         }
     }
 }
