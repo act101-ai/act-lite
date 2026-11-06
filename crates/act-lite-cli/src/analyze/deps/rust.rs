@@ -27,7 +27,8 @@ use crate::analyze::envelope::LimitHit;
 use crate::analyze::read::{Parsed, RemovedRegion};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{
-    InlineModule, LiteralValue, Relationship, RelationshipKind, extract, module_names,
+    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, extract,
+    module_names,
 };
 use act_lite_parser::{Grammar, SourceFile};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -121,6 +122,8 @@ struct Module {
     /// The declared names and whether a glob `use` is present; the `Err` is
     /// the reason the file could not be read.
     names: Result<Names, String>,
+    /// The blocks with items of the module's bodies.
+    blocks: Arc<Vec<BlockModule>>,
     /// The module's file has been read; always true for an inline module.
     expanded: bool,
     /// Why the module's directory is unknown: the `#[path]` literal of the
@@ -303,15 +306,82 @@ fn outcome_in(
                 }
             }
         }
-        _ => use_path(cx, &rel.specifier, package, tree, is_lib, m),
+        _ => use_path(cx, &rel.specifier, &rel.range, package, tree, is_lib, m),
+    }
+}
+
+/// A block-local scope around a `use`: the anonymous module of a block, or
+/// an inline module inside a body.
+struct Scope<'a> {
+    names: &'a ModuleNames,
+    /// An inline module, not a block.
+    named: bool,
+}
+
+/// The block-local scopes of the module's `blocks` that contain `range`,
+/// outermost first.
+fn block_scopes<'a>(blocks: &'a [BlockModule], range: &CompactRange) -> Vec<Scope<'a>> {
+    let block = |list: &'a [BlockModule]| {
+        list.iter()
+            .find(|b| contains(&b.range, range))
+            .map(|b| Scope {
+                names: &b.names,
+                named: false,
+            })
+    };
+    let mut scopes = Vec::new();
+    let mut next = block(blocks);
+    while let Some(scope) = next {
+        let names = scope.names;
+        scopes.push(scope);
+        next = names
+            .inline
+            .iter()
+            .find(|m| contains(&m.range, range))
+            .map(|m| Scope {
+                names: &m.names,
+                named: true,
+            })
+            .or_else(|| block(&names.blocks));
+    }
+    scopes
+}
+
+/// From a block-local module, follows `segments[i..]` while they name its
+/// inline modules; a remaining segment must be declared there, or the
+/// module must have a glob `use`. The target is the file of the body.
+fn local_walk(names: &ModuleNames, segments: &[&str], i: usize, file: &str) -> Outcome {
+    let Some(segment) = segments.get(i) else {
+        return Outcome::Resolved(vec![file.to_string()]);
+    };
+    let inner: Vec<&InlineModule> = names.inline.iter().filter(|m| m.name == *segment).collect();
+    if !inner.is_empty() {
+        return combine(
+            inner
+                .iter()
+                .map(|m| local_walk(&m.names, segments, i + 1, file))
+                .collect(),
+        );
+    }
+    if names.glob || names.names.contains(*segment) {
+        Outcome::Resolved(vec![file.to_string()])
+    } else {
+        Outcome::Unresolved(format!(
+            "{segment} is neither a module nor an item of {file}"
+        ))
     }
 }
 
 /// Rule 2: the first segment picks the start modules, then `walk` follows
-/// the rest from each.
+/// the rest from each. A `use` in a body at `range` sees the block-local
+/// scopes around it first, as rustc: an inline module or item of an
+/// enclosing block; `self` is the innermost inline module of the body,
+/// never a block, and each `super` goes out one such module, then on from
+/// `m`; an inline module of the body hides the blocks and module around it.
 fn use_path(
     cx: &mut ResolveCx<'_>,
     path: &str,
+    range: &CompactRange,
     package: Option<&Manifest>,
     tree: &mut Tree,
     is_lib: Option<bool>,
@@ -323,15 +393,35 @@ fn use_path(
     };
     let segments: Vec<&str> = path.split("::").map(unraw).collect();
     let first = segments[0];
+    let blocks = Arc::clone(&tree.modules[m].blocks);
+    let scopes = if global {
+        Vec::new()
+    } else {
+        block_scopes(&blocks, range)
+    };
+    let file = tree.modules[m].file.clone();
     if !global && matches!(first, "crate" | "self" | "super") {
+        let mut i = usize::from(first != "super");
+        if first != "crate" {
+            let named: Vec<&ModuleNames> = scopes
+                .iter()
+                .rev()
+                .filter(|s| s.named)
+                .map(|s| s.names)
+                .collect();
+            let mut at = 0;
+            while at < named.len() && segments.get(i) == Some(&"super") {
+                at += 1;
+                i += 1;
+            }
+            if let Some(names) = named.get(at) {
+                return local_walk(names, &segments, i, &file);
+            }
+        }
         if tree.detached {
             return Outcome::Unresolved("file is not reached from a crate root".to_string());
         }
-        let (mut k, mut i) = match first {
-            "crate" => (0, 1),
-            "self" => (m, 1),
-            _ => (m, 0),
-        };
+        let mut k = if first == "crate" { 0 } else { m };
         if first != "crate" {
             while segments.get(i) == Some(&"super") {
                 let Some(parent) = tree.modules[k].parent else {
@@ -343,7 +433,33 @@ fn use_path(
         }
         return walk(cx, tree, k, &segments, i);
     }
-    if !global {
+    // The innermost inline module of the body ends the search: then only
+    // the crates and its own declared names apply.
+    let mut barrier = None;
+    for scope in scopes.iter().rev() {
+        let inner: Vec<&InlineModule> = scope
+            .names
+            .inline
+            .iter()
+            .filter(|c| c.name == first)
+            .collect();
+        if !inner.is_empty() {
+            return combine(
+                inner
+                    .iter()
+                    .map(|c| local_walk(&c.names, &segments, 1, &file))
+                    .collect(),
+            );
+        }
+        if scope.named {
+            barrier = Some(scope.names);
+            break;
+        }
+        if scope.names.names.contains(first) {
+            return Outcome::Resolved(vec![file]);
+        }
+    }
+    if !global && barrier.is_none() {
         let children = children(&tree.modules[m], first);
         if !children.is_empty() {
             return follow(cx, tree, &children, &segments, 1);
@@ -368,12 +484,13 @@ fn use_path(
         Some(CrateStart::External) => Outcome::External,
         Some(CrateStart::Unresolved(reason)) => Outcome::Unresolved(reason),
         None => {
-            let module = &tree.modules[m];
-            if !global
-                && let Ok(names) = &module.names
-                && names.0.contains(first)
-            {
-                return Outcome::Resolved(vec![module.file.clone()]);
+            let declared = match (barrier, &tree.modules[m].names) {
+                (Some(names), _) => names.names.contains(first),
+                (None, Ok(names)) => !global && names.0.contains(first),
+                (None, Err(_)) => false,
+            };
+            if declared {
+                return Outcome::Resolved(vec![file]);
             }
             Outcome::Unresolved(format!(
                 "first path segment is not a module, crate or dependency: {first}"
@@ -943,7 +1060,7 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
     let file = tree.modules[idx].file.clone();
     summarize(cx, vec![file.clone()]);
     let summary = Arc::clone(&cx.cache::<RustState>().summaries[&file]);
-    let (names, inline, mods) = match summary.as_ref() {
+    let (names, blocks, inline, mods) = match summary.as_ref() {
         Ok(read) => read,
         Err(reason) => {
             tree.modules[idx].names = Err(reason.clone());
@@ -966,6 +1083,7 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
         return;
     }
     tree.modules[idx].names = Ok(Arc::clone(names));
+    tree.modules[idx].blocks = Arc::clone(blocks);
     for module in inline {
         // A removed region's inline module can lie inside an inline module
         // of the file.
@@ -1023,6 +1141,7 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
         children: Vec::new(),
         inline: Vec::new(),
         names: Ok(Arc::default()),
+        blocks: Arc::default(),
         expanded: false,
         unknown_dir: None,
     });
@@ -1069,6 +1188,7 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
             children: Vec::new(),
             inline: Vec::new(),
             names: Ok(Arc::new((module.names.names, module.names.glob))),
+            blocks: Arc::new(module.names.blocks),
             expanded: true,
             unknown_dir,
         });
@@ -1081,11 +1201,13 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
     }
 }
 
-/// A module file's declared names and glob flag, inline modules, and its
-/// `mod x;` declarations with their ranges and `#[path]` values, also the
-/// inline modules and declarations of the removed test regions.
+/// A module file's declared names and glob flag, blocks with items, inline
+/// modules, and its `mod x;` declarations with their ranges and `#[path]`
+/// values, also the inline modules and declarations of the removed test
+/// regions.
 type ModuleFile = (
     Names,
+    Arc<Vec<BlockModule>>,
     Vec<InlineModule>,
     Vec<(String, CompactRange, Option<LiteralValue>)>,
 );
@@ -1101,7 +1223,12 @@ fn module_file(parsed: &Parsed) -> ModuleFile {
         inline.extend(module_names(&file).inline);
         mods.extend(module_decls(&file));
     }
-    (Arc::new((names.names, names.glob)), inline, mods)
+    (
+        Arc::new((names.names, names.glob)),
+        Arc::new(names.blocks),
+        inline,
+        mods,
+    )
 }
 
 fn module_decls(file: &SourceFile) -> Vec<(String, CompactRange, Option<LiteralValue>)> {

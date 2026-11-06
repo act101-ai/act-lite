@@ -96,6 +96,20 @@ pub struct ModuleNames {
     pub glob: bool,
     /// Rust: the inline modules (`mod a { … }`), in location order.
     pub inline: Vec<InlineModule>,
+    /// Rust: the blocks that declare an item or an inline module, inside
+    /// the module's function, `impl` and trait bodies and not inside
+    /// another such block, in location order. They are not in the module.
+    pub blocks: Vec<BlockModule>,
+}
+
+/// A Rust block (a function, closure or other block body) that declares an
+/// item or an inline module: its anonymous module. Its `names` are the
+/// names of its items and inline modules, not of its `use` leaves; its
+/// inline modules are not children of the crate's module tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockModule {
+    pub range: CompactRange,
+    pub names: ModuleNames,
 }
 
 /// A Rust inline module and the names it declares.

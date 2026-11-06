@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{
-    self, InlineModule, InvalidLiteral, LiteralValue, ModuleNames, Relationship, RelationshipKind,
+    self, BlockModule, InlineModule, InvalidLiteral, LiteralValue, ModuleNames, Relationship,
+    RelationshipKind,
 };
 use act_lite_parser::{Grammar, SourceFile};
 
@@ -572,6 +573,7 @@ fn python_names_bound_at_top_level() {
         names: names(&["K", "a", "b", "c", "f", "r", "t", "w", "z"]),
         glob: false,
         inline: vec![],
+        blocks: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -785,10 +787,13 @@ mod outl;
                         names: names(&["h"]),
                         glob: false,
                         inline: vec![],
+                        blocks: vec![],
                     },
                 }],
+                blocks: vec![],
             },
         }],
+        blocks: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -796,6 +801,70 @@ mod outl;
     assert_eq!(deps::module_names(&wrapped).names, names(&["S"]));
     let reexport = parse(Grammar::Rust, "pub use a::B;\n");
     assert_eq!(deps::module_names(&reexport).names, names(&["B"]));
+}
+
+#[test]
+fn the_blocks_of_a_body_are_scopes_outside_the_module() {
+    let file = parse(
+        Grammar::Rust,
+        r#"fn f() {
+    use a::B;
+    struct L;
+    mod inner {
+        pub struct I;
+        fn g() {
+            const C: u8 = 0;
+        }
+    }
+    {
+        {
+            fn h() {}
+        }
+    }
+}
+impl S {
+    fn m() {
+        let x = 1;
+    }
+}
+"#,
+    );
+    let names_of = |list: &[&str], inline, blocks| ModuleNames {
+        names: names(list),
+        glob: false,
+        inline,
+        blocks,
+    };
+    let block = |at: &str, names| BlockModule {
+        range: range(at),
+        names,
+    };
+    let expected = names_of(
+        &["f"],
+        vec![],
+        vec![block(
+            "1:8-15:2",
+            names_of(
+                &["L", "inner"],
+                vec![InlineModule {
+                    name: "inner".to_string(),
+                    range: range("4:5-9:6"),
+                    path_attribute: None,
+                    names: names_of(
+                        &["I", "g"],
+                        vec![],
+                        vec![block("6:16-8:10", names_of(&["C"], vec![], vec![]))],
+                    ),
+                }],
+                vec![block("11:9-13:10", names_of(&["h"], vec![], vec![]))],
+            ),
+        )],
+    );
+    assert_eq!(
+        deps::module_names(&file),
+        expected,
+        "a `use` in a block declares nothing; a block without items gives its inner blocks"
+    );
 }
 
 #[test]
