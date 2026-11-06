@@ -1014,7 +1014,14 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   decoded by Go's escapes, or raw `` `…` ``) is one word, and `//` starts a
   comment only outside a string, in a single-line directive and in a
   `replace ( … )` block; `replace example.com/lib => "./local lib"` replaces
-  with the directory `./local lib`. An import path
+  with the directory `./local lib`. A `go.mod` that the go command rejects
+  is an input error (its `resolution_inputs` entry gets `error`, and the
+  result is incomplete): a string not closed on its line or that does not
+  decode, a `( … )` block not closed, a `module` directive without exactly
+  one path or a second `module` directive, a `replace` directive that is not
+  `old [version] => new [version]`, or no `module` directive. Every import of
+  a file whose own `go.mod` is such a file, except `C`, is `unresolved`
+  (`<go.mod> could not be read`). An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
   directory. A `replace` in the importing file's `go.mod`, with or without a

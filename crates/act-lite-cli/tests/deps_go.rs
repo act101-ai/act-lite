@@ -1,10 +1,11 @@
 //! Go import resolution: the module map, candidates and their validity,
 //! the three outcomes and the resolution inputs.
 
+use act_lite_cli::analyze::cycles::CyclesAnalyzer;
 use act_lite_cli::analyze::deps::{DepGraph, Outcome, supports};
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::read::{Reader, SupportReader};
-use act_lite_cli::analyze::run::{Request, RunContext};
+use act_lite_cli::analyze::run::{Request, RunContext, run};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -919,4 +920,115 @@ fn a_symlinked_replace_directory_is_compared_by_its_target() {
         outcome(&graph, "main.go", "example.com/out"),
         Outcome::External
     );
+}
+
+/// Whether the cycles result of `root` is complete, by `analyze_cycles` on
+/// the library.
+fn complete(root: &Path) -> bool {
+    let request = Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap();
+    run(&CyclesAnalyzer, &request, &CancellationToken::new())
+        .unwrap()
+        .complete
+}
+
+#[test]
+fn a_malformed_own_go_mod_is_an_input_error_and_leaves_its_imports_unresolved() {
+    for go_mod in [
+        // A string that is not closed.
+        "module example.com/app\n\nreplace example.com/lib => \"./local\n",
+        // A string that does not decode.
+        "module example.com/app\n\nreplace example.com/lib => \"./lo\\qcal\"\n",
+        // A raw string that is not closed.
+        "module example.com/app\n\nreplace example.com/lib => `./local\n",
+        // A replace without `=>`.
+        "module example.com/app\n\nreplace example.com/lib ./local\n",
+        // A replace without a target.
+        "module example.com/app\n\nreplace example.com/lib =>\n",
+        // A replace without a module path.
+        "module example.com/app\n\nreplace => ./local\n",
+        // A replace block that is not closed.
+        "module example.com/app\n\nreplace (\n\texample.com/lib => ./local\n",
+        // A module directive without a path.
+        "module\n\nreplace example.com/lib => ./local\n",
+        // A module directive with two paths.
+        "module example.com/app example.com/other\n",
+        // Two module directives.
+        "module example.com/app\nmodule example.com/other\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "go.mod", go_mod);
+        write(root, "local/go.mod", "module example.com/lib\n");
+        write(root, "local/lib.go", "package lib\n");
+        write(root, "p/p.go", "package p\n");
+        write(
+            root,
+            "main.go",
+            "package main\n\nimport (\n\t\"fmt\"\n\t\"example.com/lib\"\n\t\"example.com/app/p\"\n)\n",
+        );
+        let graph = graph(root);
+        for spec in ["fmt", "example.com/lib", "example.com/app/p"] {
+            assert_eq!(
+                outcome(&graph, "main.go", spec),
+                Outcome::Unresolved("go.mod could not be read".to_string()),
+                "{go_mod}: {spec}"
+            );
+        }
+        assert_eq!(pairs(&graph), Vec::<(String, String)>::new(), "{go_mod}");
+        let listed = inputs(&graph);
+        assert_eq!(listed[0]["file"], "go.mod", "{go_mod}");
+        assert!(listed[0]["error"].is_string(), "{go_mod}: {listed}");
+        assert!(!complete(root), "{go_mod}");
+    }
+}
+
+#[test]
+fn a_malformed_go_mod_of_another_module_is_an_input_error() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "lib/go.mod", "module example.com/lib\n\nreplace (\n");
+    write(root, "lib/lib.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\t\"example.com/lib\"\n)\n",
+    );
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "main.go", "fmt"),
+        Outcome::Unresolved("lib/go.mod could not be read".to_string())
+    );
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Unresolved("lib/go.mod could not be read".to_string())
+    );
+    assert!(inputs(&graph)[1]["error"].is_string());
+    assert!(!complete(root));
+}
+
+#[test]
+fn a_well_formed_go_mod_is_complete() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "go.mod",
+        "module example.com/app\n\nrequire (\n\texample.com/x v1.0.0 // c\n)\n\nreplace (\n\texample.com/lib v1.0.0 => ./local // c\n\texample.com/y => example.com/z v1.2.0\n)\n",
+    );
+    write(root, "local/go.mod", "module example.com/lib\n");
+    write(root, "local/lib.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"fmt\"\n\t\"example.com/lib\"\n)\n",
+    );
+    let graph = graph(root);
+    assert_eq!(outcome(&graph, "main.go", "fmt"), Outcome::External);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Resolved(vec!["local/lib.go".to_string()])
+    );
+    assert!(inputs(&graph)[0].get("error").is_none());
+    assert!(complete(root));
 }

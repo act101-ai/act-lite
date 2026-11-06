@@ -52,7 +52,15 @@ impl Resolver for GoResolver {
         build_map(cx);
         let own_dir = nearest_module(cx, dir_of(file));
         let own_path = own_dir.as_deref().map(|dir| join(dir, "go.mod"));
-        let own = own_path.as_deref().and_then(|path| read_mod(cx, path));
+        // Every import reads the file's own `go.mod`: its `replace`
+        // directives can replace any path.
+        let own = match own_path.as_deref() {
+            Some(path) => match read_mod(cx, path) {
+                Some(own) => Some(own),
+                None => return Outcome::Unresolved(format!("{path} could not be read")),
+            },
+            None => None,
+        };
         let modules = Arc::clone(&cx.cache::<GoState>().modules);
         let replaces: Vec<&(String, Option<String>)> =
             own.iter().flat_map(|m| m.replaces.iter()).collect();
@@ -140,14 +148,7 @@ impl Resolver for GoResolver {
                 }
             }
             0 if outside => Outcome::External,
-            0 => match own_path {
-                Some(path) if own.is_none() => {
-                    Outcome::Unresolved(format!("{path} could not be read"))
-                }
-                _ => Outcome::Unresolved(format!(
-                    "no Go package files for {import} in the workspace"
-                )),
-            },
+            0 => Outcome::Unresolved(format!("no Go package files for {import} in the workspace")),
             _ => {
                 let mut paths: Vec<&str> = valid.iter().map(|(path, _)| *path).collect();
                 paths.sort_unstable();
@@ -226,10 +227,15 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
         return known.clone();
     }
     let parsed = match cx.input(rel, InputKind::GoMod) {
-        Ok(text) => parse(text),
-        Err(_) => None,
+        Ok(text) => parse(text).map_err(Some),
+        Err(_) => Err(None),
     };
-    let found = parsed.map(|(module, replaces)| {
+    let parsed = parsed.map_err(|error| {
+        if let Some(error) = error {
+            cx.input_error(rel, error);
+        }
+    });
+    let found = parsed.ok().map(|(module, replaces)| {
         let dir = dir_of(rel);
         let replaces = replaces
             .into_iter()
@@ -246,9 +252,6 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
             .collect();
         Arc::new(GoMod { module, replaces })
     });
-    if found.is_none() {
-        cx.input_error(rel, "no module directive".to_string());
-    }
     cx.cache::<GoState>()
         .mods
         .insert(rel.to_string(), found.clone());
@@ -256,16 +259,22 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
 }
 
 /// The `module` path and the module path and replacement of each `replace`
-/// directive of a `go.mod`; `None` without a `module` directive.
-fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
+/// directive of a `go.mod`. The error, as the go command reports it, for a
+/// string that is not closed on its line or does not decode, a block that is
+/// not closed, a `module` directive without exactly one path or a second
+/// one, a `replace` directive that is not `old [version] => new [version]`,
+/// and a file without a `module` directive.
+fn parse(text: &str) -> Result<(String, Vec<(String, String)>), String> {
     let mut module = None;
     let mut replaces = Vec::new();
-    let mut block: Option<String> = None;
-    for line in text.lines() {
-        let Some(words) = tokens(line) else {
-            continue;
-        };
-        let (verb, args) = match (block.as_deref(), words.split_first()) {
+    let mut block: Option<(String, usize)> = None;
+    for (at, line) in text.lines().enumerate() {
+        let number = at + 1;
+        let words = tokens(line).ok_or_else(|| format!("line {number}: invalid quoted string"))?;
+        let (verb, args) = match (
+            block.as_ref().map(|(verb, _)| verb.as_str()),
+            words.split_first(),
+        ) {
             (_, None) => continue,
             (Some(_), Some((first, _))) if first == ")" => {
                 block = None;
@@ -273,27 +282,42 @@ fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
             }
             (Some(verb), Some(_)) => (verb, &words[..]),
             (None, Some((verb, args))) if args == ["("] => {
-                block = Some(verb.clone());
+                block = Some((verb.clone(), number));
                 continue;
             }
             (None, Some((verb, args))) => (verb.as_str(), args),
         };
         match verb {
             "module" => {
-                module = module.or(args.first().cloned());
+                if module.is_some() {
+                    return Err(format!("line {number}: repeated module statement"));
+                }
+                let [path] = args else {
+                    return Err(format!("line {number}: usage: module module/path"));
+                };
+                module = Some(path.clone());
             }
             "replace" => {
-                let Some(arrow) = args.iter().position(|a| a == "=>") else {
-                    continue;
+                // `old [version] => new [version]`.
+                let arrow = (1..=2).find(|&i| args.get(i).is_some_and(|a| a == "=>"));
+                let after = arrow.map_or(0, |arrow| args.len() - arrow - 1);
+                let (Some(arrow), 1..=2) = (arrow, after) else {
+                    return Err(format!(
+                        "line {number}: usage: replace module/path [v1.2.3] => other/module v1.4 or ../local/directory"
+                    ));
                 };
-                if let (Some(old), Some(new)) = (args.first(), args.get(arrow + 1)) {
-                    replaces.push((old.clone(), new.clone()));
-                }
+                replaces.push((args[0].clone(), args[arrow + 1].clone()));
             }
             _ => {}
         }
     }
-    module.map(|module| (module, replaces))
+    if let Some((verb, number)) = block {
+        return Err(format!("line {number}: {verb} block is not closed"));
+    }
+    match module {
+        Some(module) => Ok((module, replaces)),
+        None => Err("no module directive".to_string()),
+    }
 }
 
 /// The tokens of one `go.mod` line, as Go's modfile reads them: `//` outside
