@@ -229,6 +229,16 @@ fn a_typed_or_commented_zig_import_is_never_a_candidate() {
 }
 
 #[test]
+fn zig_extern_and_struct_literal_declarations_are_candidates() {
+    let ws = workspace(&[(
+        "x.zig",
+        "extern var errno: c_int;\nconst value = struct { y: u8 }{ .y = 1 };\nfn f() void {\n    _ = errno;\n    _ = value;\n}\n",
+    )]);
+    assert_found(ws.path(), "x.zig", "errno", 4, 9, "errno 1:12-1:17");
+    assert_found(ws.path(), "x.zig", "value", 5, 9, "value 2:7-2:12");
+}
+
+#[test]
 fn cmake_variable_use_resolves_to_the_variable_not_the_enclosing_argument() {
     let ws = workspace(&[(
         "CMakeLists.txt",

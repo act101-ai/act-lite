@@ -350,7 +350,7 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 
 #[test]
 fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
-    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\n";
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\nextern var errno: c_int;\npub extern const limit: u8;\nconst value = struct { y: u8 }{ .y = 1 };\nconst In = struct { extern var g: u8; const lit = struct { z: u8 }{ .z = 2 }; };\nconst w: u8 = // c\n 1;\n";
     assert_eq!(
         skeleton_pairs(source),
         pair_set(&[
@@ -363,7 +363,14 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("constant", "n"),
             ("import", "t"),
             ("struct", "S"),
-            ("constant", "u")
+            ("constant", "u"),
+            ("variable", "errno"),
+            ("constant", "limit"),
+            ("constant", "value"),
+            ("struct", "In"),
+            ("variable", "g"),
+            ("constant", "lit"),
+            ("constant", "w")
         ])
     );
     assert_eq!(
@@ -372,7 +379,16 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("constant", "n"),
             ("struct", "S"),
             ("field", "x"),
-            ("constant", "u")
+            ("constant", "u"),
+            ("variable", "errno"),
+            ("constant", "limit"),
+            ("constant", "value"),
+            ("field", "y"),
+            ("struct", "In"),
+            ("variable", "g"),
+            ("constant", "lit"),
+            ("field", "z"),
+            ("constant", "w")
         ])
     );
 }
