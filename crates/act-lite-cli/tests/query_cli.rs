@@ -449,6 +449,90 @@ fn symbols_partial_parse_still_returns_declarations() {
     assert_eq!(result["parse_error"], true, "{result}");
 }
 
+/// `skeleton` and `symbol` report a partial parse as `symbols` does: a
+/// top-level `"parse_error": true` on a tree with errors, no key on a clean
+/// one.
+#[test]
+fn skeleton_and_symbol_report_a_parse_error() {
+    let skeleton = query_json(&["skeleton", "broken.rs"]);
+    assert_eq!(skeleton["parse_error"], true, "{skeleton}");
+    let symbol = query_json(&["symbol", "ok", "--file", "broken.rs"]);
+    assert_eq!(symbol["parse_error"], true, "{symbol}");
+    let clean = query_json(&["skeleton", "sample.py"]);
+    assert!(clean.get("parse_error").is_none(), "{clean}");
+}
+
+/// With `--workspace`, a relative file path resolves against the workspace
+/// root, not the current directory, for every per-file query; a file of the
+/// same name in the current directory is not read.
+#[test]
+fn relative_files_resolve_against_the_workspace() {
+    let ws = definition_workspace();
+    let cwd = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cwd.path().join("main.ts"),
+        "export function decoy(): void {}\n",
+    )
+    .unwrap();
+    let path = empty_path_dir();
+    let run = |args: &[&str]| -> Value {
+        let output = act_lite()
+            .current_dir(cwd.path())
+            .env("PATH", path.path())
+            .arg("--workspace")
+            .arg(ws.path())
+            .arg("--disable-lsp")
+            .arg("query")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "act-lite query {args:?} failed:\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let skeleton = run(&["skeleton", "main.ts"]);
+    let names: Vec<String> = declarations(&skeleton)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert!(names.contains(&"format".to_string()), "{skeleton}");
+    assert!(!names.contains(&"decoy".to_string()), "{skeleton}");
+    let symbols = run(&["symbols", "main.ts"]);
+    assert!(symbols.to_string().contains("\"format\""), "{symbols}");
+    run(&["symbol", "format", "--file", "main.ts"]);
+    let definition = run(&[
+        "definition",
+        "helper",
+        "--file",
+        "main.ts",
+        "--line",
+        "3",
+        "--column",
+        "1",
+    ]);
+    assert!(
+        definition["definition"]["file"]
+            .as_str()
+            .unwrap()
+            .ends_with("util.ts"),
+        "{definition}"
+    );
+    let references = run(&[
+        "references",
+        "helper",
+        "--file",
+        "main.ts",
+        "--line",
+        "3",
+        "--column",
+        "1",
+    ]);
+    assert!(references.to_string().contains("util.ts"), "{references}");
+}
+
 #[test]
 fn symbols_batch_unsupported_file_lists_languages() {
     let output = act_lite()

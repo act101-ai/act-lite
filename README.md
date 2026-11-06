@@ -288,7 +288,8 @@ Global flags:
 
 - `--format json|text` — compact JSON (default) or indented JSON.
 - `--workspace <dir>` — the workspace root (default: the current directory).
-  The `references` fallback searches the files of the same language under it
+  A relative file path resolves against it, not the current directory. The
+  `references` fallback searches the files of the same language under it
   (JSON and JSONC share one search, below).
 - `--disable-lsp` (or `ACT_LITE_DISABLE_LSP=1`) — never start a language server.
 
@@ -390,7 +391,9 @@ the analyzers `analyze_patterns`, `analyze_hotspots` and `analyze_clones`
 (see [Code-health analyzers](#code-health-analyzers)).
 `status` lists the 40 languages and, for each language server, whether it is
 `ready` or `not_installed`. MCP `skeleton` omits `import` entries for every
-language; `act-lite query skeleton` and `symbols-batch` list them.
+language. It keeps `include` entries: C and C++ `#include`, Make `include`,
+CMake `include()` and `add_subdirectory()`, R `source()` and Julia
+`include()`. `act-lite query skeleton` and `symbols-batch` list both.
 
 **Analyzer tools.** Each `analyze_*` tool returns the same JSON
 as its `act-lite analyze` command (see [`act-lite analyze`](#act-lite-analyze)):
@@ -965,7 +968,7 @@ the reverse; a user with both binaries sees one set of secrets per project.
 ## Claude Code plugin
 
 The `plugin/` directory is a Claude Code plugin that registers the MCP server
-and adds seven skills:
+and adds eight skills: seven that you invoke and one shared skill.
 
 - `define-work` turns a request into an approved design before code is
   written: repo recon, one question at a time, three fresh reads of the
@@ -982,6 +985,10 @@ and adds seven skills:
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
   them, and the largest duplicated code, as a report with no edit.
+
+`work-graph` is a shared skill, not one you invoke. It defines the work-graph
+format that `plan-work` writes and `execute-work` runs, and holds the script
+that checks a work graph. `plan-work` and `execute-work` load it.
 
 Put `act-lite` on your `PATH`, then:
 

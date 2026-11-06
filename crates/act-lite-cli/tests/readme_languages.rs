@@ -393,7 +393,7 @@ fn reference_walks_and_evidence_are_stated() {
         "The `references` walk skips every path component that starts with `.`, so `.eslintrc.json`, `.devcontainer.json`, `.devcontainer/…` and `.Rprofile` are never listed from another file; `definition` and `repo-outline` see them.",
         "The `references` and `definition` walks read the files of one language, except JSON and JSONC: from a `.jsonc` or `.code-workspace` file they read JSON and JSONC files; from a JSON file, or from a JSONC file recognized by its name (such as `tsconfig.json`), they read JSON files and the JSONC files recognized by name only.",
         "For the ten added languages every `references` answer is a name match (`\"source\": \"tree-sitter\"`), and none of them has a language server: `callers`, `callees` and `implementations` fail for them, and `status` lists no server for them.",
-        "MCP `skeleton` omits `import` entries for every language; `act-lite query skeleton` and `symbols-batch` list them.",
+        "MCP `skeleton` omits `import` entries for every language. It keeps `include` entries: C and C++ `#include`, Make `include`, CMake `include()` and `add_subdirectory()`, R `source()` and Julia `include()`. `act-lite query skeleton` and `symbols-batch` list both.",
         "`repo-outline` counts every recognized file against `--max-files`, so the files of the added languages (`.svg`, `.xml`, `Makefile`, and others) use part of the budget: a truncated outline of a repository that has them lists fewer of its other files.",
         "`status` lists the 40 languages",
     ]);

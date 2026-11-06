@@ -1284,6 +1284,21 @@ fn skeleton_errors() {
     }
 }
 
+/// `skeleton` reports a partial parse as `symbols` does: a top-level
+/// `"parse_error": true` on a tree with errors, no key on a clean one.
+#[test]
+fn skeleton_reports_a_parse_error() {
+    let mut s = serve_in(&fixtures());
+    let broken = s.ok("skeleton", json!({ "file": "broken.rs" }));
+    assert_eq!(broken["parse_error"], true, "{broken}");
+    assert!(
+        names_of(&broken, "declarations").contains(&"ok".to_string()),
+        "{broken}"
+    );
+    let clean = s.ok("skeleton", json!({ "file": "sample.py" }));
+    assert!(clean.get("parse_error").is_none(), "{clean}");
+}
+
 #[test]
 fn symbols_params_limit_pattern_and_kind() {
     let mut s = serve_langs();
