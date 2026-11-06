@@ -121,7 +121,12 @@ below. Never stash, reset, check out or commit.
      `from pkg import n` in an unchanged file resolves to `pkg/__init__.py` or
      to the submodule `pkg/n.py`, so a change to them can create a cycle with
      no changed member. (A module file `x.py` has no submodules, so its
-     bindings cannot redirect an edge to another file.)
+     bindings cannot redirect an edge to another file.) It also holds when the
+     change modifies a Python file that a package's `__init__.py` is a
+     symbolic link to, because that file's bound names are the package's:
+     when the repository tracks a symbolic link named `__init__.py`, or one
+     to a directory (`git ls-files -s` mode `120000`), treat a change to any
+     `.py` file as (d).
 
    Otherwise keep each cycle that has a changed file among its `members`. When
    `members_total` is more than 20 and no shown member is a changed file, keep
