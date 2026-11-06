@@ -164,7 +164,7 @@ A dependent is a file that imports a focus file, directly or through other files
 <all cycles kept, because the change <adds, deletes or renames a file | touches a resolution or discovery input | changes a Rust file with a module declaration | modifies a Python __init__.py file>> | <n> cycles with a changed file>.
 - <members_total> files: <path as <file> → <to> → …>[ (path of <path_total> steps, <n> shown)]; members: <file>, …[ (members not all shown)]; changed members: <file>, …
 ### Not analyzed
-Unsupported languages, excluded counts (tests, generated, vendored, ignored), skipped files, parse failures.
+Unsupported languages, excluded counts (tests, generated, vendored, ignored), skipped files, parse failures, component regions not analyzed (regions_not_analyzed).
 ### Limits
 A clone class shows that code has the same syntax tree, apart from formatting, comments and, for renamed clones, identifier names and literal values. It does not show that the members behave the same, that they can share one function, or that extracting them is safe. Findings are measurements against fixed thresholds (<details.thresholds>).
 ```
@@ -203,7 +203,13 @@ A clone class shows that code has the same syntax tree, apart from formatting, c
   `supported: false`, the `excluded.counts`, the `incomplete.skipped_files`
   and the `incomplete.parse_failures`, and any empty-scope message from step
   2. A result with `complete: false` can miss findings in that evidence; say
-  so.
+  so. Also add each `details.regions_not_analyzed` entry (`file`, `range`,
+  `reason`) of the `analyze_patterns` calls, and `details.files_without_analyzed_code`;
+  when `details.regions_not_analyzed_total` is more than the entries shown,
+  give the total. Do not use the list of the `analyze_clones` call: that call
+  analyzes the whole workspace. In component files (`.vue`, `.svelte`,
+  `.astro`), only the script regions are analyzed; the template, style and
+  other regions are not.
 - **Limits:** the sentence above, the thresholds from the `analyze_patterns`
   result's `details.thresholds`, and, for each split that stayed truncated,
   the file and its `total`.
