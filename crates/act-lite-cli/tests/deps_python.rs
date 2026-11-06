@@ -2,11 +2,12 @@
 //! packages, names bound in a module, relative imports, the external test
 //! and the workspace modules outside the roots.
 
+use act_lite_cli::analyze::cycles::CyclesAnalyzer;
 use act_lite_cli::analyze::deps::python::{PythonResolver, STDLIB_MODULES};
 use act_lite_cli::analyze::deps::{DepGraph, Outcome, supports};
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::read::{Reader, SupportReader};
-use act_lite_cli::analyze::run::{Request, RunContext};
+use act_lite_cli::analyze::run::{Request, RunContext, run};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -633,4 +634,141 @@ fn a_module_in_a_virtual_environment_is_no_top_level_candidate() {
 #[test]
 fn a_pyvenv_cfg_marks_a_directory_of_any_name_as_vendored() {
     assert_eq!(requests_in_a_virtual_environment("env"), Outcome::External);
+}
+
+/// The members of each cycle of `root`, by `analyze_cycles` on the library.
+fn cycles(root: &Path) -> Vec<Vec<String>> {
+    let request = Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap();
+    let envelope = run(&CyclesAnalyzer, &request, &CancellationToken::new()).unwrap();
+    envelope
+        .findings
+        .iter()
+        .map(|f| f.members.iter().map(|m| m.file.clone()).collect())
+        .collect()
+}
+
+/// `a.py` next to a directory `a/` that holds `b.py`, with or without
+/// `a/__init__.py`; `main.py` has `import a.b` and `a/b.py` has
+/// `import main`.
+fn module_beside_directory(init: bool) -> tempfile::TempDir {
+    let ws = tempfile::tempdir().unwrap();
+    fs::create_dir(ws.path().join(".git")).unwrap();
+    write(ws.path(), "a.py", "");
+    write(ws.path(), "a/b.py", "import main\n");
+    write(ws.path(), "main.py", "import a.b\n");
+    if init {
+        write(ws.path(), "a/__init__.py", "");
+    }
+    ws
+}
+
+#[test]
+fn a_module_file_before_the_last_segment_is_not_a_package() {
+    let ws = module_beside_directory(false);
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "a.b"),
+        unresolved("a is not a package")
+    );
+    assert_eq!(edges(&graph), pairs(&[("a/b.py", "main.py")]));
+    assert_eq!(cycles(ws.path()), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn a_regular_package_beside_a_module_file_still_resolves() {
+    let ws = module_beside_directory(true);
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "a.b"), resolved(&["a/b.py"]));
+    assert_eq!(
+        edges(&graph),
+        pairs(&[("a/b.py", "main.py"), ("main.py", "a/b.py")])
+    );
+    assert_eq!(cycles(ws.path()), vec![vec!["a/b.py", "main.py"]]);
+}
+
+#[test]
+fn every_segment_before_the_last_must_be_a_package() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "a.py", "");
+    write(ws.path(), "a/b.py", "n = 1\n");
+    write(ws.path(), "pkg/__init__.py", "");
+    write(ws.path(), "pkg/m.py", "");
+    write(ws.path(), "pkg/m/c.py", "");
+    write(ws.path(), "ns/m.py", "");
+    write(ws.path(), "ns/m/c.py", "");
+    write(ws.path(), "ns/deep/c.py", "");
+    write(ws.path(), "q/__init__.py", "");
+    write(ws.path(), "q/r.py", "");
+    write(ws.path(), "q/r/s.py", "n = 1\n");
+    write(
+        ws.path(),
+        "main.py",
+        "import pkg.m.c\nimport ns.m.c\nimport ns.deep.c\nfrom a.b import n\nfrom a import b\n",
+    );
+    write(ws.path(), "q/t.py", "from .r.s import n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg.m.c"),
+        unresolved("pkg.m is not a package")
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "ns.m.c"),
+        unresolved("ns.m is not a package")
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "ns.deep.c"),
+        resolved(&["ns/deep/c.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "a.b.n"),
+        unresolved("a is not a package")
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "a.b"),
+        unresolved("b is neither bound in a.py nor a submodule of a")
+    );
+    assert_eq!(
+        outcome(&graph, "q/t.py", ".r.s.n"),
+        unresolved(".r is not a package")
+    );
+}
+
+#[test]
+fn a_module_name_is_resolved_without_its_spaces_and_line_continuations() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pkg/__init__.py", "");
+    write(ws.path(), "pkg/sub.py", "v = 1\n");
+    write(ws.path(), "pkg/r.py", "v = 1\n");
+    write(
+        ws.path(),
+        "main.py",
+        "import pkg . sub\nfrom pkg . sub import v\nfrom pkg .\\\n sub import v\n",
+    );
+    write(ws.path(), "pkg/x/__init__.py", "");
+    write(
+        ws.path(),
+        "pkg/x/y.py",
+        "from . . r import v\nfrom .. sub import v\n",
+    );
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg . sub"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg . sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg .\\\n sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "pkg/x/y.py", ". . r.v"),
+        resolved(&["pkg/r.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "pkg/x/y.py", ".. sub.v"),
+        resolved(&["pkg/sub.py"])
+    );
 }

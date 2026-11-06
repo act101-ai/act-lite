@@ -12,24 +12,24 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
             "import_statement" => {
                 for name in field_children(node, "name") {
                     let dotted = name.child_by_field_name("name").unwrap_or(name);
-                    found.push(Relationship::new(
-                        RelationshipKind::Import,
-                        text(dotted, source),
-                        node,
-                    ));
+                    found.push(Relationship {
+                        value: Ok(module_name(dotted, source)),
+                        ..Relationship::new(RelationshipKind::Import, text(dotted, source), node)
+                    });
                 }
             }
             "import_from_statement" => {
                 let Some(module) = node.child_by_field_name("module_name") else {
                     continue;
                 };
+                let value = module_name(module, source);
                 let module = text(module, source);
-                let mut imported: Vec<&str> = field_children(node, "name")
+                let mut imported: Vec<String> = field_children(node, "name")
                     .into_iter()
-                    .map(|n| text(n.child_by_field_name("name").unwrap_or(n), source))
+                    .map(|n| module_name(n.child_by_field_name("name").unwrap_or(n), source))
                     .collect();
                 if has_child(node, "wildcard_import") {
-                    imported.push("*");
+                    imported.push("*".to_string());
                 }
                 for name in imported {
                     let specifier = if module.ends_with('.') {
@@ -37,8 +37,14 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
                     } else {
                         format!("{module}.{name}")
                     };
+                    let value = if value.ends_with('.') {
+                        format!("{value}{name}")
+                    } else {
+                        format!("{value}.{name}")
+                    };
                     found.push(Relationship {
-                        imported: Some(name.to_string()),
+                        value: Ok(value),
+                        imported: Some(name),
                         ..Relationship::new(RelationshipKind::FromImport, &specifier, node)
                     });
                 }
@@ -309,6 +315,40 @@ fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
         }
         _ => bind_walrus(target, source, names),
     }
+}
+
+/// A module name without the whitespace, comments and line continuations
+/// between its tokens: a `dotted_name`'s identifiers joined by `.`, after
+/// the dots of a relative import's prefix.
+fn module_name(node: Node, source: &str) -> String {
+    let mut out = String::new();
+    let mut dotted = None;
+    match node.kind() {
+        "relative_import" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "import_prefix" => {
+                        out.extend(text(child, source).chars().filter(|c| *c == '.'));
+                    }
+                    "dotted_name" => dotted = Some(child),
+                    _ => {}
+                }
+            }
+        }
+        "dotted_name" => dotted = Some(node),
+        _ => return text(node, source).to_string(),
+    }
+    if let Some(dotted) = dotted {
+        let mut cursor = dotted.walk();
+        let identifiers: Vec<&str> = dotted
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "identifier")
+            .map(|c| text(c, source))
+            .collect();
+        out.push_str(&identifiers.join("."));
+    }
+    out
 }
 
 fn field_children<'t>(node: Node<'t>, field: &str) -> Vec<Node<'t>> {

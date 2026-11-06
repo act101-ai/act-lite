@@ -416,6 +416,33 @@ fn the_python_fixture_gives_six_edges_and_one_unresolved_entry() {
 }
 
 #[test]
+fn a_python_module_file_before_the_last_segment_gives_no_edge_and_no_cycle() {
+    let ws = workspace();
+    write(ws.path(), "a.py", "");
+    write(ws.path(), "a/b.py", "import main\n");
+    write(ws.path(), "main.py", "import a.b\nimport a . b\n");
+    let v = graph(ws.path(), &[]);
+    assert_eq!(edges(&v), pairs(&[("a/b.py", "main.py")]));
+    assert_eq!(
+        unresolved(&v),
+        triples(&[
+            ("main.py", "a.b", "a is not a package"),
+            ("main.py", "a . b", "a is not a package"),
+        ])
+    );
+    let cycles = analyze(ws.path(), "cycles", &[]);
+    assert_eq!(cycles["findings"], json!([]));
+    write(ws.path(), "a/__init__.py", "");
+    let v = graph(ws.path(), &[]);
+    assert_eq!(
+        edges(&v),
+        pairs(&[("a/b.py", "main.py"), ("main.py", "a/b.py")])
+    );
+    let cycles = analyze(ws.path(), "cycles", &[]);
+    assert_eq!(cycles["findings"][0]["members_total"], 2);
+}
+
+#[test]
 fn the_go_fixture_gives_five_edges_and_its_variants_follow_the_module_rules() {
     let ws = workspace();
     go(ws.path(), true);

@@ -1124,6 +1124,36 @@ fn a_rust_string_is_decoded_and_a_raw_string_is_not() {
 }
 
 #[test]
+fn a_python_module_name_is_its_identifiers_joined_by_dots() {
+    let source = concat!(
+        "import pkg . sub\n",
+        "import pkg .\\\n  sub as s\n",
+        "from pkg . sub import v\n",
+        "from pkg .\\\n sub import v\n",
+        "from . sub import x\n",
+        "from . . import x\n",
+        "from .\\\n. r import x\n",
+        "from ...a import x\n",
+        "from a import (b, # c\n d)\n",
+    );
+    assert_eq!(
+        values(Grammar::Python, source),
+        [
+            ok("pkg . sub", "pkg.sub"),
+            ok("pkg .\\\n  sub", "pkg.sub"),
+            ok("pkg . sub.v", "pkg.sub.v"),
+            ok("pkg .\\\n sub.v", "pkg.sub.v"),
+            ok(". sub.x", ".sub.x"),
+            ok(". .x", "..x"),
+            ok(".\\\n. r.x", "..r.x"),
+            ok("...a.x", "...a.x"),
+            ok("a.b", "a.b"),
+            ok("a.d", "a.d"),
+        ]
+    );
+}
+
+#[test]
 fn a_rust_path_attribute_is_decoded() {
     let file = parse(
         Grammar::Rust,
