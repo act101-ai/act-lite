@@ -1129,6 +1129,55 @@ fn a_use_through_a_use_binding_in_a_body_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_cycle_through_the_second_target_of_a_binding_in_a_body_is_found() {
+    // Both declarations of `y0` go on through the binding `y1`; only the
+    // second reaches `src/m/b/sub.rs`, which uses `src/c.rs` back.
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(root, "src/lib.rs", "mod c;\nmod m;\n");
+    write(
+        root,
+        "src/c.rs",
+        concat!(
+            "pub fn f() {\n",
+            "    #[cfg(feature = \"a\")]\n",
+            "    use y1::a as y0;\n",
+            "    #[cfg(not(feature = \"a\"))]\n",
+            "    use y1::b as y0;\n",
+            "    use crate::m as y1;\n",
+            "    use y0::sub::Thing;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/m.rs", "pub mod a;\npub mod b;\n");
+    write(root, "src/m/a.rs", "pub mod sub;\n");
+    write(root, "src/m/b.rs", "pub mod sub;\n");
+    write(root, "src/m/a/sub.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/m/b/sub.rs",
+        "use crate::c::f;\npub struct Thing;\n",
+    );
+    let v = graph(root, &[]);
+    assert_eq!(kinds(edge(&v, "src/c.rs", "src/m/a/sub.rs")), ["use"]);
+    assert_eq!(kinds(edge(&v, "src/c.rs", "src/m/b/sub.rs")), ["use"]);
+    assert_eq!(unresolved(&v), []);
+    let cycles = analyze(root, "cycles", &[]);
+    assert_eq!(cycles["findings"][0]["members_total"], 2, "{cycles}");
+    assert_eq!(cycles["findings"][0]["members"][0]["file"], "src/c.rs");
+    assert_eq!(
+        cycles["findings"][0]["members"][1]["file"],
+        "src/m/b/sub.rs"
+    );
+    assert_eq!(cycles["incomplete"]["limits_hit"], json!([]));
+}
+
+#[test]
 fn a_dependency_with_a_lib_name_is_used_by_that_name() {
     let ws = workspace();
     let root = ws.path();

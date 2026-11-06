@@ -2215,9 +2215,11 @@ fn a_cancelled_token_stops_the_lookup_through_globs() {
 }
 
 #[test]
-fn a_chain_of_bindings_with_two_declarations_each_is_followed_at_once() {
+fn a_chain_of_bindings_with_two_declarations_each_stops_at_the_lookup_limit() {
     // Each `yN` has two declarations, so the paths through the chain
-    // double at each step; each binding is followed once.
+    // double at each step: 2^25 lookups in full. The lookup stops at the
+    // limit with the targets found so far. Each `use` of the chain is a
+    // relationship too; those up to `y12` pass the limit as well.
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path().to_path_buf();
     package(&root, ".", "app", "");
@@ -2238,10 +2240,69 @@ fn a_chain_of_bindings_with_two_declarations_each_is_followed_at_once() {
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let graph = graph(&root);
-        let _ = send.send(outcome(&graph, "src/lib.rs", "y0::Thing"));
+        let _ = send.send((
+            outcome(&graph, "src/lib.rs", "y0::Thing"),
+            graph.limits_hit().to_vec(),
+        ));
     });
-    let thing = receive
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("no result within 5 s");
+    let started = std::time::Instant::now();
+    let (thing, limits) = receive
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("no result within 60 s");
+    eprintln!("the chain took {:?}", started.elapsed());
     assert_eq!(thing, resolved(&["src/m.rs"]));
+    let mut uses = vec!["y0::Thing".to_string()];
+    for i in 1..=12 {
+        uses.push(format!("y{i}::a"));
+        uses.push(format!("y{i}::b"));
+    }
+    let expected: Vec<Value> = uses
+        .iter()
+        .map(|spec| {
+            json!({
+                "limit": "rust_use_lookups",
+                "value": 10000,
+                "detail": format!("the use {spec} in src/lib.rs reached 10000 lookups through block-local bindings and globs; its other lookups were not followed")
+            })
+        })
+        .collect();
+    assert_eq!(
+        serde_json::to_value(&limits).unwrap(),
+        Value::from(expected)
+    );
+}
+
+#[test]
+fn a_binding_followed_with_different_suffixes_gives_each_target() {
+    // `y0` has two declarations; both go on through the one binding `y1`,
+    // with different suffixes, so each reaches its own `sub` module.
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod m;\n",
+            "fn f() {\n",
+            "    #[cfg(feature = \"a\")]\n",
+            "    use y1::a as y0;\n",
+            "    #[cfg(not(feature = \"a\"))]\n",
+            "    use y1::b as y0;\n",
+            "    use crate::m as y1;\n",
+            "    use y0::sub::Thing;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/m.rs", "pub mod a;\npub mod b;\n");
+    write(root, "src/m/a.rs", "pub mod sub;\n");
+    write(root, "src/m/b.rs", "pub mod sub;\n");
+    write(root, "src/m/a/sub.rs", "pub struct Thing;\n");
+    write(root, "src/m/b/sub.rs", "pub struct Thing;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "y0::sub::Thing"),
+        resolved(&["src/m/a/sub.rs", "src/m/b/sub.rs"])
+    );
+    assert_eq!(graph.limits_hit(), []);
 }

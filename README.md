@@ -1342,8 +1342,14 @@ for each). Past that, the tree's other modules are not expanded, the files only
 they load are not reached, and `limits_hit` has
 `{"limit":"rust_module_instances","value":10000,"detail":"the module tree of
 <root> reached 10000 module instances; its other modules were not expanded"}`,
-so `complete` is `false`. That is the only `limits_hit` entry of
-`analyze_cycles` and `analyze_coupling`. Nested lists are cut at: `evidence` 5,
+so `complete` is `false`. One relationship makes at most 10,000 lookups through
+the `use` bindings and globs of a body (each binding or glob with each path it
+is applied to is one lookup). Past that, the relationship keeps the targets
+found so far, and `limits_hit` has
+`{"limit":"rust_use_lookups","value":10000,"detail":"the use <path> in <file>
+reached 10000 lookups through block-local bindings and globs; its other lookups
+were not followed"}`, so `complete` is `false`. These two are the only
+`limits_hit` entries of `analyze_cycles` and `analyze_coupling`. Nested lists are cut at: `evidence` 5,
 `members`, `path` and `chain` 20, `focus`, `focus_not_analyzed` and
 `focus_files_not_analyzed` 30, `resolution_inputs` and `not_followed` 100. They
 start and use no language server: `evidence` is
