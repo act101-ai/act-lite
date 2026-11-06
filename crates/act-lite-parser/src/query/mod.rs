@@ -616,7 +616,29 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
+    let declarations = one_declaration_per_range(declarations);
     Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+}
+
+/// One declaration per `(name, range)`: when two patterns report the same
+/// node, the specific kind wins over `constant`/`variable`, else the first.
+fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration> {
+    let mut kept: Vec<Declaration> = Vec::with_capacity(declarations.len());
+    for decl in declarations {
+        match kept
+            .iter_mut()
+            .find(|d| d.name == decl.name && d.range == decl.range)
+        {
+            None => kept.push(decl),
+            Some(existing) => {
+                let generic = |k: &str| k == "constant" || k == "variable";
+                if generic(&existing.kind) && !generic(&decl.kind) {
+                    *existing = decl;
+                }
+            }
+        }
+    }
+    kept
 }
 
 /// Executes a symbols query on a source file.
@@ -709,7 +731,30 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
+    let symbols = one_symbol_per_range(symbols);
     Ok(QueryResult::Symbols { symbols })
+}
+
+/// One symbol per `(name, range)`: when two patterns report the same name
+/// node, the specific kind wins over `Constant`/`Variable`, else the first.
+fn one_symbol_per_range(symbols: Vec<Symbol>) -> Vec<Symbol> {
+    let mut kept: Vec<Symbol> = Vec::with_capacity(symbols.len());
+    for symbol in symbols {
+        match kept
+            .iter_mut()
+            .find(|s| s.name() == symbol.name() && s.range() == symbol.range())
+        {
+            None => kept.push(symbol),
+            Some(existing) => {
+                let generic =
+                    |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
+                if generic(existing.kind()) && !generic(symbol.kind()) {
+                    *existing = symbol;
+                }
+            }
+        }
+    }
+    kept
 }
 
 /// The `.` or `#` token that precedes a CSS class or id name node.

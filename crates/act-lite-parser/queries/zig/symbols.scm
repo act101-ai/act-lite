@@ -27,10 +27,10 @@
 
 ; Other constants and variables at file or container level: the
 ; initializer is the expression after the `=` token (any initializer kind of
-; the grammar except a container declaration), or the declaration has no
-; `=` token (extern): a bare `=` outside a comment, a string, a quoted
-; identifier or a char literal, and not part of ==, !=, <=, >= or =>. An
-; exact @import is an import.
+; the grammar except a container declaration). A typed declaration is
+; reported too, so an extern declaration without an initializer is seen; the
+; engine keeps one declaration per node, the specific kind first. An exact
+; @import is an import.
 (source_file
   (variable_declaration
     "const" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
@@ -38,7 +38,7 @@
 ((source_file
   (variable_declaration
     "const" . (identifier) @name type: (_)) @definition.constant)
-  (#match? @definition.constant "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
+  (#not-match? @definition.constant "[^=!<>]=\\s*@import\\s*\\("))
 (struct_declaration
   (variable_declaration
     "const" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
@@ -46,7 +46,7 @@
 ((struct_declaration
   (variable_declaration
     "const" . (identifier) @name type: (_)) @definition.constant)
-  (#match? @definition.constant "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
+  (#not-match? @definition.constant "[^=!<>]=\\s*@import\\s*\\("))
 (enum_declaration
   (variable_declaration
     "const" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
@@ -54,7 +54,7 @@
 ((enum_declaration
   (variable_declaration
     "const" . (identifier) @name type: (_)) @definition.constant)
-  (#match? @definition.constant "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
+  (#not-match? @definition.constant "[^=!<>]=\\s*@import\\s*\\("))
 (union_declaration
   (variable_declaration
     "const" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
@@ -62,7 +62,7 @@
 ((union_declaration
   (variable_declaration
     "const" . (identifier) @name type: (_)) @definition.constant)
-  (#match? @definition.constant "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
+  (#not-match? @definition.constant "[^=!<>]=\\s*@import\\s*\\("))
 (opaque_declaration
   (variable_declaration
     "const" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
@@ -70,44 +70,39 @@
 ((opaque_declaration
   (variable_declaration
     "const" . (identifier) @name type: (_)) @definition.constant)
-  (#match? @definition.constant "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
+  (#not-match? @definition.constant "[^=!<>]=\\s*@import\\s*\\("))
 (source_file
   (variable_declaration
     "var" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
     (#not-match? @value "^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"(\\\\.|[^\"\\\\])*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
-((source_file
+(source_file
   (variable_declaration
     "var" . (identifier) @name type: (_)) @definition.variable)
-  (#match? @definition.variable "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
 (struct_declaration
   (variable_declaration
     "var" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
     (#not-match? @value "^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"(\\\\.|[^\"\\\\])*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
-((struct_declaration
+(struct_declaration
   (variable_declaration
     "var" . (identifier) @name type: (_)) @definition.variable)
-  (#match? @definition.variable "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
 (enum_declaration
   (variable_declaration
     "var" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
     (#not-match? @value "^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"(\\\\.|[^\"\\\\])*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
-((enum_declaration
+(enum_declaration
   (variable_declaration
     "var" . (identifier) @name type: (_)) @definition.variable)
-  (#match? @definition.variable "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
 (union_declaration
   (variable_declaration
     "var" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
     (#not-match? @value "^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"(\\\\.|[^\"\\\\])*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
-((union_declaration
+(union_declaration
   (variable_declaration
     "var" . (identifier) @name type: (_)) @definition.variable)
-  (#match? @definition.variable "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))
 (opaque_declaration
   (variable_declaration
     "var" . (identifier) @name "=" [(anonymous_struct_initializer) (anyframe_type) (array_type) (asm_expression) (assignment_expression) (async_expression) (await_expression) (binary_expression) (block) (boolean) (break_expression) (builtin_function) (builtin_type) (call_expression) (catch_expression) (character) (comptime_expression) (continue_expression) (dereference_expression) (error_type) (error_union_type) (field_expression) (float) (for_expression) (function_signature) (identifier) (if_expression) (index_expression) (integer) (labeled_type_expression) (multiline_string) (nosuspend_expression) (null_coercion_expression) (nullable_type) (opaque_declaration) (parenthesized_expression) (pointer_type) (range_expression) (resume_expression) (return_expression) (slice_type) (string) (struct_initializer) (switch_expression) (try_expression) (unary_expression) (while_expression) "undefined" "null" "unreachable" "anyframe"] @value
     (#not-match? @value "^@import(\\s|//[^\\n]*)*\\((\\s|//[^\\n]*)*\"(\\\\.|[^\"\\\\])*\"(\\s|//[^\\n]*|,)*\\)$")) @definition.variable)
-((opaque_declaration
+(opaque_declaration
   (variable_declaration
     "var" . (identifier) @name type: (_)) @definition.variable)
-  (#match? @definition.variable "^(//[^\\n]*|@?\"(\\\\.|[^\"\\\\])*\"|'(\\\\.|[^'\\\\])*'|==|!=|<=|>=|=>|[^=/\"']|/[^/\"'])*$"))

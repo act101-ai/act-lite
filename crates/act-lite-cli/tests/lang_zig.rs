@@ -358,7 +358,7 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 
 #[test]
 fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
-    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\nextern var errno: c_int;\npub extern const limit: u8;\nconst value = struct { y: u8 }{ .y = 1 };\nconst In = struct { extern var g: u8; const lit = struct { z: u8 }{ .z = 2 }; };\nconst w: u8 = // c\n 1;\nextern var buffer: u8 align(16);\nconst T: type = type;\nvar typed: struct { q: u8 } = undefined;\nconst C = struct { extern var b2: u8 align(4); var t2: struct { r: u8 } = undefined; extern var b3: u8 // c = 1\n; };\nextern const lim2: u8 // c = 1\n;\nextern var buf2: u8 align(16) // c\n;\n";
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\nextern var errno: c_int;\npub extern const limit: u8;\nconst value = struct { y: u8 }{ .y = 1 };\nconst In = struct { extern var g: u8; const lit = struct { z: u8 }{ .z = 2 }; };\nconst w: u8 = // c\n 1;\nextern var buffer: u8 align(16);\nconst T: type = type;\nvar typed: struct { q: u8 } = undefined;\nconst C = struct { extern var b2: u8 align(4); var t2: struct { r: u8 } = undefined; extern var b3: u8 // c = 1\n; };\nextern const lim2: u8 // c = 1\n;\nextern var buf2: u8 align(16) // c\n;\nconst @\"a//b\": u8 = 1;\nextern var cmp: [if (x == 1) 2 else 3]u8;\nconst q: type = @import(\"std\") // c\n;\nextern var ch: [if (c == '=') 1 else 2]u8;\nextern var fd: extern struct { a: u8 = 0 };\nextern var ml: [(\n    \\\\a=b\n).len]u8;\n";
     assert_eq!(
         skeleton_pairs(source),
         pair_set(&[
@@ -387,7 +387,13 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("variable", "t2"),
             ("variable", "b3"),
             ("constant", "lim2"),
-            ("variable", "buf2")
+            ("variable", "buf2"),
+            ("constant", "@\"a//b\""),
+            ("variable", "cmp"),
+            ("import", "q"),
+            ("variable", "ch"),
+            ("variable", "fd"),
+            ("variable", "ml")
         ])
     );
     assert_eq!(
@@ -395,33 +401,63 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
         pair_set(&[
             ("constant", "n"),
             ("struct", "S"),
-            ("field", "x"),
             ("constant", "u"),
             ("variable", "errno"),
             ("constant", "limit"),
             ("constant", "value"),
-            ("field", "y"),
             ("struct", "In"),
             ("variable", "g"),
             ("constant", "lit"),
-            ("field", "z"),
             ("constant", "w"),
             ("variable", "buffer"),
             ("constant", "T"),
             ("variable", "typed"),
-            ("field", "q"),
             ("struct", "C"),
             ("variable", "b2"),
             ("variable", "t2"),
-            ("field", "r"),
             ("variable", "b3"),
             ("constant", "lim2"),
-            ("variable", "buf2")
+            ("variable", "buf2"),
+            ("constant", "@\"a//b\""),
+            ("variable", "cmp"),
+            ("variable", "ch"),
+            ("variable", "fd"),
+            ("variable", "ml"),
+            ("field", "x"),
+            ("field", "y"),
+            ("field", "z"),
+            ("field", "q"),
+            ("field", "r"),
+            ("field", "a")
         ])
     );
     let once = skeleton_names(source);
     for name in [
-        "typed", "t2", "buffer", "T", "b3", "lim2", "buf2", "errno", "w",
+        "n",
+        "S",
+        "u",
+        "errno",
+        "limit",
+        "value",
+        "In",
+        "g",
+        "lit",
+        "w",
+        "buffer",
+        "T",
+        "typed",
+        "C",
+        "b2",
+        "t2",
+        "b3",
+        "lim2",
+        "buf2",
+        "@\"a//b\"",
+        "cmp",
+        "ch",
+        "fd",
+        "ml",
+        "q",
     ] {
         assert_eq!(once.iter().filter(|n| *n == name).count(), 1, "{name} once");
     }
