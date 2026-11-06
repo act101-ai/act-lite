@@ -995,11 +995,15 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   item that the reached module's file declares (or the file has a glob `use`).
   A file is in a crate tree when that tree's modules reach it, through any
   `#[path]`, not by its directory: an example, bench or test root that loads
-  `src/shared.rs` has it in its tree. A file in several crate trees, or loaded
-  as several modules of one tree, resolves each relationship in every tree
-  and every module that loads it, in root order: it is `resolved` when any of
-  them resolves it, with one edge to each distinct target, and `unresolved`
-  only when none resolves it, with the reason of the first tree.
+  `src/shared.rs` has it in its tree. The trees of every workspace crate
+  count, not only those of the package of the file's nearest `Cargo.toml`,
+  and each tree resolves the file with its own package (lib name,
+  dependencies, `crate`). A file in several crate trees, or loaded as several
+  modules of one tree, resolves each relationship in every tree and every
+  module that loads it, in root order (the trees of the file's own package
+  first, then those of the other crates by directory): it is `resolved` when
+  any of them resolves it, with one edge to each distinct target, and
+  `unresolved` only when none resolves it, with the reason of the first tree.
   `include!` paths are relative to the declaring file. A `Cargo.toml` that
   cannot be read makes every relationship of its package `unresolved`.
 

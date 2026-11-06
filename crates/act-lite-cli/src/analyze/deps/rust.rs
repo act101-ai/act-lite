@@ -4,15 +4,14 @@
 //!
 //! A crate root, a `mod.rs` file and a file loaded through `#[path]` own
 //! their directory; any other module file's children live in a directory
-//! named after its stem. A file that no tree of its package reaches gets a
-//! tree of its own in which only `mod.rs` files own their directory.
+//! named after its stem. A file that no tree of the workspace reaches gets
+//! a tree of its own in which only `mod.rs` files own their directory.
 //!
 //! A file is in a tree when the tree's module tree reaches it, through any
-//! `#[path]`, and it is resolved in each module that loads it. So every
-//! tree of a package is read in full once per build, and an index from
-//! file to trees makes each later lookup one map access; a tree that only a
-//! `use` path of another package goes through is read along that path,
-//! or in full when its lib root is analyzed.
+//! `#[path]`, whatever package the file's directory is in, and it is
+//! resolved in each module that loads it with the package of that tree. So
+//! every tree of every workspace crate is read in full once per build, and
+//! an index from file to trees makes each later lookup one map access.
 //! Each module file is read once per build, however many trees and modules
 //! load it, and the files of one level of the trees are read in parallel;
 //! only what expansion needs of a file is kept, not its parse.
@@ -160,6 +159,9 @@ struct RustState {
     /// For each package directory, the positions in its root order of the
     /// trees that reach each file.
     members: HashMap<String, Arc<HashMap<String, Vec<usize>>>>,
+    /// For each file, the workspace crates with a tree that reaches it, by
+    /// directory in byte order.
+    reached: Option<Arc<HashMap<String, Vec<Arc<Manifest>>>>>,
     /// What each module file read gives, shared by every tree and module
     /// that loads it; the `Err` is the reason it could not be read.
     summaries: HashMap<String, Arc<Result<ModuleFile, String>>>,
@@ -179,34 +181,30 @@ impl Resolver for RustResolver {
             return include(cx, file, rel);
         }
         // Every tree that reaches the file resolves the relationship, in root
-        // order: the targets of all trees that resolve it, else `external`
-        // when a tree gives it, else the reason of the first tree.
+        // order, with the package of the tree: the targets of all trees that
+        // resolve it, else `external` when a tree gives it, else the reason
+        // of the first tree.
         let mut targets: Option<BTreeSet<String>> = None;
         let mut first = None;
-        if let Some(package) = &package {
-            let roots = roots(cx, package);
-            let members = members(cx, package, &roots);
-            for &at in members.get(file).into_iter().flatten() {
-                let (root, is_lib) = &roots[at];
-                // Each module of the file in this tree resolves it; the
-                // targets are combined as across trees.
-                let outcome = with_tree(cx, root, false, |cx, tree| {
-                    let instances = tree.files[file].clone();
-                    let outcomes = instances
-                        .into_iter()
-                        .map(|start| outcome_in(cx, rel, Some(package), tree, Some(*is_lib), start))
-                        .collect();
-                    combine(outcomes)
-                });
-                match outcome {
-                    Outcome::Resolved(found) => {
-                        targets.get_or_insert_default().extend(found);
-                    }
-                    Outcome::Unresolved(reason) => {
-                        first.get_or_insert(Outcome::Unresolved(reason));
-                    }
-                    Outcome::External => first = Some(Outcome::External),
+        for (owner, (root, is_lib)) in trees_of(cx, file, package.as_ref()) {
+            // Each module of the file in this tree resolves it; the targets
+            // are combined as across trees.
+            let outcome = with_tree(cx, &root, false, |cx, tree| {
+                let instances = tree.files[file].clone();
+                let outcomes = instances
+                    .into_iter()
+                    .map(|start| outcome_in(cx, rel, Some(&owner), tree, Some(is_lib), start))
+                    .collect();
+                combine(outcomes)
+            });
+            match outcome {
+                Outcome::Resolved(found) => {
+                    targets.get_or_insert_default().extend(found);
                 }
+                Outcome::Unresolved(reason) => {
+                    first.get_or_insert(Outcome::Unresolved(reason));
+                }
+                Outcome::External => first = Some(Outcome::External),
             }
         }
         if let Some(targets) = targets {
@@ -746,6 +744,76 @@ fn with_tree<'a, R>(
     out
 }
 
+/// The trees that reach `file`, each with its package: those of the file's
+/// own package in root order, then those of each other workspace crate, by
+/// directory in byte order, each in root order.
+fn trees_of(
+    cx: &mut ResolveCx<'_>,
+    file: &str,
+    own: Option<&Arc<Manifest>>,
+) -> Vec<(Arc<Manifest>, Root)> {
+    let mut packages: Vec<Arc<Manifest>> = own.cloned().into_iter().collect();
+    if let Some(others) = reached(cx).get(file) {
+        packages.extend(
+            others
+                .iter()
+                .filter(|p| own.is_none_or(|o| o.dir != p.dir))
+                .cloned(),
+        );
+    }
+    let mut out = Vec::new();
+    for package in packages {
+        let roots = roots(cx, &package);
+        let members = members(cx, &package, &roots);
+        for &at in members.get(file).into_iter().flatten() {
+            out.push((Arc::clone(&package), roots[at].clone()));
+        }
+    }
+    out
+}
+
+/// For each file, the workspace crates with a tree that reaches it. Every
+/// tree of every crate is read in full, the levels of all trees together,
+/// so the index is built once per build.
+fn reached(cx: &mut ResolveCx<'_>) -> Arc<HashMap<String, Vec<Arc<Manifest>>>> {
+    if let Some(known) = &cx.cache::<RustState>().reached {
+        return Arc::clone(known);
+    }
+    let mut packages = crates(cx);
+    packages.sort_by(|a, b| a.dir.cmp(&b.dir));
+    packages.dedup_by(|a, b| a.dir == b.dir);
+    let mut all: Vec<Root> = Vec::new();
+    for package in &packages {
+        for root in roots(cx, package).iter() {
+            if !all.iter().any(|(r, _)| *r == root.0) {
+                all.push(root.clone());
+            }
+        }
+    }
+    complete(cx, &all);
+    let mut index: HashMap<String, Vec<Arc<Manifest>>> = HashMap::new();
+    for package in &packages {
+        let roots = roots(cx, package);
+        for file in members(cx, package, &roots).keys() {
+            index
+                .entry(file.clone())
+                .or_default()
+                .push(Arc::clone(package));
+        }
+    }
+    // An analyzed file that no tree reaches gets a tree of its own, which
+    // reads that file: read those files together now.
+    let detached: Vec<String> = cx
+        .analyzed_files(".rs")
+        .into_iter()
+        .filter(|f| !index.contains_key(f))
+        .collect();
+    summarize(cx, detached);
+    let index = Arc::new(index);
+    cx.cache::<RustState>().reached = Some(Arc::clone(&index));
+    index
+}
+
 /// The trees of `package` that reach each file, by position in `roots`.
 /// Each tree is read in full the first time, so the index is built once
 /// per package and build.
@@ -766,15 +834,6 @@ fn members(
             }
         });
     }
-    // An analyzed file of the package that no tree reaches gets a tree of
-    // its own, which reads that file: read those files together now.
-    let detached: Vec<String> = cx
-        .analyzed_files(".rs")
-        .into_iter()
-        .filter(|f| below(f, &package.dir) && !index.contains_key(f))
-        .filter(|f| matches!(package_of(cx, f), Ok(Some(p)) if p.dir == package.dir))
-        .collect();
-    summarize(cx, detached);
     let index = Arc::new(index);
     cx.cache::<RustState>()
         .members
@@ -1277,14 +1336,6 @@ fn string_value(node: Node, text: &str) -> Option<String> {
 /// Whether a path as written is absolute.
 fn is_absolute(path: &str) -> bool {
     path.starts_with('/') || path.starts_with('\\') || Path::new(path).is_absolute()
-}
-
-/// Whether the workspace-relative `file` lies below the directory `dir`.
-fn below(file: &str, dir: &str) -> bool {
-    dir.is_empty()
-        || file
-            .strip_prefix(dir)
-            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// The directory of a workspace-relative path; `""` for the root.
