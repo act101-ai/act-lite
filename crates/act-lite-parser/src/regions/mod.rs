@@ -110,6 +110,44 @@ pub fn view(source: &str, region: &Region) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// Whether a node of a component file's outer tree lies where nothing is
+/// reported: below an ERROR node, or, in a Vue file, inside a custom block
+/// or a `<template>` whose first `lang` is not `html`. The block itself (the
+/// top-level element) and its start tag are not inside it.
+pub(crate) fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str) -> bool {
+    let mut top = None;
+    let mut ancestor = node.parent();
+    while let Some(current) = ancestor {
+        if current.kind() == "ERROR" {
+            return true;
+        }
+        if current.parent().is_some() {
+            top = Some(current);
+        }
+        ancestor = current.parent();
+    }
+    match (grammar, top) {
+        (Grammar::Vue, Some(block)) if within_start_tag(block, node) => false,
+        (Grammar::Vue, Some(block)) => match block.kind() {
+            "element" => true,
+            "template_element" => {
+                vue::template_lang(block, source).is_some_and(|lang| lang != "html")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether `node` lies in the start tag of `element`.
+fn within_start_tag(element: tree_sitter::Node, node: tree_sitter::Node) -> bool {
+    let mut cursor = element.walk();
+    element
+        .children(&mut cursor)
+        .filter(|child| matches!(child.kind(), "start_tag" | "self_closing_tag"))
+        .any(|tag| tag.start_byte() <= node.start_byte() && node.end_byte() <= tag.end_byte())
+}
+
 /// The framework detector for a component grammar.
 pub(crate) fn detector_for(grammar: Grammar) -> Option<Box<dyn Detector>> {
     match grammar {

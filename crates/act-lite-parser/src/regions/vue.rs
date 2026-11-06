@@ -118,6 +118,12 @@ fn language(kind: RegionKind, start_tag: tree_sitter::Node, source: &str) -> Reg
     }
 }
 
+/// The value of the first `lang` attribute of a `<template>` element's
+/// start tag; `None` without one.
+pub(crate) fn template_lang<'s>(template: tree_sitter::Node, source: &'s str) -> Option<&'s str> {
+    lang_value(child_of_kind(template, "start_tag")?, source)
+}
+
 /// The value of the first `lang` attribute of `start_tag`, as written
 /// (empty for an attribute without a value); `None` without one.
 fn lang_value<'s>(start_tag: tree_sitter::Node, source: &'s str) -> Option<&'s str> {

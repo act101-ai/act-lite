@@ -589,6 +589,13 @@ fn tree_declarations(
             decl_node = Some(node);
         }
 
+        if grammar.is_component()
+            && let Some(node) = decl_node.or(name_node)
+            && crate::regions::outside_structure(grammar, node, text)
+        {
+            continue;
+        }
+
         if let (Some(k), Some(r)) = (kind, range) {
             // D3: `name_range` only describes a name this declaration actually
             // TOOK from a `@name` capture. A pattern whose `@name` captured a
@@ -605,12 +612,7 @@ fn tree_declarations(
             } else {
                 self_name.unwrap_or_default()
             };
-            name = name
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_string();
+            name = first_line(&name).to_string();
             let name = name.trim().to_string();
             let name = if grammar == Grammar::Ruby {
                 name.strip_prefix(':').unwrap_or(&name).to_string()
@@ -788,6 +790,13 @@ fn tree_symbols(
             None => kinded_definition.map(|(node, suffix)| (node, symbol_kind_from_suffix(suffix))),
         };
 
+        if grammar.is_component()
+            && let Some((node, _)) = resolved
+            && crate::regions::outside_structure(grammar, node, text)
+        {
+            continue;
+        }
+
         if let Some((node, stated_kind)) = resolved {
             let symbol_kind = stated_kind.unwrap_or_else(|| {
                 let node_kind = support.node_kind_with_source(&node, text.as_bytes());
@@ -795,7 +804,10 @@ fn tree_symbols(
             });
             // Use the @name range when available; fall back to the definition node's range.
             let symbol_range = range.unwrap_or_else(|| node_to_range(node, path));
-            let symbol_name = name.unwrap_or_default();
+            let mut symbol_name = name.unwrap_or_default();
+            if grammar.is_component() {
+                symbol_name = first_line(&symbol_name).to_string();
+            }
             // A class attribute value lists several classes; each is a symbol.
             if is_class_attribute && let Some(value) = name_node {
                 for (token, range) in whitespace_separated_tokens(value, text.as_bytes(), path) {
@@ -843,10 +855,21 @@ fn region_blocks(source: &SourceFile) -> Vec<(String, Range, Range)> {
                 (Some(start), Some(end)) => text.get(start..end).unwrap_or_default(),
                 _ => "",
             };
-            let name = name.lines().next().unwrap_or_default().to_string();
-            (name, range(&region.element), start_tag)
+            (
+                first_line(name).to_string(),
+                range(&region.element),
+                start_tag,
+            )
         })
         .collect()
+}
+
+/// A declared name cut to its first non-empty line, trimmed.
+fn first_line(name: &str) -> &str {
+    name.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
 }
 
 /// Stable sort by range start (line, column), then by range end descending,
