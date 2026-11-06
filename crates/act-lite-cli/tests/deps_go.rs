@@ -849,7 +849,11 @@ fn a_quoted_module_path_is_read_by_its_value() {
         write(root, "spaced/go.mod", module);
         write(root, "spaced/s.go", "package lib\n");
         write(root, "spaced/sub/s.go", "package sub\n");
-        write(root, "lib/go.mod", "module \"example.com/\\x6cib\" // \"x\"\n");
+        write(
+            root,
+            "lib/go.mod",
+            "module \"example.com/\\x6cib\" // \"x\"\n",
+        );
         write(root, "lib/l.go", "package lib\n");
         write(
             root,
