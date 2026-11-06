@@ -216,10 +216,12 @@ fn declaration_name<'a>(node: Node<'a>, grammar: Grammar, source: &str) -> Optio
                 if child_of_kind(node, "attribute_name")
                     .is_some_and(|name| name_text(name, grammar, source) == "id") =>
             {
-                first_named_chain(
-                    child_of_kind(node, "quoted_attribute_value")?,
-                    "attribute_value",
-                )
+                match child_of_kind(node, "quoted_attribute_value") {
+                    Some(quoted) => first_named_chain(quoted, "attribute_value"),
+                    // A component's unquoted value (`id=app`) is a literal too.
+                    None if grammar.is_component() => child_of_kind(node, "attribute_value"),
+                    None => None,
+                }
                 .filter(|value| value.named_child_count() == 0)
             }
             _ => None,

@@ -522,6 +522,10 @@ fn mcp_prefers_a_script_use_to_template_text_or_a_custom_block() {
             "<template><p>foo</p></template>\n<script>foo()</script>\n",
         ),
         ("Docs.vue", "<docs>foo</docs>\n<script>foo()</script>\n"),
+        (
+            "Style.vue",
+            "<style>.foo { color: red; }</style>\n<script>foo()</script>\n",
+        ),
     ] {
         let ws = workspace(&[(name, text)]);
         let cli = references(ws.path(), "foo", name, 2, 9);
@@ -533,5 +537,32 @@ fn mcp_prefers_a_script_use_to_template_text_or_a_custom_block() {
             .collect();
         assert_eq!(cli_lines, vec![2], "{name}: {cli}");
         assert_eq!(mcp_lines(ws.path(), "foo", name), vec![2], "{name}");
+    }
+}
+
+#[test]
+fn an_unquoted_template_id_is_its_own_definition() {
+    for (a, b) in [
+        ("A.svelte", "B.svelte"),
+        ("A.vue", "B.vue"),
+        ("A.astro", "B.astro"),
+    ] {
+        let wrap = |body: &str| {
+            if a.ends_with(".vue") {
+                format!("<template>{body}</template>\n")
+            } else {
+                format!("{body}\n")
+            }
+        };
+        let ws = workspace(&[
+            (a, &wrap("<p id=app></p>")),
+            (b, &wrap("<p id=\"app\"></p>")),
+        ]);
+        let column = if a.ends_with(".vue") { 17 } else { 7 };
+        let output = definition_output(ws.path(), "app", a, 1, column);
+        let out: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+        let file = out["definition"]["file"].as_str().unwrap_or_default();
+        assert!(file.ends_with(a), "{a}: {out}");
+        assert_eq!(out["definition"]["column"], column, "{a}: {out}");
     }
 }

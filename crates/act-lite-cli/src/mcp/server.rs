@@ -951,7 +951,7 @@ fn component_symbol_position(
     source: &act_lite_parser::SourceFile,
     symbol: &str,
 ) -> Option<(u32, u32)> {
-    use act_lite_parser::regions::{Position, PositionIndex, StructureFilter};
+    use act_lite_parser::regions::{Position, PositionIndex, RegionKind, StructureFilter};
     let index = PositionIndex::new(source);
     if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source) {
         let in_region = |start: &act_lite_core::Location| {
@@ -993,7 +993,11 @@ fn component_symbol_position(
                 let byte = line_start + start;
                 let at = (line_idx as u32 + 1, start as u32 + 1);
                 match index.at(byte) {
-                    Position::Region(_) => return Some(at),
+                    Position::Region(region)
+                        if source.regions()[region].kind != RegionKind::Style =>
+                    {
+                        return Some(at);
+                    }
                     Position::Outer if outer.is_none() && !filter.hides_byte(byte) => {
                         outer = Some(at);
                     }
