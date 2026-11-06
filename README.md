@@ -929,7 +929,9 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `.mjs`; `.cts`, `.d.cts` for `.cjs`); the path as a file (any extension,
   `./style.css` too); the path plus `.ts`, `.tsx`, `.d.ts`, `.js`, `.jsx`,
   `.mjs`, `.cjs`, `.mts`, `.cts`, `.json`; the path as a directory, by its
-  `package.json` `main`, then `index` plus each of those extensions. No match
+  `package.json` `main` (as a file, as a file plus each of those extensions,
+  then its own `index` plus each of those extensions; a trailing `/` on
+  `main` changes nothing), then `index` plus each of those extensions. No match
   is `unresolved`, reason `no file matches <S>`. A specifier that starts with
   `/` is `unresolved` (`root-relative specifier is not applied`); `node:` is
   `external`; `#` is `unresolved` (`package.json "imports" is not applied`).

@@ -202,9 +202,10 @@ fn probe_as_file(cx: &mut ResolveCx<'_>, path: &str) -> Found {
     Found::None
 }
 
-/// Step 1.4: the directory's `package.json` `main`, then `index`. A
-/// `main` that names the directory itself is passed over; one with a
-/// trailing `/` is a directory, probed for its `index`; one that leaves the
+/// Step 1.4: the directory's `package.json` `main`, probed as a file, then
+/// for its own `index` (Node's `LOAD_AS_FILE`, then `LOAD_INDEX`); then the
+/// directory's `index`. A trailing `/` on `main` changes nothing. A `main`
+/// that names the directory itself is passed over; one that leaves the
 /// workspace is outside. A `package.json` in a vendored directory is not
 /// read.
 fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
@@ -222,8 +223,10 @@ fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
                 let found = match cx.normalize(&dir, &main) {
                     None => Found::Outside,
                     Some(target) if target == dir => Found::None,
-                    Some(target) if main.ends_with('/') => probe_index(cx, &target),
-                    Some(target) => probe_as_file(cx, &target),
+                    Some(target) => match probe_as_file(cx, &target) {
+                        Found::None => probe_index(cx, &target),
+                        found => found,
+                    },
                 };
                 if !matches!(found, Found::None) {
                     return found;
