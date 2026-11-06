@@ -58,5 +58,5 @@
 ; include("f.jl")
 (call_expression
   . (identifier) @_call
-  . (argument_list . (string_literal) @name .)
+  . (argument_list . [(line_comment) (block_comment)]* . (string_literal) @name)
   (#eq? @_call "include")) @include
