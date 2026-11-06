@@ -350,7 +350,7 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 
 #[test]
 fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
-    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\n";
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\n";
     assert_eq!(
         skeleton_pairs(source),
         pair_set(&[
@@ -360,10 +360,21 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("import", "d"),
             ("import", "e"),
             ("import", "m"),
-            ("constant", "n")
+            ("constant", "n"),
+            ("import", "t"),
+            ("struct", "S"),
+            ("constant", "u")
         ])
     );
-    assert_eq!(symbol_pairs(source), pair_set(&[("constant", "n")]));
+    assert_eq!(
+        symbol_pairs(source),
+        pair_set(&[
+            ("constant", "n"),
+            ("struct", "S"),
+            ("field", "x"),
+            ("constant", "u")
+        ])
+    );
 }
 
 #[test]
