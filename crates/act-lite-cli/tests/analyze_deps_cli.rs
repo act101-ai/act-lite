@@ -961,6 +961,34 @@ fn a_use_in_several_crate_trees_gives_an_edge_from_each_tree() {
 }
 
 #[test]
+fn an_example_root_that_loads_a_source_file_gives_an_edge_from_its_tree() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "#[path = \"imp_lib.rs\"]\nmod imp;\nmod shared;\n",
+    );
+    write(
+        root,
+        "examples/demo.rs",
+        "#[path = \"../src/shared.rs\"]\nmod shared;\n#[path = \"../src/imp_ex.rs\"]\nmod imp;\n",
+    );
+    write(root, "src/imp_lib.rs", "pub struct Thing;\n");
+    write(root, "src/imp_ex.rs", "pub struct Thing;\n");
+    write(root, "src/shared.rs", "use crate::imp::Thing;\n");
+    let v = graph(root, &["--limit", "1000"]);
+    assert_eq!(kinds(edge(&v, "src/shared.rs", "src/imp_ex.rs")), ["use"]);
+    assert_eq!(kinds(edge(&v, "src/shared.rs", "src/imp_lib.rs")), ["use"]);
+    assert_eq!(unresolved(&v), []);
+}
+
+#[test]
 fn a_main_that_is_a_directory_resolves_to_its_index() {
     let ws = workspace();
     let root = ws.path();

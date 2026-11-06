@@ -182,6 +182,10 @@ struct State {
     cache: HashMap<TypeId, Box<dyn Any + Send>>,
 }
 
+/// The most reads `ResolveCx::read_each` runs at once: each holds a parse
+/// tree, so more workers cost memory for little time.
+const READ_WORKERS: usize = 4;
+
 /// What a resolver can read while it resolves one relationship.
 pub struct ResolveCx<'a> {
     ctx: &'a RunContext,
@@ -361,6 +365,19 @@ impl ResolveCx<'_> {
         self.analyzable.contains(rel)
     }
 
+    /// The files of the scope in a supported language whose path ends with
+    /// `suffix`, in byte order.
+    pub fn analyzed_files(&self, suffix: &str) -> Vec<String> {
+        let mut files: Vec<String> = self
+            .analyzable
+            .iter()
+            .filter(|f| f.ends_with(suffix))
+            .cloned()
+            .collect();
+        files.sort_unstable();
+        files
+    }
+
     /// `relative` joined to `base_dir` with `.` and `..` removed; `None`
     /// when the path leaves the workspace root or `relative` is absolute.
     pub fn normalize(&self, base_dir: &str, relative: &str) -> Option<String> {
@@ -397,6 +414,77 @@ impl ResolveCx<'_> {
             }
         }
         Ok(&self.state.sources[rel])
+    }
+
+    /// Reads and parses each of `rels` as `source` does, several at a time,
+    /// and gives `f` of each parse in the order of `rels`. The parses are
+    /// not kept; each read is recorded for the build as `source` records
+    /// it, and a read that failed before fails again without a new read.
+    pub fn read_each<T: Send>(
+        &mut self,
+        rels: &[String],
+        f: impl Fn(&Parsed) -> T + Sync,
+    ) -> Vec<Result<T, String>> {
+        let mut out: Vec<Option<Result<T, String>>> = rels
+            .iter()
+            .map(|rel| match self.state.reads.get(rel) {
+                Some(Err(reason)) => Some(Err(reason.clone())),
+                _ => None,
+            })
+            .collect();
+        let pending: Vec<usize> = (0..rels.len()).filter(|&i| out[i].is_none()).collect();
+        let support = &self.ctx.support;
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let workers = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(READ_WORKERS)
+            .min(pending.len());
+        let read = || {
+            let mut done = Vec::new();
+            loop {
+                let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(&i) = pending.get(at) else {
+                    return done;
+                };
+                let result = support
+                    .source(&rels[i])
+                    .map(|parsed| (f(&parsed), parsed.removed));
+                done.push((i, result));
+            }
+        };
+        let results: Vec<_> = if workers <= 1 {
+            read()
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..workers).map(|_| scope.spawn(read)).collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("a read worker does not panic"))
+                    .collect()
+            })
+        };
+        let mut results = results;
+        results.sort_by_key(|(i, _)| *i);
+        for (i, result) in results {
+            let rel = &rels[i];
+            out[i] = Some(match result {
+                Ok((value, removed)) => {
+                    self.state.reads.insert(rel.clone(), Ok(removed));
+                    Ok(value)
+                }
+                Err(err) => {
+                    let reason = match err {
+                        SupportError::TestFile(_) => err.to_string(),
+                        _ => format!("{rel} could not be read"),
+                    };
+                    self.state.reads.insert(rel.clone(), Err(reason.clone()));
+                    Err(reason)
+                }
+            });
+        }
+        out.into_iter()
+            .map(|r| r.expect("every read has a result"))
+            .collect()
     }
 
     /// The removed test regions of `file`: the file being resolved, or a
