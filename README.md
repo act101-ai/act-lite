@@ -956,11 +956,17 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `__init__.py` is a namespace package (it exists, with no file). `import
   a.b.c` uses the first root under which `a` is a module or regular package,
   else the first under which it is a namespace package. `from X import n`
-  targets `X`'s file when a top-level statement of it binds `n` (a
-  `match` binds the capture names of its `case` patterns, such as `case n:`
-  or `case [_, n]:`, and the names its case bodies bind; an annotation binds
-  only with a value: `n: int = 1` binds, `n: int` does not; `global n` does
-  not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
+  targets `X`'s file when its top-level statements leave `n` bound (a
+  `match` binds the capture names of its `case` patterns,
+  such as `case n:` or `case [_, n]:`, and the names its case bodies bind;
+  an annotation binds only with a value: `n: int = 1` binds, `n: int` does
+  not; `n += 1` and `type n = …` bind; `n := …` binds wherever the module
+  runs it, also in a condition, a call argument, a comprehension, a default
+  value, a decorator or a base class, but not in a `def`, `lambda` or
+  `class` body; `except … as n` does not bind, as `n` is deleted at the end
+  of the handler; a module-level `del n` unbinds, a `del` inside a block
+  does not; `global n` does not bind), else the submodule `X.n`, and also
+  `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
   is `unresolved` outside a package (`relative import outside a package`) or
   above the top-level package (`relative import beyond the top-level
@@ -1045,9 +1051,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   existence check of `node_modules/<package>/` in directories that discovery
   prunes (metadata only; nothing in them is read).
 - *Removed Rust test regions*: the text of a removed test region is read only
-  for its `mod` declarations, which build the module tree (so a `src/tests.rs`
-  that `#[cfg(test)] mod tests;` loads is reached). It is never analyzed or
-  reported.
+  for its `mod` declarations and inline modules, at any depth, with their
+  `#[path]` attributes and the `mod` forms of module-level macros, which
+  build the module tree (so a `src/tests.rs` that `#[cfg(test)] mod tests;`
+  loads is reached, and so is a `src/checks/helper.rs` that
+  `#[cfg(test)] mod checks { mod helper; }` loads). It is never analyzed, and
+  none of its relationships is reported.
 
 Nothing else is read, and nothing is written.
 

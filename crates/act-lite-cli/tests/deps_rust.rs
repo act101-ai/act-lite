@@ -618,6 +618,92 @@ fn a_removed_test_module_keeps_its_path_attribute() {
 }
 
 #[test]
+fn a_removed_inline_test_module_keeps_its_module_declarations() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "pub struct A;\n#[cfg(test)]\nmod checks {\n    mod helper;\n}\n",
+    );
+    write(root, "src/checks/helper.rs", "use crate::A;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/checks/helper.rs", "crate::A"),
+        resolved(&["src/lib.rs"])
+    );
+    assert!(graph.relationships_of("src/lib.rs").is_empty());
+    let graph = build(root, with_tests());
+    assert_eq!(
+        outcome(&graph, "src/checks/helper.rs", "crate::A"),
+        resolved(&["src/lib.rs"])
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/checks/helper.rs"),
+        ["module"]
+    );
+}
+
+#[test]
+fn removed_inline_modules_nest_and_keep_path_attributes() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "pub struct A;\n",
+            "mod outer {\n",
+            "    #[cfg(test)]\n",
+            "    mod t {\n",
+            "        mod h;\n",
+            "    }\n",
+            "}\n",
+            "#[cfg(test)]\n",
+            "#[path = \"unit\"]\n",
+            "mod checks {\n",
+            "    mod inner {\n",
+            "        #[path = \"deep/p.rs\"]\n",
+            "        mod p;\n",
+            "        mod q;\n",
+            "    }\n",
+            "    wrapper! { mod m; }\n",
+            "}\n",
+            "#[path = \"before.rs\"]\n",
+            "#[cfg(test)]\n",
+            "mod b;\n",
+        ),
+    );
+    let files = [
+        "src/outer/t/h.rs",
+        "src/unit/inner/deep/p.rs",
+        "src/unit/inner/q.rs",
+        "src/unit/m.rs",
+        "src/before.rs",
+    ];
+    for file in files {
+        write(root, file, "use crate::A;\n");
+    }
+    for includes in [Includes::default(), with_tests()] {
+        let graph = build(root, includes);
+        for file in files {
+            assert_eq!(
+                outcome(&graph, file, "crate::A"),
+                resolved(&["src/lib.rs"]),
+                "{file}, tests {}",
+                includes.tests
+            );
+        }
+        assert_eq!(
+            graph.relationships_of("src/lib.rs").is_empty(),
+            !includes.tests
+        );
+    }
+}
+
+#[test]
 fn a_dependency_in_several_target_tables_resolves_to_every_crate() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();

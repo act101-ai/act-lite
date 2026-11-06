@@ -20,7 +20,7 @@
 
 use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
-use crate::analyze::read::Parsed;
+use crate::analyze::read::{Parsed, RemovedRegion};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{InlineModule, Relationship, RelationshipKind, extract, module_names};
 use act_lite_parser::{Grammar, SourceFile};
@@ -914,7 +914,12 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
         }
     };
     tree.modules[idx].names = Ok(Arc::clone(names));
-    add_inline(tree, idx, inline.clone());
+    for module in inline {
+        // A removed region's inline module can lie inside an inline module
+        // of the file.
+        let parent = innermost(tree, idx, &module.range);
+        add_inline(tree, parent, vec![module.clone()]);
+    }
     for (name, range, path_attribute) in mods {
         let name = name.clone();
         let parent = innermost(tree, idx, range);
@@ -1000,8 +1005,8 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
 }
 
 /// A module file's declared names and glob flag, inline modules, and its
-/// `mod x;` declarations with their ranges and `#[path]` values, also
-/// those of the removed test regions.
+/// `mod x;` declarations with their ranges and `#[path]` values, also the
+/// inline modules and declarations of the removed test regions.
 type ModuleFile = (
     Names,
     Vec<InlineModule>,
@@ -1009,55 +1014,40 @@ type ModuleFile = (
 );
 
 fn module_file(parsed: &Parsed) -> ModuleFile {
-    let mut mods: Vec<(String, CompactRange, Option<String>)> = extract(&parsed.source)
+    let names = module_names(&parsed.source);
+    let mut inline = names.inline;
+    let mut mods = module_decls(&parsed.source);
+    for region in &parsed.removed {
+        let Some(file) = region_source(region) else {
+            continue;
+        };
+        inline.extend(module_names(&file).inline);
+        mods.extend(module_decls(&file));
+    }
+    (Arc::new((names.names, names.glob)), inline, mods)
+}
+
+fn module_decls(file: &SourceFile) -> Vec<(String, CompactRange, Option<String>)> {
+    extract(file)
         .into_iter()
         .filter(|r| r.kind == RelationshipKind::Module)
         .map(|r| (r.specifier, r.range, r.path_attribute))
-        .collect();
-    for region in &parsed.removed {
-        for (name, path_attribute) in removed_mods(&region.text) {
-            mods.push((name, region.range.clone(), path_attribute));
-        }
-    }
-    let names = module_names(&parsed.source);
-    (Arc::new((names.names, names.glob)), names.inline, mods)
+        .collect()
 }
 
-/// The `mod x;` declarations at the top level of a removed test region,
-/// each with the value of a `#[path = "…"]` attribute before it.
-fn removed_mods(text: &str) -> Vec<(String, Option<String>)> {
-    let Ok(file) = SourceFile::from_content("region.rs", text.to_string(), Grammar::Rust) else {
-        return Vec::new();
-    };
-    let root = file.tree().root_node();
-    let mut out = Vec::new();
-    let mut path = None;
-    let mut cursor = root.walk();
-    for item in root.named_children(&mut cursor) {
-        match item.kind() {
-            "attribute_item" => {
-                if let Some(attribute) = item.named_child(0)
-                    && attribute.named_child(0).map(|p| &text[p.byte_range()]) == Some("path")
-                    && let Some(value) = attribute.child_by_field_name("value")
-                    && value.kind() == "string_literal"
-                {
-                    let written = &text[value.byte_range()];
-                    path = Some(written[1..written.len() - 1].to_string());
-                }
-            }
-            "line_comment" | "block_comment" => {}
-            "mod_item" => {
-                if item.child_by_field_name("body").is_none()
-                    && let Some(name) = item.child_by_field_name("name")
-                {
-                    out.push((text[name.byte_range()].to_string(), path.take()));
-                }
-                path = None;
-            }
-            _ => path = None,
-        }
-    }
-    out
+/// The text of a removed test region parsed at its own location in the
+/// file, so that its ranges are the file's. It is read for the module tree
+/// only; none of its relationships is reported.
+fn region_source(region: &RemovedRegion) -> Option<SourceFile> {
+    let lines = region.range.start_line().saturating_sub(1) as usize;
+    let columns = region.range.start_col().saturating_sub(1) as usize;
+    let text = format!(
+        "{}{}{}",
+        "\n".repeat(lines),
+        " ".repeat(columns),
+        region.text
+    );
+    SourceFile::from_content("region.rs", text, Grammar::Rust).ok()
 }
 
 /// The innermost inline module of the module `idx` that contains `range`.
