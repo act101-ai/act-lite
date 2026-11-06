@@ -94,7 +94,7 @@ workflow for part of the work, use it.
 4. **Draw the edges.** A node depends on another only when it consumes what
    that node produces or changes a file that node creates. An edge that is
    not a real dependency removes parallelism.
-5. **Choose each node's tier** (§4).
+5. **Choose each node's capability** (§4).
 6. **Write the contracts** (format §4) and the header (format §2).
 7. **Self-review** the graph, and fix what you find in place:
    1. **Spec coverage.** Every requirement in every authority spec maps to a
@@ -116,18 +116,23 @@ workflow for part of the work, use it.
     control, ignore it in the same commit, so a merge never stages a
     checkout.
 
-## 4. Tiers
+## 4. Capabilities
 
-The capability tier is chosen at creation by the work's complexity, nuance and
-technicality:
+A node's capability is chosen at creation by the work's complexity, nuance
+and technicality:
 
-| Tier | Work |
+| Capability | Work |
 |---|---|
-| `simple` | Mechanical work the plan fully decides: copying, renaming, fixtures, docs that restate code, running a check. |
-| `normal` | Ordinary implementation from a complete plan; node reviews. |
-| `demanding` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
+| `lookup` | Read-only work: find files, trace code, summarize, classify, extract; run a check and report its output. Changes no file. |
+| `mechanical` | Small edits the plan fully decides: copying, renaming, fixtures, docs that restate code. |
+| `implementation` | Ordinary implementation from a complete plan; node reviews. |
+| `judgment` | Design choices the plan leaves open; core or shared code; concurrency, security or data-loss risk; interfaces between nodes; a node in its second or later round; planning a node whose spec is ambiguous; the graph-level verification stages. |
 
-A tier names the class of task. A session maps it to the model it uses for that class of coding task — demanding or nuanced, normal, or simple — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the tier.
+A node that edits files is never `lookup`.
+
+A capability names the class of task. A session maps it to the subagent or model it uses for that class of task — `judgment` for demanding or nuanced coding work, `implementation` for normal coding work, `mechanical` and `lookup` for simple work — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the capability.
+
+Choose the subagent by its capability as the session describes it; do not set a model on the call when the session describes subagents.
 
 ## 5. Verification stage
 
@@ -135,9 +140,23 @@ The stage has three steps:
 
 1. **Adversarial review.** The operator's or the project's declared reviewer
    if there is one; otherwise a fresh reviewer that has not seen this
-   session, of the `demanding` tier. Tell it to find defects, not to approve. Give it the
-   graph, the authority specs it answers, and the review focus. It reports
-   each finding with its location, the failure it causes, and the evidence.
+   session, with the `judgment` capability. Tell it to find defects, not to
+   approve. Give it the graph, the authority specs it answers, and the
+   review focus. It reports each finding with its location, the failure it
+   causes, and the evidence. The handoff begins with these four lines,
+   written even when no tool reads them, where `<program>` is the graph's
+   directory name:
+
+   ```
+   Unit: <program>:graph:plan
+   Round: 1
+   Check:
+   Files:
+   ```
+
+   After the header, the handoff instructs: "If the session offers a tool
+   named `work_begin`, call it first, once, with `unit`, `round`, `check` and
+   `files` from the header above. If the tool is absent, skip this step."
 2. **Verify each finding.** Read the spec or graph text it cites and
    reproduce it. Mark it confirmed or refuted, with the evidence. Record a
    refuted finding with its reason and drop it.
