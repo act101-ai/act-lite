@@ -867,9 +867,10 @@ fn dependency_tools_answer_over_mcp_as_the_cli() {
     let ws = TempDir::new().unwrap();
     acyclic(ws.path());
     let mut session = Session::start(ws.path());
-    for ((tool, analysis), status) in DEPENDENCY_TOOLS
-        .into_iter()
-        .zip(["findings", "no_findings", "findings", "findings"])
+    for ((tool, analysis), status) in
+        DEPENDENCY_TOOLS
+            .into_iter()
+            .zip(["findings", "no_findings", "findings", "findings"])
     {
         let (arguments, args) = if tool == "analyze_impact" {
             (json!({"focus": ["src/c.ts"]}), vec!["--focus", "src/c.ts"])
@@ -890,7 +891,14 @@ fn dependency_tools_answer_over_mcp_as_the_cli() {
         cli_of(
             ws.path(),
             "graph",
-            &["--focus", "src/b.ts", "--direction", "in", "--max-depth", "2"]
+            &[
+                "--focus",
+                "src/b.ts",
+                "--direction",
+                "in",
+                "--max-depth",
+                "2"
+            ]
         )
     );
     assert_eq!(v["details"]["max_depth"], 2, "{v}");
@@ -905,18 +913,48 @@ fn dependency_request_errors_over_mcp_match_the_cli() {
     write(tmp.path(), "x.ts", "export const x = 1;\n");
     let mut session = Session::start(&root);
     for (tool, analyzer, arguments, args) in [
-        ("graph", "graph", json!({"max_depth": 2}), vec!["--max-depth", "2"]),
-        ("graph", "graph", json!({"max_depth": 0}), vec!["--max-depth", "0"]),
-        ("graph", "graph", json!({"max_depth": "1001"}), vec!["--max-depth", "1001"]),
-        ("graph", "graph", json!({"direction": "in"}), vec!["--direction", "in"]),
+        (
+            "graph",
+            "graph",
+            json!({"max_depth": 2}),
+            vec!["--max-depth", "2"],
+        ),
+        (
+            "graph",
+            "graph",
+            json!({"max_depth": 0}),
+            vec!["--max-depth", "0"],
+        ),
+        (
+            "graph",
+            "graph",
+            json!({"max_depth": "1001"}),
+            vec!["--max-depth", "1001"],
+        ),
+        (
+            "graph",
+            "graph",
+            json!({"direction": "in"}),
+            vec!["--direction", "in"],
+        ),
         (
             "graph",
             "graph",
             json!({"focus": ["src/style.css"], "direction": "out"}),
             vec!["--focus", "src/style.css", "--direction", "out"],
         ),
-        ("graph", "graph", json!({"focus": ["nope.ts"]}), vec!["--focus", "nope.ts"]),
-        ("graph", "graph", json!({"focus": ["../x.ts"]}), vec!["--focus", "../x.ts"]),
+        (
+            "graph",
+            "graph",
+            json!({"focus": ["nope.ts"]}),
+            vec!["--focus", "nope.ts"],
+        ),
+        (
+            "graph",
+            "graph",
+            json!({"focus": ["../x.ts"]}),
+            vec!["--focus", "../x.ts"],
+        ),
         (
             "graph",
             "graph",

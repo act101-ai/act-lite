@@ -1015,7 +1015,11 @@ fn dependency_subcommands_name_their_options() {
         let run = run_named(ws.path(), analyzer, &["--help"]);
         assert_eq!(run.code, Some(0), "{analyzer}: {}", run.stderr);
         for option in options {
-            assert!(run.stdout.contains(option), "{analyzer} {option}: {}", run.stdout);
+            assert!(
+                run.stdout.contains(option),
+                "{analyzer} {option}: {}",
+                run.stdout
+            );
         }
     }
     let impact = run_named(ws.path(), "impact", &["--help"]).stdout;
@@ -1047,16 +1051,25 @@ fn usage_error(run: Run) -> String {
 
 #[test]
 fn dependency_request_errors() {
-    let ws = TempDir::new().unwrap();
-    acyclic(ws.path());
-    write(ws.path(), "src/style.css", "a {}\n");
-    let ws = ws.path();
+    let tmp = TempDir::new().unwrap();
+    let ws = &tmp.path().join("ws");
+    acyclic(ws);
+    write(ws, "src/style.css", "a {}\n");
+    write(tmp.path(), "x.ts", "export const x = 1;\n");
     let range = |n: &str| format!("max_depth must be between 1 and 1000, got {n}");
     for (analyzer, args, message) in [
-        ("graph", &["--max-depth", "2"][..], "max_depth needs a focus path".to_string()),
+        (
+            "graph",
+            &["--max-depth", "2"][..],
+            "max_depth needs a focus path".to_string(),
+        ),
         ("graph", &["--max-depth", "0"][..], range("0")),
         ("graph", &["--max-depth", "1001"][..], range("1001")),
-        ("graph", &["--direction", "in"][..], "direction needs a focus path".to_string()),
+        (
+            "graph",
+            &["--direction", "in"][..],
+            "direction needs a focus path".to_string(),
+        ),
         (
             "graph",
             &["--focus", "src/c.ts", "--max-depth", "1001"][..],
@@ -1065,9 +1078,14 @@ fn dependency_request_errors() {
         (
             "graph",
             &["--focus", "src/style.css", "--direction", "out"][..],
-            "no focus file can be analyzed: src/style.css (language not supported: CSS)".to_string(),
+            "no focus file can be analyzed: src/style.css (language not supported: CSS)"
+                .to_string(),
         ),
-        ("impact", &[][..], "impact needs at least one focus path".to_string()),
+        (
+            "impact",
+            &[][..],
+            "impact needs at least one focus path".to_string(),
+        ),
         ("impact", &["--max-depth", "0"][..], range("0")),
         (
             "impact",
@@ -1093,7 +1111,11 @@ fn dependency_request_errors() {
             "{analyzer}"
         );
         assert_eq!(
-            request_error(run_named(ws, analyzer, &["src/a.ts", "--focus", "src/c.ts"])),
+            request_error(run_named(
+                ws,
+                analyzer,
+                &["src/a.ts", "--focus", "src/c.ts"]
+            )),
             "focus path is not inside the requested paths: src/c.ts",
             "{analyzer}"
         );

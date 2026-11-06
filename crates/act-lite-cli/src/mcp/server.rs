@@ -17,8 +17,12 @@ use super::catalog::TOOLS;
 use super::params::*;
 use super::path_error::enrich_not_found_error;
 use crate::analyze::clones::ClonesAnalyzer;
+use crate::analyze::coupling::CouplingAnalyzer;
+use crate::analyze::cycles::CyclesAnalyzer;
 use crate::analyze::envelope::AnalyzeError;
+use crate::analyze::graph::GraphAnalyzer;
 use crate::analyze::hotspots::HotspotsAnalyzer;
+use crate::analyze::impact::ImpactAnalyzer;
 use crate::analyze::patterns::PatternsAnalyzer;
 use crate::analyze::run::{Analyzer, Request, run};
 use crate::definition;
@@ -137,7 +141,8 @@ impl ActLiteServer {
                 envelope.truncated,
                 &envelope.excluded,
                 &envelope.incomplete,
-                A::HINT,
+                analyzer.hint(),
+                analyzer.narrowing(),
             );
             Ok::<_, AnalyzeError>((json, hint))
         })
@@ -757,6 +762,64 @@ impl ActLiteServer {
         let ClonesParams { shared, focus } = params.0;
         self.run_analyzer_with(
             move |request| ClonesAnalyzer::new(request, &focus),
+            shared,
+            ct,
+        )
+        .await
+    }
+
+    #[tool]
+    async fn graph(
+        &self,
+        params: Parameters<GraphParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        let GraphParams {
+            shared,
+            focus,
+            direction,
+            max_depth,
+        } = params.0;
+        self.run_analyzer_with(
+            move |request| GraphAnalyzer::new(request, &focus, direction.as_deref(), max_depth),
+            shared,
+            ct,
+        )
+        .await
+    }
+
+    #[tool]
+    async fn analyze_cycles(
+        &self,
+        params: Parameters<CyclesParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer(CyclesAnalyzer, params.0.shared, ct).await
+    }
+
+    #[tool]
+    async fn analyze_coupling(
+        &self,
+        params: Parameters<CouplingParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_analyzer(CouplingAnalyzer, params.0.shared, ct)
+            .await
+    }
+
+    #[tool]
+    async fn analyze_impact(
+        &self,
+        params: Parameters<ImpactParams>,
+        ct: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        let ImpactParams {
+            shared,
+            focus,
+            max_depth,
+        } = params.0;
+        self.run_analyzer_with(
+            move |request| ImpactAnalyzer::new(request, &focus, max_depth),
             shared,
             ct,
         )
