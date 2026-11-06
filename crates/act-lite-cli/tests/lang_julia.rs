@@ -344,6 +344,19 @@ fn short_form_with_a_type_or_where_is_named_by_the_callee() {
 }
 
 #[test]
+fn nested_signature_wrappers_are_named_by_the_callee() {
+    let source = "f(x::T)::T where {T} = x\ng(x::T) where {T} where {S} = x\nfunction h(x::T)::T where {T}\n    x\nend\nfunction i(x::T) where {T} where {S}\n    x\nend\n";
+    let expected = pair_set(&[
+        ("function", "f"),
+        ("function", "g"),
+        ("function", "h"),
+        ("function", "i"),
+    ]);
+    assert_eq!(skeleton_pairs(source), expected);
+    assert_eq!(symbol_pairs(source), expected);
+}
+
+#[test]
 fn a_function_without_methods_is_a_function() {
     let source = "function f end\n";
     assert_eq!(skeleton_pairs(source), pair_set(&[("function", "f")]));

@@ -7,7 +7,12 @@
     [(identifier) @name
      (call_expression . [(identifier) (field_expression) (operator)] @name)
      (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-     (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))])) @function
+     (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
+     (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+     (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+     (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+     (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))
+     (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))])) @function
 (macro_definition
   (signature
     (call_expression . [(identifier) (field_expression) (operator)] @name))) @macro
@@ -17,7 +22,12 @@
   .
   [(call_expression . [(identifier) (field_expression) (operator)] @name)
    (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-   (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))]) @function
+   (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
+   (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+   (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+   (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
+   (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))
+   (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))]) @function
 
 ; Types: the name is the first identifier of the type head
 (struct_definition

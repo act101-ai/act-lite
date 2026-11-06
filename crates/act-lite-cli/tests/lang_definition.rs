@@ -231,6 +231,16 @@ fn a_typed_or_commented_zig_import_is_never_a_candidate() {
 }
 
 #[test]
+fn julia_nested_signature_wrappers_are_candidates() {
+    let ws = workspace(&[(
+        "n.jl",
+        "f(x::T)::T where {T} = x\nfunction h(x::T)::T where {T}\n    x\nend\nf(1)\nh(2)\n",
+    )]);
+    assert_found(ws.path(), "n.jl", "f", 5, 1, "f 1:1-1:2");
+    assert_found(ws.path(), "n.jl", "h", 6, 1, "h 2:10-2:11");
+}
+
+#[test]
 fn zig_extern_and_struct_literal_declarations_are_candidates() {
     let ws = workspace(&[(
         "x.zig",
