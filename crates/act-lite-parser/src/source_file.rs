@@ -1,6 +1,8 @@
 //! Source file with parsed syntax tree.
 
 use crate::{Grammar, Parser, ParserError, SyntaxTree, error::Result};
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// A source file with its content and parsed syntax tree.
@@ -14,9 +16,32 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
-    /// Loads and parses a source file.
+    /// Loads and parses a source file. A FIFO is not waited on, and a path
+    /// that is not a regular file is refused.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let source = Self::load_inner(path)?;
+        let path = path.as_ref();
+        let file = open_regular(path).map_err(ParserError::Io)?;
+        Self::record(Self::read(path, file)?)
+    }
+
+    /// Loads and parses a source file as [`SourceFile::load`] does, and
+    /// refuses it unless the opened file is the file at the canonical form of
+    /// `path` and that form lies inside the canonical `root`. The check is on
+    /// the opened file, so a path that changes after a caller's own check
+    /// cannot make this read a file outside `root`.
+    pub fn load_within(path: impl AsRef<Path>, root: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let file = open_regular(path).map_err(ParserError::Io)?;
+        if !opened_inside(path, &file, root.as_ref()) {
+            return Err(ParserError::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "path must be inside the workspace root",
+            )));
+        }
+        Self::record(Self::read(path, file)?)
+    }
+
+    fn record(source: Self) -> Result<Self> {
         // Parse-entry touch hook. SourceFile::load is the read entry
         // point for the navigation/analyze surface (skeleton, symbols, and the
         // MCP/CLI query handlers), which loads files directly rather than through
@@ -32,10 +57,10 @@ impl SourceFile {
         Ok(source)
     }
 
-    fn load_inner(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
+    fn read(path: &Path, mut file: File) -> Result<Self> {
         // Read bytes first to distinguish I/O errors from UTF-8 errors
-        let bytes = std::fs::read(path).map_err(ParserError::Io)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(ParserError::Io)?;
         let content = String::from_utf8(bytes).map_err(|_| ParserError::InvalidUtf8 {
             file: path.to_path_buf(),
         })?;
@@ -118,6 +143,47 @@ impl SourceFile {
         self.tree = tree;
         Ok(())
     }
+}
+
+/// Opens `path` for reading. On unix a FIFO is not waited on. A handle that
+/// is not a regular file is refused.
+fn open_regular(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    Ok(file)
+}
+
+/// Whether `file`, opened from `path`, is the file at the canonical form of
+/// `path`, and that form lies inside the canonical `root`.
+fn opened_inside(path: &Path, file: &File, root: &Path) -> bool {
+    let (Ok(canonical), Ok(root)) = (path.canonicalize(), root.canonicalize()) else {
+        return false;
+    };
+    let (Ok(opened), Ok(found)) = (file.metadata(), std::fs::metadata(&canonical)) else {
+        return false;
+    };
+    canonical.starts_with(root) && same_file(&opened, &found)
+}
+
+#[cfg(unix)]
+fn same_file(a: &Metadata, b: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Without a stable file identity, the canonical path check stands alone.
+#[cfg(not(unix))]
+fn same_file(_: &Metadata, _: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -269,6 +335,44 @@ mod tests {
         }
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_refuses_a_fifo_without_waiting() {
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.rs");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(SourceFile::load(&path).is_err());
+        });
+        let refused = rx.recv_timeout(std::time::Duration::from_secs(5));
+        // Unblock a reader that waits on the pipe.
+        let _ = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo);
+        assert_eq!(refused, Ok(true), "load must refuse a FIFO at once");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_within_refuses_a_file_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(dir.path().join("out.rs"), "fn outside() {}\n").unwrap();
+        std::fs::write(root.join("in.rs"), "fn inside() {}\n").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("out.rs"), root.join("link.rs")).unwrap();
+        std::os::unix::fs::symlink(root.join("in.rs"), root.join("alias.rs")).unwrap();
+        assert!(SourceFile::load_within(root.join("link.rs"), &root).is_err());
+        assert!(SourceFile::load_within(dir.path().join("out.rs"), &root).is_err());
+        assert!(SourceFile::load_within(root.join("in.rs"), &root).is_ok());
+        assert!(SourceFile::load_within(root.join("alias.rs"), &root).is_ok());
     }
 
     #[test]

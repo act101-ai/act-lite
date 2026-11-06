@@ -218,8 +218,8 @@ impl ActLiteServer {
         }
     }
 
-    fn load(path: &Path, file: &str) -> Result<act_lite_parser::SourceFile, McpError> {
-        act_lite_parser::SourceFile::load(path).map_err(|e| {
+    fn load(&self, path: &Path, file: &str) -> Result<act_lite_parser::SourceFile, McpError> {
+        act_lite_parser::SourceFile::load_within(path, &self.root).map_err(|e| {
             McpError::invalid_params(
                 format!(
                     "Failed to load file '{}' (resolved: '{}'): {}",
@@ -282,7 +282,7 @@ impl ActLiteServer {
         params: Parameters<SkeletonParams>,
     ) -> Result<CallToolResult, McpError> {
         let (path, _) = self.source_path(&params.0.file)?;
-        let source = Self::load(&path, &params.0.file)?;
+        let source = self.load(&path, &params.0.file)?;
         let result = act_lite_parser::execute_skeleton(&source).map_err(|e| {
             McpError::internal_error(format!("Failed to execute skeleton query: {}", e), None)
         })?;
@@ -298,7 +298,7 @@ impl ActLiteServer {
     async fn symbols(&self, params: Parameters<SymbolsParams>) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, _) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         let result = act_lite_parser::execute_symbols(&source).map_err(|e| {
             McpError::internal_error(format!("Failed to execute symbols query: {}", e), None)
         })?;
@@ -531,7 +531,7 @@ impl ActLiteServer {
     ) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         // Validate the symbol before branching on the language server, so the
         // caller gets the same "not found" error either way.
         let position = Self::symbol_position(&source, &p.symbol, &p.file)?;
@@ -634,7 +634,7 @@ impl ActLiteServer {
     async fn callers(&self, params: Parameters<CallersParams>) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         let position = Self::symbol_position(&source, &p.symbol, &p.file)?;
         let location = act_lite_core::Location::new(path.clone(), position.0, position.1);
 
@@ -693,7 +693,7 @@ impl ActLiteServer {
     ) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, _grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
 
         let (symbol_name, best) =
             definition::resolve_definition(&source, &self.root, &p.symbol, p.line, p.column)
