@@ -8,6 +8,7 @@ use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, Skipp
 use act_lite_core::CompactRange;
 use act_lite_parser::regions::{Region, RegionKind, RegionLanguage, RegionState, TIMEOUT_REASON};
 use act_lite_parser::{Grammar, ParseOptions, ParserError, SourceFile};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -292,6 +293,21 @@ pub struct Reader {
     include_tests: bool,
     cancel: CancellationToken,
     outcome: ReadOutcome,
+    /// The keys of `outcome.regions_not_analyzed`, so that a reread adds an
+    /// entry in constant time.
+    regions_seen: HashSet<RegionKey>,
+}
+
+/// File, range (start line and column, end line and column) and reason.
+type RegionKey = (String, (u32, u32, u32, u32), String);
+
+fn region_key(region: &RegionNotAnalyzed) -> RegionKey {
+    let r = &region.range;
+    (
+        region.file.clone(),
+        (r.start_line(), r.start_col(), r.end_line(), r.end_col()),
+        region.reason.clone(),
+    )
 }
 
 impl Reader {
@@ -315,6 +331,7 @@ impl Reader {
             include_tests,
             cancel: cancel.clone(),
             outcome: ReadOutcome::default(),
+            regions_seen: HashSet::new(),
         }
     }
 
@@ -380,9 +397,7 @@ impl FileSource for Reader {
                 } => {
                     self.outcome.parse_failures.extend(parse_failures);
                     self.outcome.test_exclusions.extend(test_exclusions);
-                    self.outcome
-                        .regions_not_analyzed
-                        .extend(regions_not_analyzed);
+                    self.add_regions(regions_not_analyzed);
                     self.outcome.files_without_analyzed_code += u64::from(without_analyzed_code);
                     return Ok(Some(parsed));
                 }
@@ -414,7 +429,7 @@ impl FileSource for Reader {
             } => {
                 add_new(&mut self.outcome.parse_failures, parse_failures);
                 add_new(&mut self.outcome.test_exclusions, test_exclusions);
-                add_new(&mut self.outcome.regions_not_analyzed, regions_not_analyzed);
+                self.add_regions(regions_not_analyzed);
                 Ok(parsed)
             }
             ReadResult::Skipped(skip) => Err(failed(format!(
@@ -422,6 +437,17 @@ impl FileSource for Reader {
                 skip.file.reason
             ))),
             ReadResult::TestFile(_) => Err(failed(format!("{rel} is now a test file"))),
+        }
+    }
+}
+
+impl Reader {
+    /// Adds each region entry that is not listed yet.
+    fn add_regions(&mut self, found: Vec<RegionNotAnalyzed>) {
+        for region in found {
+            if self.regions_seen.insert(region_key(&region)) {
+                self.outcome.regions_not_analyzed.push(region);
+            }
         }
     }
 }

@@ -700,3 +700,47 @@ fn region_clone_candidates_equal_those_of_the_region_view() {
     assert_eq!(regions, 11);
     assert_eq!(checked, 4);
 }
+
+/// A Vue file with two script regions that hold the same function and
+/// `n` script regions in an unsupported language.
+fn clone_and_unsupported(n: usize) -> String {
+    let check = "function check(a, b, c, d, e, f) {\n  const s = a + b + c + d + e + f;\n  if (s > 10) { return s * 2; }\n  return s - 1;\n}\n";
+    let mut text = format!(
+        "<script>\n{check}</script>\n<script>\n{}</script>\n",
+        check.replace("check", "check2")
+    );
+    for _ in 0..n {
+        text.push_str("<script lang=\"coffee\">x = 1</script>\n");
+    }
+    text
+}
+
+#[test]
+fn a_clone_reread_lists_each_region_not_analyzed_once() {
+    let ws = workspace(&[("M.vue", &clone_and_unsupported(200))]);
+    let out = run(ws.path(), "clones", &[]).unwrap();
+    assert_eq!(out["total"], 1, "{out}");
+    assert_eq!(out["details"]["regions_not_analyzed_total"], 200, "{out}");
+    assert_eq!(
+        out["details"]["regions_not_analyzed"]
+            .as_array()
+            .unwrap()
+            .len(),
+        30
+    );
+}
+
+#[test]
+fn a_clone_reread_stays_linear_in_the_regions_not_analyzed() {
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: set ACT_LITE_CHECK_PERF=1 to time 64,000 unsupported regions");
+        return;
+    }
+    let ws = workspace(&[("M.vue", &clone_and_unsupported(64_000))]);
+    run(ws.path(), "clones", &[]).unwrap();
+    let started = std::time::Instant::now();
+    let out = run(ws.path(), "clones", &[]).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(out["details"]["regions_not_analyzed_total"], 64_000);
+    assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
+}
