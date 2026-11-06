@@ -490,6 +490,24 @@ class ArchiveTests(CoreCase):
         self.assertEqual([r.id for r in wg.load(g.graph).history], ["N1", "N2"])
 
 
+    def test_archive_tier_graph_into_capability_history_maps_values(self):
+        rows = ([row("N1", state="DONE", capability="simple"), row("N2", state="DONE", capability="demanding")]
+                + [row(f"N{i}", state="DONE", capability="normal") for i in range(3, 28)]
+                + [row("N99", capability="simple")])
+        g = self.make(rows, nodes={"N99": contract()}, header=TIER_HEADER)
+        (g.root / "history.md").write_text(
+            "# Test Work Graph — History\n\n## Nodes\n\n" + HEADER + row("N0", state="DONE")
+            + "\n\n## Log\n\n" + LOG_HEADER, encoding="utf-8")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(wg.main(["archive", str(g.graph)]), 0)
+            self.assertEqual(wg.main(["check", str(g.graph)]), 0, out.getvalue())
+        history = (g.root / "history.md").read_text(encoding="utf-8")
+        self.assertIn(row("N1", state="DONE", capability="mechanical"), history)
+        self.assertIn(row("N2", state="DONE", capability="judgment"), history)
+        self.assertEqual([r.capability for r in wg.load(g.graph).history], ["implementation", "mechanical", "judgment"])
+
+
 class TemplateTests(unittest.TestCase):
     """The shipped templates, filled in, pass check: template and script agree."""
 

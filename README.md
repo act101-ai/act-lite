@@ -992,6 +992,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `build.rs`), a path dependency or a workspace crate that the crate depends
   on; it follows module segments, and its first remaining segment must be an
   item that the reached module's file declares (or the file has a glob `use`).
+  A file in several crate trees resolves each relationship in every tree that
+  reaches it, in root order: it is `resolved` when any tree resolves it, with
+  one edge to each distinct target of those trees, and `unresolved` only when
+  no tree resolves it, with the reason of the first tree.
   `include!` paths are relative to the declaring file. A `Cargo.toml` that
   cannot be read makes every relationship of its package `unresolved`.
 

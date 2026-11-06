@@ -517,6 +517,25 @@ fn python_names_bound_at_top_level() {
 }
 
 #[test]
+fn python_loop_targets_and_with_aliases_bound_at_top_level() {
+    let file = parse(
+        Grammar::Python,
+        "for i in x:\n    pass\n\
+         for (j, [k, *l]) in y:\n    pass\n\
+         for m, o in z:\n    pass\n\
+         with c() as p, d() as (q, r), e():\n    pass\n\
+         with (f() as s, g() as [t, u]):\n    pass\n\
+         def h():\n    for inner in x:\n        pass\n",
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&[
+            "h", "i", "j", "k", "l", "m", "o", "p", "q", "r", "s", "t", "u"
+        ])
+    );
+}
+
+#[test]
 fn rust_names_declared_at_module_level() {
     let file = parse(
         Grammar::Rust,

@@ -648,7 +648,8 @@ def write_docs(graph: Graph, docs: dict[str, list[str]]) -> None:
 
 def trim(graph: Graph, docs: dict[str, list[str]]) -> list[str]:
     """Move closed rows of graph.md beyond the cap (oldest first, unless a ledger
-    holds the rows) and Log entries beyond the window to history.md, verbatim."""
+    holds the rows) and Log entries beyond the window to history.md, verbatim,
+    except that a Tier row moved into a Capability table takes the mapped value."""
     lines = docs[GRAPH]
     closed = [] if graph.ledger else [r for r in graph.rows if r.closed]
     excess = closed[: max(0, len(closed) - CLOSED_CAP)]
@@ -657,7 +658,12 @@ def trim(graph: Graph, docs: dict[str, list[str]]) -> list[str]:
     if not excess and not old_log:
         return []
     history = docs.setdefault(HISTORY, history_skeleton(graph))
-    insert_table_lines(history, "Nodes", node_header(lines), [lines[r.index] for r in excess])
+    moved = [lines[r.index] for r in excess]
+    if node_header(lines) == TIER_HEADER and node_header(history) == NODE_HEADER:
+        # A Capability destination takes each Tier value in its own vocabulary.
+        moved = [normal([TIER_CAPABILITY.get(c, c) if k == 4 else c for k, c in enumerate(split_cells(line))])
+                 for line in moved]
+    insert_table_lines(history, "Nodes", node_header(lines), moved)
     insert_table_lines(history, "Log", LOG_HEADER, [lines[i] for i, _ in old_log])
     for i in sorted([r.index for r in excess] + [i for i, _ in old_log], reverse=True):
         del lines[i]

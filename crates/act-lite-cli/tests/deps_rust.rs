@@ -823,3 +823,37 @@ fn a_path_attribute_outside_the_parent_directory_is_reached_in_any_order() {
         }
     }
 }
+
+/// A file in the lib tree and the bin tree, where each tree names its own
+/// `imp` module.
+fn shared_in_two_trees(root: &Path) {
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "#[path = \"../shared.rs\"]\nmod shared;\n#[path = \"imp_lib.rs\"]\nmod imp;\n",
+    );
+    write(
+        root,
+        "src/main.rs",
+        "#[path = \"../shared.rs\"]\nmod shared;\n#[path = \"imp_bin.rs\"]\nmod imp;\n",
+    );
+    write(root, "src/imp_lib.rs", "pub struct Thing;\n");
+    write(root, "src/imp_bin.rs", "pub struct Thing;\n");
+    write(root, "shared.rs", "use crate::imp::Thing;\n");
+}
+
+#[test]
+fn a_use_in_several_trees_resolves_in_every_tree() {
+    let ws = tempfile::tempdir().unwrap();
+    shared_in_two_trees(ws.path());
+    let g = graph(ws.path());
+    assert_eq!(
+        outcome(&g, "shared.rs", "crate::imp::Thing"),
+        resolved(&["src/imp_bin.rs", "src/imp_lib.rs"])
+    );
+}

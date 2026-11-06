@@ -50,8 +50,8 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
 }
 
 /// The names bound by the module's top-level statements, also inside
-/// top-level `if`, `try`, `with` and loop blocks, not inside a function or
-/// class.
+/// top-level `if`, `try`, `with` and loop blocks and by a top-level `for`
+/// target or `with … as` alias, not inside a function or class.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     let mut names = ModuleNames::default();
     bind_block(root, source, &mut names);
@@ -122,9 +122,23 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
         }
         "if_statement" | "try_statement" | "with_statement" | "for_statement"
         | "while_statement" => {
+            if let Some(left) = statement.child_by_field_name("left") {
+                bind_target(left, source, names);
+            }
             let mut cursor = statement.walk();
             for child in statement.named_children(&mut cursor) {
-                if child.kind() == "block" {
+                if child.kind() == "with_clause" {
+                    let mut cursor = child.walk();
+                    for item in child.named_children(&mut cursor) {
+                        let alias = item
+                            .child_by_field_name("value")
+                            .filter(|v| v.kind() == "as_pattern")
+                            .and_then(|v| v.child_by_field_name("alias"));
+                        if let Some(alias) = alias {
+                            bind_target(alias, source, names);
+                        }
+                    }
+                } else if child.kind() == "block" {
                     bind_block(child, source, names);
                 } else if child.kind().ends_with("_clause") {
                     let mut cursor = child.walk();
@@ -140,13 +154,22 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
     }
 }
 
-/// An assignment target: a name, or the names of a tuple or list target.
+/// An assignment, `for` or `with … as` target: a name, or the names of a
+/// tuple or list target.
 fn bind_target(target: Node, source: &str, names: &mut ModuleNames) {
     match target.kind() {
         "identifier" => {
             names.names.insert(text(target, source).to_string());
         }
-        "pattern_list" | "tuple_pattern" | "list_pattern" | "list_splat_pattern" => {
+        "pattern_list"
+        | "tuple_pattern"
+        | "list_pattern"
+        | "list_splat_pattern"
+        | "as_pattern_target"
+        | "tuple"
+        | "list"
+        | "list_splat"
+        | "parenthesized_expression" => {
             let mut cursor = target.walk();
             for child in target.named_children(&mut cursor) {
                 bind_target(child, source, names);

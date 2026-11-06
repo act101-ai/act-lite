@@ -197,6 +197,22 @@ fn a_wildcard_import_adds_the_package_file() {
 }
 
 #[test]
+fn a_loop_target_or_a_with_alias_in_the_package_file_beats_a_submodule() {
+    for init in ["for n in [1]: pass\n", "with c() as n: pass\n"] {
+        let ws = tempfile::tempdir().unwrap();
+        write(ws.path(), "pkg/__init__.py", init);
+        write(ws.path(), "pkg/n.py", "");
+        write(ws.path(), "a.py", "from pkg import n\n");
+        let graph = build(ws.path(), &[]);
+        assert_eq!(
+            outcome(&graph, "a.py", "pkg.n"),
+            resolved(&["pkg/__init__.py"]),
+            "{init}"
+        );
+    }
+}
+
+#[test]
 fn a_workspace_module_outside_the_roots_is_unresolved() {
     let ws = tempfile::tempdir().unwrap();
     write(
