@@ -224,7 +224,7 @@ fn a6_two_rules_on_one_function_sort_by_rule() {
     );
 }
 
-const FIXTURE_LANGUAGES: [(&str, &str); 20] = [
+const FIXTURE_LANGUAGES: [(&str, &str); 23] = [
     ("bash", "sh"),
     ("c", "c"),
     ("cpp", "cpp"),
@@ -235,16 +235,19 @@ const FIXTURE_LANGUAGES: [(&str, &str); 20] = [
     ("java", "java"),
     ("javascript", "js"),
     ("jsx", "jsx"),
+    ("julia", "jl"),
     ("kotlin", "kt"),
     ("lua", "lua"),
     ("php", "php"),
     ("python", "py"),
+    ("r", "R"),
     ("ruby", "rb"),
     ("rust", "rs"),
     ("scala", "scala"),
     ("swift", "swift"),
     ("tsx", "tsx"),
     ("typescript", "ts"),
+    ("zig", "zig"),
 ];
 
 fn fixture_dir() -> PathBuf {

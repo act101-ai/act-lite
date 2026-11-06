@@ -21,14 +21,191 @@ act-lite ships one binary, `act-lite`, with four commands:
 
 ## Languages
 
-act-lite supports 30 languages:
+act-lite supports 40 languages:
 
-Bash, C, C#, C++, CSS, Dart, Dockerfile, Elixir, Go, HCL/Terraform, HTML,
-Java, JavaScript, JSX, JSON, Kotlin, Lua, Markdown, PHP, Python, Ruby, Rust,
-Scala, SCSS, SQL, Swift, TOML, TSX, TypeScript, YAML.
+Bash, C, C#, C++, CMake, CSS, Dart, Dockerfile, Elixir, Go, GraphQL,
+HCL/Terraform, HTML, Java, JavaScript, JSX, JSON, JSONC, Julia, Kotlin, Lua,
+Make, Markdown, Nix, PHP, Protocol Buffers, Python, R, Ruby, Rust, Scala, SCSS,
+SQL, Swift, TOML, TSX, TypeScript, XML, YAML, Zig.
 
 A file in any other language is refused with an error that names its
 extension and lists these languages.
+
+A file is recognized by its name first, then by its extension. The names are
+exact and case-sensitive. The ten languages added after the first thirty are
+recognized as follows; a file with any other name or extension stays in the
+language it had, or stays unrecognized (`mytsconfig.json` is JSON,
+`Makefile.bak` and `cmakelists.txt` are unrecognized):
+
+| Language | File names | Extensions |
+|---|---|---|
+| JSONC | `tsconfig.json`, `jsconfig.json`, `tsconfig.*.json`, `jsconfig.*.json`, `devcontainer.json`, `.devcontainer.json`, `.eslintrc.json` | `.jsonc`, `.code-workspace` |
+| XML | none | `.xml`, `.xsd`, `.xsl`, `.xslt`, `.svg`, `.plist`, `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets`, `.resx`, `.xaml` |
+| GraphQL | none | `.graphql`, `.graphqls`, `.gql` |
+| Protocol Buffers | none | `.proto` |
+| Make | `Makefile`, `makefile`, `GNUmakefile` | `.mk`, `.mak` |
+| CMake | `CMakeLists.txt` | `.cmake` |
+| Zig | none | `.zig` |
+| R | `.Rprofile` | `.R`, `.r` |
+| Julia | none | `.jl` |
+| Nix | none | `.nix` |
+
+In `tsconfig.*.json` and `jsconfig.*.json`, `*` is one or more characters. Any
+other `.json` file, such as `.vscode/settings.json`, stays JSON.
+
+### Capabilities by language
+
+| Language | `skeleton`, `symbols` | `definition` | `references` | `callers`, `callees`, `implementations` | `patterns` | `hotspots` | `clones` |
+|---|---|---|---|---|---|---|---|
+| Bash | yes | tree-sitter | name-level | not available | yes | yes | yes |
+| C | yes | tree-sitter | language server | language server | yes | yes | yes |
+| C# | yes | tree-sitter | language server | language server | yes | yes | yes |
+| C++ | yes | tree-sitter | language server | language server | yes | yes | yes |
+| CMake | yes | tree-sitter; case-sensitive names | name-level | not available | not applicable | not applicable | not applicable |
+| CSS | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Dart | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Dockerfile | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Elixir | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Go | yes | tree-sitter | language server | language server | yes | yes | yes |
+| GraphQL | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| HCL/Terraform | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| HTML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Java | yes | tree-sitter | language server | language server | yes | yes | yes |
+| JavaScript | yes | tree-sitter | language server | language server | yes | yes | yes |
+| JSX | yes | tree-sitter | language server | language server | yes | yes | yes |
+| JSON | yes | tree-sitter; keys without quotes | name-level | not available | not applicable | not applicable | not applicable |
+| JSONC | yes | tree-sitter; keys without quotes | name-level | not available | not applicable | not applicable | not applicable |
+| Julia | yes | tree-sitter; dotted names | name-level | not available | yes | yes | yes |
+| Kotlin | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Lua | yes | tree-sitter | name-level | not available | yes | yes | yes |
+| Make | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Markdown | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Nix | yes | tree-sitter; parameters, dotted attribute paths | name-level | not available | not applicable | not applicable | not applicable |
+| PHP | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Protocol Buffers | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Python | yes | tree-sitter | language server | language server | yes | yes | yes |
+| R | yes | tree-sitter; parameters | name-level | not available | yes | yes | yes |
+| Ruby | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Rust | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Scala | yes | tree-sitter | language server | language server | yes | yes | yes |
+| SCSS | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| SQL | yes | tree-sitter | language server | language server | not applicable | not applicable | not applicable |
+| Swift | yes | tree-sitter | language server | language server | yes | yes | yes |
+| TOML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| TSX | yes | tree-sitter | language server | language server | yes | yes | yes |
+| TypeScript | yes | tree-sitter | language server | language server | yes | yes | yes |
+| XML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| YAML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
+| Zig | yes | tree-sitter; parameters are not declarations | name-level | not available | yes | yes | yes |
+
+`skeleton`, `symbols`, `symbols-batch` and `repo-outline` work for every
+language, and `definition` uses tree-sitter for every language. `references`
+and the three call queries use a language server where the table says
+`language server`; the table's `references` cell is `name-level` for a
+language with no server. A language with a server falls back to a name-level
+search when its server is not installed (see [`act-lite query`](#act-lite-query)).
+`not available` means that the query fails with an error that names the
+language and says that act-lite has no language server for it. The analyzer
+columns say `yes` for the 23 languages the analyzers support and
+`not applicable` for the 17 data, schema and markup formats (see
+[Code-health analyzers](#code-health-analyzers)).
+
+`definition` notes. JSON and JSONC keys are returned without their quotes. A
+CMake name matches by exact text, so `ADD_TOOL(cli)` does not find
+`function(add_tool …)`. Nix and Julia match a dotted name (`packages.default`,
+`Base.show`) as a whole. A function parameter is a declaration in R and Nix; a
+Zig parameter is not.
+
+Examples for the added languages:
+
+```bash
+act-lite query skeleton Makefile                  # targets, variables, includes
+act-lite query symbols schema.graphql             # types, fields, enum values
+act-lite query references Order --file shop.proto --line 5 --column 9   # name matches
+```
+
+### Limits of the added languages
+
+**JSONC.** `//` and `/* */` comments are comments: a key-like text inside one
+is not reported. A trailing comma before `}` or `]` is not valid in the
+grammar: the file parses with error recovery, `symbols` carries
+`"parse_error": true`, and every key is still reported at its location. JSONC
+answers like JSON for the same content: skeleton and symbols give the same
+names, and the symbols names keep their quotes.
+
+**XML.** An `element` in the skeleton is an element, and in the symbols an
+element name is a `class` and an attribute name a `field`. There are no
+build-system semantics: a Maven `<dependency>` or an MSBuild
+`<PackageReference>` is an element like any other, no dependency is reported,
+`${…}` properties are not expanded, parent POMs, imports and includes are not
+followed, and namespace prefixes are not resolved. Text content, comments,
+processing instructions, the XML declaration, `DOCTYPE` and internal DTD
+declarations are not reported. act-lite reads UTF-8 only:
+a binary property list (`bplist00`) or a UTF-16 file named `.plist` or `.xml`
+is refused by `query` with the not-UTF-8 error, and `repo-outline --symbols`
+lists it without symbols.
+
+**GraphQL.** Types, interfaces, inputs, enums, unions, scalars, directives,
+named operations and fragments are declarations; fields and enum values are
+symbols. A schema extension without a body, such as
+`extend schema @link(url: "x")` (the Apollo Federation header), is not
+accepted by the grammar: its error recovery swallows the first definition
+after it, and the result carries `parse_error: true`. With a body
+(`extend schema @link(url: "x") { query: Q }`) the file parses cleanly. Not
+reported: `schema { … }`, anonymous operations, field arguments, operation
+variables and selections.
+
+**Protocol Buffers.** Messages, enums, services and `rpc` methods are
+declarations; fields and enum values are symbols; `import` and `package` are
+skeleton entries. Not reported: `syntax`, `option`, `reserved`, and `extend`
+blocks with the fields in them. A proto2 `group` is reported as a `struct`
+(its message) and a `field` (the group name as written). A qualified type such
+as `shop.v1.Order` is matched one identifier at a time, so `Order` there is a
+reference to `Order`, and a `package` name has no references.
+
+**Make.** Targets are functions and variable assignments are variables;
+GNU special targets (`.PHONY`) and target-specific assignments are not
+reported. Recipes are not run and not parsed as shell, variables are not
+expanded, conditionals are not evaluated (an assignment in each branch of an
+`ifeq` is reported once per branch), included files are not read, and targets
+created by `$(eval …)` or by expanded variables are not reported.
+
+**CMake.** Configuration is not run. Variables, generator expressions and
+`if()` conditions are not evaluated: a command inside `if(WITH_TESTS)` is
+reported whatever the option's value. `include()`d files and subdirectories
+are not read, and a call such as `add_tool(cli)` is a use, not a target. The
+built-in commands are recognized in any letter case, but name matches are
+case-sensitive: `ADD_TOOL(cli)` is not a reference to `function(add_tool …)`.
+
+**Zig.** tree-sitter-zig requires at least one member, so an empty
+`struct {}`, `enum {}`, `union {}` or `opaque {}` parses with an error node:
+navigation results carry `parse_error: true`, and an analyzer lists the file
+in `parse_failures` and says `complete: false`. `comptime` is not evaluated:
+a type built by a call (`const T = List(u8)`) is a `constant`, not a `struct`.
+`usingnamespace` is not modeled. Parameters are not declarations.
+`test "name" { … }` is a `function` in `skeleton` and `symbols`, named by the
+string content (`test "point len"` is named `point len`); `test name { … }` (a
+doctest) is a use of `name`, not a declaration.
+
+**R.** A function is an assignment whose value is a `function` or `\(…)`
+definition. Not modeled: `function(…) -> name`, assignments inside function
+bodies other than functions, `assign()`, and classes made by calls
+(`setClass`, `setRefClass` and `R6Class`).
+
+**Julia.** Each method of a function is a separate entry, and multiple
+dispatch is not resolved. `export` statements are not reported. Not modeled:
+functions defined by macros or `@eval`, anonymous functions and `do` blocks
+(the analyzers do measure them).
+
+**Nix.** Results are structural, not evaluated: `//`, `rec`, `with`,
+overlays, `lib.mkIf`, `lib.mkMerge` and the module system are not applied. A
+binding under `mkIf false { … }` is reported, `a // b` reports the bindings
+of both sides as written, an interpolated attribute name is reported as
+written, and `imports = [ ./a.nix ]` is a binding whose list is not followed.
+The kind comes from the syntax of the bound expression.
+
+Every `references` answer for the ten added languages is a name match, as the
+next section says; none of them has a language server.
 
 ## Install
 
@@ -111,7 +288,8 @@ Global flags:
 
 - `--format json|text` — compact JSON (default) or indented JSON.
 - `--workspace <dir>` — the workspace root (default: the current directory).
-  The `references` fallback searches every same-language file under it.
+  The `references` fallback searches the files of the same language under it
+  (JSON and JSONC share one search, below).
 - `--disable-lsp` (or `ACT_LITE_DISABLE_LSP=1`) — never start a language server.
 
 `ACT_LITE_DISABLE_LSP` and `ACT_LITE_INSTALL_LSP` take `1`, `true`, `yes`,
@@ -163,6 +341,20 @@ Without a language server, queries match a symbol by name, not by scope: they
 use the nearest declaration with that name, and YAML and JSON keys with the
 same name merge.
 
+The `references` and `definition` walks read the files of one language, except
+JSON and JSONC: from a `.jsonc` or `.code-workspace` file they read JSON and
+JSONC files; from a JSON file, or from a JSONC file recognized by its name
+(such as `tsconfig.json`), they read JSON files and the JSONC files recognized
+by name only. The `references` walk skips every path component that starts with
+`.`, so `.eslintrc.json`, `.devcontainer.json`, `.devcontainer/…` and
+`.Rprofile` are never listed from another file; `definition` and `repo-outline`
+see them.
+
+For the ten added languages every `references` answer is a name match
+(`"source": "tree-sitter"`), and none of them has a language server:
+`callers`, `callees` and `implementations` fail for them, and `status` lists no
+server for them.
+
 Language server limitations:
 
 - `kotlin-language-server` 1.3.13: `references` omit the declaration, even
@@ -180,7 +372,10 @@ language-server tests ran, so they are untested:
 - `dart` (Dart): the Dart SDK was not installed.
 
 `repo-outline` skips `.git`, `target` and `node_modules`. When `--max-files`
-cuts the list, the output says `"truncated": true`.
+cuts the list, the output says `"truncated": true`. `repo-outline` counts every
+recognized file against `--max-files`, so the files of the added languages
+(`.svg`, `.xml`, `Makefile`, and others) use part of the budget: a truncated
+outline of a repository that has them lists fewer of its other files.
 
 ## `act-lite mcp serve`
 
@@ -193,8 +388,9 @@ The server exposes eleven tools: `status`, `skeleton`, `symbols`,
 `symbols_batch`, `repo_outline`, `references`, `callers`, `definition`, and
 the analyzers `analyze_patterns`, `analyze_hotspots` and `analyze_clones`
 (see [Code-health analyzers](#code-health-analyzers)).
-`status` lists the 30 languages and, for each language server, whether it is
-`ready` or `not_installed`.
+`status` lists the 40 languages and, for each language server, whether it is
+`ready` or `not_installed`. MCP `skeleton` omits `import` entries for every
+language; `act-lite query skeleton` and `symbols-batch` list them.
 
 **Analyzer tools.** Each `analyze_*` tool returns the same JSON
 as its `act-lite analyze` command (see [`act-lite analyze`](#act-lite-analyze)):
@@ -397,11 +593,12 @@ Three analyzers measure code health: `analyze_patterns`
 (`act-lite analyze clones`). Each returns the result described under
 [Analysis results](#analysis-results), with `details` always present.
 
-**Languages.** The three analyzers support 20 programming languages: Bash, C,
-C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Kotlin, Lua, PHP, Python,
-Ruby, Rust, Scala, Swift, TSX and TypeScript. They do not support the 10 data
-and markup formats: CSS, Dockerfile, HCL/Terraform, HTML, JSON, Markdown, SCSS,
-SQL, TOML and YAML. Those files are listed in `coverage.languages` with
+**Languages.** The three analyzers support 23 programming languages: Bash, C,
+C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Julia, Kotlin, Lua, PHP,
+Python, R, Ruby, Rust, Scala, Swift, TSX, TypeScript and Zig. They do not
+support the 17 data, schema and markup formats: CMake, CSS, Dockerfile,
+GraphQL, HCL/Terraform, HTML, JSON, JSONC, Make, Markdown, Nix, Protocol
+Buffers, SCSS, SQL, TOML, XML and YAML. Those files are listed in `coverage.languages` with
 `supported: false`; a scope that holds only such files gives `unsupported`, and
 a mixed scope is not made incomplete by them. A Bash function declares no
 parameters (it reads `$1`, `$2`, …), so for Bash `parameters` is `null`, the
@@ -421,6 +618,13 @@ measured. `function` is the function's name, or `null` for an anonymous
 function; `range` is the function's own range. Blocks passed to calls (Ruby
 `do … end`, Kotlin trailing lambdas) are functions, with `"function": null`.
 Each clause of an Elixir multi-clause `def` is a separate function.
+Zig functions are `fn` declarations with a body; a `test` block is a function
+only with `--include-tests`. R functions are `function(…)` and `\(…)`
+definitions, named by the `<-`, `=` or `<<-` assignment whose right side they
+are, else `null`. Julia functions are long-form and short-form definitions
+(`f(x) = …`, also with a `::T` return type or a `where` clause), macros,
+anonymous `function (x) … end` and `x -> …` functions, and `do` blocks;
+`function f end` is not a function.
 
 **Metrics.**
 
@@ -443,6 +647,8 @@ loop. An exhaustive multi-way construct with no default arm (a Rust `match`, a
 Kotlin `when` on a sealed type) counts every arm, one more than McCabe's
 n − 1. Dart collection `if` and `for` elements, Elixir `with … else` clauses,
 optional chaining (`?.`) and C# `and` / `or` patterns are not decision points.
+Zig `try` and `orelse`, R `ifelse()`, `switch()` and `tryCatch()` calls, and
+Julia comprehension `for` and `if` clauses are not decision points.
 
 **`analyze_patterns`.** A rule is exceeded when the metric is strictly greater
 than its threshold. The thresholds are fixed:
@@ -502,11 +708,14 @@ one language with the same normalized form.
   `octal_integer_literal`, `binary_integer_literal`,
   `decimal_floating_point_literal`, `hex_floating_point_literal`; JavaScript,
   JSX, TypeScript and TSX `string`, `template_string`, `number`, `regex`;
-  Kotlin `string_literal`, `character_literal`, `integer_literal`,
+  Julia `string_literal`, `prefixed_string_literal`, `command_literal`,
+  `prefixed_command_literal`, `character_literal`, `integer_literal`,
+  `float_literal`; Kotlin `string_literal`, `character_literal`, `integer_literal`,
   `long_literal`, `hex_literal`, `bin_literal`, `unsigned_literal`,
   `real_literal`; Lua `string`, `number`; PHP `string`, `encapsed_string`,
   `heredoc`, `nowdoc`, `integer`, `float`; Python `string`,
-  `concatenated_string`, `integer`, `float`; Ruby `string`, `chained_string`,
+  `concatenated_string`, `integer`, `float`; R `string`, `integer`, `float`,
+  `complex`; Ruby `string`, `chained_string`,
   `heredoc_body`, `character`, `simple_symbol`, `delimited_symbol`,
   `hash_key_symbol`, `regex`, `integer`, `float`, `rational`, `complex`; Rust
   `string_literal`, `raw_string_literal`, `char_literal`, `integer_literal`,
@@ -514,7 +723,8 @@ one language with the same normalized form.
   `character_literal`, `integer_literal`, `floating_point_literal`; Swift
   `line_string_literal`, `multi_line_string_literal`, `raw_string_literal`,
   `regex_literal`, `integer_literal`, `hex_literal`, `oct_literal`,
-  `bin_literal`, `real_literal`. A string with an embedded expression is not
+  `bin_literal`, `real_literal`; Zig `string`, `multiline_string`,
+  `character`, `integer`, `float`. A string with an embedded expression is not
   abstracted; its identifiers are renamed.
 - A candidate has at least 50 tokens of its normalized form (a literal counts
   1). The file's root node and subtrees that hold a syntax error are not
@@ -626,7 +836,11 @@ its name matches a pattern of its language:
 | Lua | `*_spec.lua`, `*_test.lua` |
 | Bash | `*_test.sh`, `test_*.sh` |
 | HCL/Terraform | `*.tftest.hcl` |
-| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile | the directory rule only |
+| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile, JSONC, XML, GraphQL, Protocol Buffers, Make, CMake, Zig, R, Julia, Nix | the directory rule only |
+
+R `testthat` reads test files only from `tests/testthat/`, which the directory
+rule covers; `R/test_x.R` is package source. Julia's `test/runtests.jl` is
+covered by the directory rule.
 
 **Generated files and directories.**
 
@@ -653,6 +867,8 @@ its name matches a pattern of its language:
 |---|---|---|
 | Rust | An item with the attribute `#[cfg(test)]` (usually `mod tests { … }`), and a function with an attribute whose last path segment is `test` (`#[test]`, `#[tokio::test]`) outside such an item | The item's range, from its first attribute to its end, is removed from the analysis input and reported as `excluded.tests` `{ "path", "range" }`. |
 | Go | None: Go test code lives only in `*_test.go` files | — |
+| Zig | A `test` declaration (`test "name" { … }`, `test name { … }`, `test { … }`) | The declaration's range, from `test` to the closing `}`, is removed from the analysis input and reported as `excluded.tests` `{ "path", "range" }`, as for Rust. |
+| Julia | `@test` and `@testset` in source files | Not detected. Not removed. |
 | Python | Doctests in docstrings are string content, not code | Not detected. Not removed. |
 | Rust, other `cfg` forms | `#![cfg(test)]` as an inner attribute of a file; `#[cfg(all(test, …))]`; `#[cfg(any(test, …))]`; `#[cfg_attr(test, …)]` | A file with `#![cfg(test)]` is a test file (whole file). An item with `cfg(all(test, …))` is a test item, like `cfg(test)`. `cfg(any(test, …))` and `cfg_attr(test, …)` are not test items: the code is also compiled outside tests. |
 | Rust, out-of-line | `#[cfg(test)] mod tests;` loads `tests.rs` (or `tests/mod.rs`) beside the module | The declaration's range is removed and reported. The loaded file is excluded only by the directory rule (`tests/mod.rs`); a `src/tests.rs` is analyzed as source. |
@@ -660,6 +876,10 @@ its name matches a pattern of its language:
 | All other languages | No embedded-test convention is detected | — |
 
 A parse error inside a removed region is not reported in `parse_failures`.
+
+Files of the added languages are recognized files: they appear in `excluded.*`
+and in its counts, and `coverage.unrecognized_files` falls. Findings of the
+other languages do not change.
 
 **Symlinks.** Discovery never follows a symlink. A symlink whose target is
 inside the workspace is not reported; its target is analyzed at its own path

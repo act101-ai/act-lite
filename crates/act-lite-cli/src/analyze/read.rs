@@ -244,7 +244,9 @@ fn first_error(source: &SourceFile) -> Option<CompactRange> {
         if !node.has_error() {
             return None;
         }
-        if node.is_error() || node.is_missing() {
+        // A recovered leaf can carry the error without being marked missing
+        // (tree-sitter-zig's empty container member).
+        if node.is_error() || node.is_missing() || node.child_count() == 0 {
             return Some(node);
         }
         let mut cursor = node.walk();

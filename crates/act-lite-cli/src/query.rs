@@ -1107,14 +1107,14 @@ mod tests {
 
     #[test]
     fn test_grammar_for_file_no_extension() {
-        assert!(grammar_for_file(&PathBuf::from("/some/Makefile")).is_none());
+        assert!(grammar_for_file(&PathBuf::from("/some/LICENSE")).is_none());
     }
 
     #[test]
     fn test_unsupported_language_error_without_extension() {
-        let err = unsupported_language_error(Path::new("/some/Makefile")).to_string();
+        let err = unsupported_language_error(Path::new("/some/LICENSE")).to_string();
         assert!(err.contains("no extension"), "{err}");
-        assert!(err.contains("/some/Makefile"), "{err}");
+        assert!(err.contains("/some/LICENSE"), "{err}");
         assert!(err.contains("TypeScript"), "{err}");
     }
 

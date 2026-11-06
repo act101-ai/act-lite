@@ -1,0 +1,17 @@
+syntax = "proto3";
+package shop.v1;
+import "google/protobuf/empty.proto";
+option go_package = "x";
+message Order {
+  string id = 1;
+  message Line { int32 qty = 1; }
+  repeated Line lines = 2;
+  oneof pay { string card = 3; }
+  map<string, int32> tags = 4;
+  enum State { NEW = 0; DONE = 1; }
+}
+enum Kind { KIND_UNSPECIFIED = 0; }
+service Shop {
+  rpc Get(Order) returns (Order);
+  rpc Watch(stream Order) returns (stream Order) {}
+}

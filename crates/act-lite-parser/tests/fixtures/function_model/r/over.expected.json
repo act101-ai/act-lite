@@ -1,0 +1,26 @@
+[
+  {
+    "name": "f",
+    "range": "1:6-52:2",
+    "lines": 52,
+    "nesting": 5,
+    "complexity": 11,
+    "parameters": 6
+  },
+  {
+    "name": null,
+    "range": "19:18-19:35",
+    "lines": 1,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  },
+  {
+    "name": "m",
+    "range": "53:5-55:2",
+    "lines": 3,
+    "nesting": 0,
+    "complexity": 1,
+    "parameters": 1
+  }
+]
