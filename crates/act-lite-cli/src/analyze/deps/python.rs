@@ -356,6 +356,9 @@ enum Found {
     Outside,
     /// Below a directory that the workspace walk could not read, `<dir>/`.
     Blocked(String),
+    /// A segment before the last is a module file, not a package; the
+    /// dotted name up to that segment.
+    NotPackage(String),
     Missing,
 }
 
@@ -365,6 +368,9 @@ fn settled(found: &Found) -> Option<Outcome> {
     match found {
         Found::Outside => Some(Outcome::External),
         Found::Blocked(dir) => Some(Outcome::Unresolved(format!("{dir} could not be read"))),
+        Found::NotPackage(prefix) => {
+            Some(Outcome::Unresolved(format!("{prefix} is not a package")))
+        }
         _ => None,
     }
 }
@@ -379,7 +385,7 @@ fn import(cx: &mut ResolveCx<'_>, file: &str, dotted: &str) -> Outcome {
         Ok((root, Found::Missing)) => {
             Outcome::Unresolved(format!("{dotted} not found under {}", shown(&root)))
         }
-        Ok((_, found)) => settled(&found).expect("an outside or blocked name"),
+        Ok((_, found)) => settled(&found).expect("an outside, blocked or not-package name"),
     }
 }
 
@@ -495,6 +501,10 @@ fn relative(cx: &mut ResolveCx<'_>, file: &str, module: &str) -> Result<Found, O
         Found::Missing => Err(Outcome::Unresolved(format!(
             "{module} not found under {}",
             shown(base)
+        ))),
+        Found::NotPackage(prefix) => Err(Outcome::Unresolved(format!(
+            "{} is not a package",
+            &module[..dots + prefix.len()]
         ))),
         found => Ok(found),
     }
@@ -699,28 +709,41 @@ fn names_of(cx: &mut ResolveCx<'_>, path: &str) -> Result<ModuleNames, String> {
     result
 }
 
-/// Where `segments` exists under `base`: the package first, then the
-/// module, then a namespace package. A probe that leaves the workspace is
+/// Where `segments` exists under `base`, segment by segment as CPython
+/// imports it: at each segment the package first, then the module, then a
+/// namespace package. Every segment before the last must be a package; a
+/// module file there is `NotPackage`. A probe that leaves the workspace is
 /// `Outside`; a namespace package or a miss at or below a directory that
 /// the workspace walk could not read is `Blocked`.
 fn find(cx: &mut ResolveCx<'_>, base: &str, segments: &[&str]) -> Found {
-    let path = join(base, &segments.join("/"));
-    for file in [join(&path, "__init__.py"), format!("{path}.py")] {
-        match cx.probe_file(&file) {
-            Probe::File(target) => return Found::File(target),
+    let mut path = base.to_string();
+    for (i, segment) in segments.iter().enumerate() {
+        path = join(&path, segment);
+        let last = i + 1 == segments.len();
+        match cx.probe_file(&join(&path, "__init__.py")) {
+            Probe::File(target) if last => return Found::File(target),
+            Probe::File(_) => continue,
             Probe::Outside => return Found::Outside,
             _ => {}
         }
+        match cx.probe_file(&format!("{path}.py")) {
+            Probe::File(target) if last => return Found::File(target),
+            Probe::File(_) => return Found::NotPackage(segments[..=i].join(".")),
+            Probe::Outside => return Found::Outside,
+            _ => {}
+        }
+        let (found, at) = match cx.probe_file(&path) {
+            Probe::Dir(_) if !last => continue,
+            Probe::Dir(dir) => (Found::Namespace(dir.clone()), dir),
+            Probe::Outside => return Found::Outside,
+            _ => (Found::Missing, path),
+        };
+        return match blocked(cx, &at) {
+            Some(dir) => Found::Blocked(dir),
+            None => found,
+        };
     }
-    let (found, at) = match cx.probe_file(&path) {
-        Probe::Dir(dir) => (Found::Namespace(dir.clone()), dir),
-        Probe::Outside => return Found::Outside,
-        _ => (Found::Missing, path),
-    };
-    match blocked(cx, &at) {
-        Some(dir) => Found::Blocked(dir),
-        None => found,
-    }
+    Found::Missing
 }
 
 /// The directory that the workspace walk could not read at or above `path`.
