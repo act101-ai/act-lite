@@ -956,11 +956,17 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `__init__.py` is a namespace package (it exists, with no file). `import
   a.b.c` uses the first root under which `a` is a module or regular package,
   else the first under which it is a namespace package. `from X import n`
-  targets `X`'s file when a top-level statement of it binds `n` (a
-  `match` binds the capture names of its `case` patterns, such as `case n:`
-  or `case [_, n]:`, and the names its case bodies bind; an annotation binds
-  only with a value: `n: int = 1` binds, `n: int` does not; `global n` does
-  not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
+  targets `X`'s file when its top-level statements leave `n` bound (a
+  `match` binds the capture names of its `case` patterns,
+  such as `case n:` or `case [_, n]:`, and the names its case bodies bind;
+  an annotation binds only with a value: `n: int = 1` binds, `n: int` does
+  not; `n += 1` and `type n = …` bind; `n := …` binds wherever the module
+  runs it, also in a condition, a call argument, a comprehension, a default
+  value, a decorator or a base class, but not in a `def`, `lambda` or
+  `class` body; `except … as n` does not bind, as `n` is deleted at the end
+  of the handler; a module-level `del n` unbinds, a `del` inside a block
+  does not; `global n` does not bind), else the submodule `X.n`, and also
+  `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
   is `unresolved` outside a package (`relative import outside a package`) or
   above the top-level package (`relative import beyond the top-level

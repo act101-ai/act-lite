@@ -250,6 +250,48 @@ fn a_global_statement_does_not_beat_a_submodule() {
 }
 
 #[test]
+fn a_name_still_bound_in_the_package_file_beats_a_submodule() {
+    for init in [
+        "if (n := 1): pass\n",
+        "print([(n := x) for x in [1]])\n",
+        "n = 0\nn += 1\n",
+        "type n = int\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        write(ws.path(), "pkg/__init__.py", init);
+        write(ws.path(), "pkg/n.py", "");
+        write(ws.path(), "a.py", "from pkg import n\n");
+        let graph = build(ws.path(), &[]);
+        assert_eq!(
+            outcome(&graph, "a.py", "pkg.n"),
+            resolved(&["pkg/__init__.py"]),
+            "{init}"
+        );
+    }
+}
+
+#[test]
+fn a_name_no_longer_bound_in_the_package_file_does_not_beat_a_submodule() {
+    for init in [
+        "f = lambda: (n := 1)\n",
+        "class C:\n    m = (n := 1)\n",
+        "try:\n    pass\nexcept ValueError as n:\n    n = 1\n",
+        "n = 1\ndel n\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        write(ws.path(), "pkg/__init__.py", init);
+        write(ws.path(), "pkg/n.py", "");
+        write(ws.path(), "a.py", "from pkg import n\n");
+        let graph = build(ws.path(), &[]);
+        assert_eq!(
+            outcome(&graph, "a.py", "pkg.n"),
+            resolved(&["pkg/n.py"]),
+            "{init}"
+        );
+    }
+}
+
+#[test]
 fn a_workspace_module_outside_the_roots_is_unresolved() {
     let ws = tempfile::tempdir().unwrap();
     write(

@@ -647,6 +647,89 @@ def q():
 }
 
 #[test]
+fn python_assignment_expressions_bound_at_module_scope() {
+    // A `:=` binds in the module wherever the module runs it, also in a
+    // comprehension, a default value, a decorator or a base class; not in a
+    // function, lambda or class body.
+    let file = parse(
+        Grammar::Python,
+        r#"if (a := 1): pass
+print((b := 2))
+[(cv := x) for x in [1] if (d := x)]
+f = lambda p=(g := 1): (h := 2)
+@(i := deco)
+def j(q=(k := 1)):
+    m = (o := 1)
+class C(r := object):
+    s = (t := 1)
+match z:
+    case _ if (u := 1):
+        v = (w := 1)
+while (aa := 0): pass
+with (bb := c()): pass
+for cc in (dd := [1]): pass
+ee = [1]
+ee[(ff := 0)] = 2
+assert (gg := 1)
+def fn():
+    (inner := 1)
+"#,
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&[
+            "C", "a", "aa", "b", "bb", "cc", "cv", "d", "dd", "ee", "f", "ff", "fn", "g", "gg",
+            "i", "j", "k", "r", "u", "v", "w"
+        ])
+    );
+}
+
+#[test]
+fn python_names_still_bound_after_the_module_runs() {
+    // An augmented assignment and a `type` alias bind; an `except … as`
+    // name is deleted at the end of its handler; a module-level `del`
+    // unbinds, a `del` inside a block may not run.
+    let file = parse(
+        Grammar::Python,
+        r#"total = 0
+total += 1
+int |= str
+type Alias = int
+type Gen[T] = list[T]
+try:
+    raise ValueError
+except ValueError as err:
+    err = 1
+    kept = 1
+try:
+    raise ExceptionGroup("g", [ValueError()])
+except* ValueError as group:
+    group = 1
+try:
+    held = 1
+except ValueError as held:
+    pass
+gone = 1
+del gone
+x1 = x2 = x3 = [1]
+del (x1), [x2], x3[0]
+back = 1
+del back
+back = 2
+maybe = 1
+if False:
+    del maybe
+"#,
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&[
+            "Alias", "Gen", "back", "held", "int", "kept", "maybe", "total", "x3"
+        ])
+    );
+}
+
+#[test]
 fn rust_names_declared_at_module_level() {
     let file = parse(
         Grammar::Rust,

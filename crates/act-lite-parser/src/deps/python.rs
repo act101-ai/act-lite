@@ -49,20 +49,57 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
     found
 }
 
-/// The names bound by the module's top-level statements, also inside
-/// top-level `if`, `try`, `with`, `match` and loop blocks and by a top-level
-/// `for` target, `with … as` alias or `case` pattern capture, not inside a
-/// function or class.
+/// The names still bound after the module runs: those its top-level
+/// statements bind, also inside top-level `if`, `try`, `with`, `match` and
+/// loop blocks, by a top-level `for` target, `with … as` alias or `case`
+/// pattern capture, and by a `:=` the module runs (not inside a function,
+/// lambda or class body). An `except … as` name is deleted at the end of
+/// its handler, and a module-level `del` unbinds what it names.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     let mut names = ModuleNames::default();
-    bind_block(root, source, &mut names);
+    let mut cursor = root.walk();
+    for statement in root.named_children(&mut cursor) {
+        if statement.kind() == "delete_statement" {
+            // Only a `del` that always runs leaves its names unbound.
+            let mut cursor = statement.walk();
+            for target in statement.named_children(&mut cursor) {
+                unbind_target(target, source, &mut names);
+            }
+        } else {
+            bind_walrus(statement, source, &mut names);
+            bind_statement(statement, source, &mut names);
+        }
+    }
     names
 }
 
 fn bind_block(block: Node, source: &str, names: &mut ModuleNames) {
     let mut cursor = block.walk();
     for statement in block.named_children(&mut cursor) {
+        bind_walrus(statement, source, names);
         bind_statement(statement, source, names);
+    }
+}
+
+/// The `:=` targets of the parts of a statement that run at module scope:
+/// not its blocks (each is a statement list of its own, read by
+/// `bind_block`, or a function or class body), and not a lambda's body.
+fn bind_walrus(node: Node, source: &str, names: &mut ModuleNames) {
+    if node.kind() == "named_expression"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        names.names.insert(text(name, source).to_string());
+    }
+    let mut cursor = node.walk();
+    for (i, child) in node.children(&mut cursor).enumerate() {
+        let skip = match child.kind() {
+            // A `match` body holds the `case` clauses, whose guards run.
+            "block" => node.kind() != "match_statement",
+            _ => node.kind() == "lambda" && node.field_name_for_child(i as u32) == Some("body"),
+        };
+        if child.is_named() && !skip {
+            bind_walrus(child, source, names);
+        }
     }
 }
 
@@ -84,6 +121,11 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
         "expression_statement" => {
             let mut cursor = statement.walk();
             for child in statement.named_children(&mut cursor) {
+                if child.kind() == "augmented_assignment"
+                    && let Some(left) = child.child_by_field_name("left")
+                {
+                    bind_target(left, source, names);
+                }
                 let mut assignment = Some(child);
                 while let Some(a) = assignment.filter(|a| a.kind() == "assignment") {
                     // An annotation without a value (`n: int`) binds nothing.
@@ -95,6 +137,16 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
                     }
                     assignment = right;
                 }
+            }
+        }
+        "type_alias_statement" => {
+            // `type X = …` and `type X[T] = …`.
+            let mut name = statement.child_by_field_name("left");
+            while let Some(n) = name.filter(|n| n.kind() != "identifier") {
+                name = n.named_child(0);
+            }
+            if let Some(name) = name {
+                insert(names, name);
             }
         }
         "import_statement" => {
@@ -138,12 +190,24 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
                 } else if child.kind() == "block" {
                     bind_block(child, source, names);
                 } else if child.kind().ends_with("_clause") {
+                    // `except E as n` deletes `n` at the end of the handler,
+                    // also when the handler binds it.
+                    let alias = child
+                        .child_by_field_name("value")
+                        .filter(|v| v.kind() == "as_pattern")
+                        .and_then(|v| v.child_by_field_name("alias"));
+                    let mut clause = ModuleNames::default();
                     let mut cursor = child.walk();
                     for block in child.named_children(&mut cursor) {
                         if block.kind() == "block" {
-                            bind_block(block, source, names);
+                            bind_block(block, source, &mut clause);
                         }
                     }
+                    if let Some(alias) = alias {
+                        unbind_target(alias, source, &mut clause);
+                    }
+                    names.names.extend(clause.names);
+                    names.glob |= clause.glob;
                 }
             }
         }
@@ -217,6 +281,23 @@ fn bind_target(target: Node, source: &str, names: &mut ModuleNames) {
             let mut cursor = target.walk();
             for child in target.named_children(&mut cursor) {
                 bind_target(child, source, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The names a `del` target or an `except … as` alias unbinds: a name, or
+/// the names of a tuple or list; not an attribute or a subscript.
+fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
+    match target.kind() {
+        "identifier" => {
+            names.names.remove(text(target, source));
+        }
+        "expression_list" | "tuple" | "list" | "parenthesized_expression" | "as_pattern_target" => {
+            let mut cursor = target.walk();
+            for child in target.named_children(&mut cursor) {
+                unbind_target(child, source, names);
             }
         }
         _ => {}
