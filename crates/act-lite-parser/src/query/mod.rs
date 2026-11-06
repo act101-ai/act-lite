@@ -244,7 +244,7 @@ pub fn walk_reference_siblings(
             });
             continue;
         }
-        match SourceFile::load(&path) {
+        match SourceFile::load_within(&path, root) {
             Ok(source) => siblings.push(source),
             Err(err) => skipped.push(SkippedFile {
                 file: path,
@@ -1062,12 +1062,17 @@ pub(crate) enum ComposedReference {
 
 fn heredoc_delimiter_quoted(node: tree_sitter::Node, source_bytes: &[u8]) -> bool {
     fn find_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
-        if node.kind() == kind {
-            return Some(node);
-        }
         let mut cursor = node.walk();
-        node.children(&mut cursor)
-            .find_map(|child| find_kind(child, kind))
+        let mut stack = vec![node];
+        while let Some(node) = stack.pop() {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            let start = stack.len();
+            stack.extend(node.children(&mut cursor));
+            stack[start..].reverse();
+        }
+        None
     }
     node.parent()
         .and_then(|block| block.prev_sibling())

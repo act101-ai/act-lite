@@ -70,6 +70,7 @@ dependencies = [
  "act-lite-core",
  "insta",
  "inventory",
+ "libc",
  "proptest",
  "serde",
  "serde_json",
@@ -117,6 +118,7 @@ dependencies = [
  "tree-sitter-yaml",
  "tree-sitter-zig",
  "walkdir",
+ "windows-sys",
 ]
 
 [[package]]

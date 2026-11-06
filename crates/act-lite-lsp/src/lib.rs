@@ -40,6 +40,7 @@
 //!         client.as_ref(),
 //!         &file,
 //!         &location,
+//!         None,
 //!     ).await?;
 //! }
 //! # Ok(())

@@ -44,7 +44,7 @@ pub use query::{
     execute_references_for_symbol, execute_references_for_symbol_across, execute_skeleton,
     execute_symbol, execute_symbols, walk_reference_siblings,
 };
-pub use source_file::SourceFile;
+pub use source_file::{SourceFile, open_regular_within, read_regular_text};
 pub use symbol_id::SymbolId;
 pub use syntax_tree::SyntaxTree;
 pub use workspace::Workspace;

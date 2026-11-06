@@ -167,13 +167,26 @@ pub async fn sync_document(
 /// This must be called before querying for references or other operations
 /// that require the LSP to know about the document.
 pub async fn open_document(client: &impl LspClientTrait, file: &Path) -> Result<DocumentReady> {
-    // Read the file content
-    let content = std::fs::read_to_string(file).map_err(|e| LspError::IoError {
+    // Read the file content; a FIFO is not waited on.
+    let content = act_lite_parser::read_regular_text(file).map_err(|e| LspError::IoError {
         operation: "read file for LSP".to_string(),
         path: file.to_path_buf(),
         source: e,
     })?;
     Ok(open_with_text(client, file, content).await?.1)
+}
+
+/// Opens `file` with `text` when the caller holds the checked text, else as
+/// [`open_document`] does.
+async fn open_for_query(
+    client: &impl LspClientTrait,
+    file: &Path,
+    text: Option<&str>,
+) -> Result<DocumentReady> {
+    match text {
+        Some(text) => Ok(open_with_text(client, file, text.to_string()).await?.1),
+        None => open_document(client, file).await,
+    }
 }
 
 /// [`open_document`]'s body for a caller that already holds the text: the
@@ -246,6 +259,7 @@ pub async fn query_references(
     client: &impl LspClientTrait,
     file: &Path,
     position: &Location,
+    text: Option<&str>,
 ) -> Result<ReferencesResult> {
     debug!(
         "Querying references at {}:{}:{}",
@@ -255,7 +269,7 @@ pub async fn query_references(
     );
 
     // Ensure the document is open in the LSP server
-    open_document(client, file).await?;
+    open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -318,6 +332,7 @@ pub async fn query_callers(
     client: &impl LspClientTrait,
     file: &Path,
     position: &Location,
+    text: Option<&str>,
 ) -> Result<CallersResult> {
     debug!(
         "Querying callers at {}:{}:{}",
@@ -334,7 +349,7 @@ pub async fn query_callers(
     )?;
 
     // Ensure the document is open in the LSP server
-    open_document(client, file).await?;
+    open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -648,6 +663,7 @@ pub async fn query_callees(
     client: &impl LspClientTrait,
     file: &Path,
     position: &Location,
+    text: Option<&str>,
 ) -> Result<CalleesResult> {
     debug!(
         "Querying callees at {}:{}:{}",
@@ -673,7 +689,7 @@ pub async fn query_callees(
     // zero until the file changes, and nothing short of deleting the index
     // would ever revisit it. An error here leaves the file's record
     // incomplete, and the next build retries.
-    if open_document(client, file).await? == DocumentReady::AnalysisTimedOut {
+    if open_for_query(client, file, text).await? == DocumentReady::AnalysisTimedOut {
         return Err(LspError::AnalysisNotReady {
             path: file.display().to_string(),
             language: "the language server".to_string(),
@@ -748,6 +764,7 @@ pub async fn query_implementations(
     client: &impl LspClientTrait,
     file: &Path,
     position: &Location,
+    text: Option<&str>,
 ) -> Result<ImplementationsResult> {
     debug!(
         "Querying implementations at {}:{}:{}",
@@ -763,7 +780,7 @@ pub async fn query_implementations(
         )
     })?;
 
-    open_document(client, file).await?;
+    open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -1327,11 +1344,56 @@ mod tests {
         std::fs::write(&file_path, "const foo = 1;\nconsole.log(foo);").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_references(&mock, &file_path, &location).await;
+        let result = query_references(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         let refs = result.unwrap();
         assert_eq!(refs.ranges.len(), 2);
+    }
+
+    /// A query given the caller's checked text sends that text and does not
+    /// read the path again: a FIFO put at the path does not block it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_with_checked_text_does_not_read_the_path() {
+        let mock = MockLspClient::new_lenient();
+        mock.register_response::<References>(Some(vec![]));
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("main.ts");
+        let c = std::ffi::CString::new(file_path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let location = Location::new(file_path.clone(), 1, 7);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            query_references(&mock, &file_path, &location, Some("const x = 1;")),
+        )
+        .await
+        .expect("the query must not wait on the path");
+        assert!(result.is_ok());
+        let opened = mock
+            .sent_notifications()
+            .into_iter()
+            .find(|(method, _)| method == "textDocument/didOpen")
+            .expect("didOpen sent");
+        assert_eq!(opened.1["textDocument"]["text"], "const x = 1;");
+    }
+
+    /// Without the caller's text, a FIFO at the path is refused, not waited on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_document_refuses_a_fifo_without_waiting() {
+        let mock = MockLspClient::new_lenient();
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("main.ts");
+        let c = std::ffi::CString::new(file_path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            open_document(&mock, &file_path),
+        )
+        .await
+        .expect("open_document must not wait on a FIFO");
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1344,7 +1406,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_references(&mock, &file_path, &location).await;
+        let result = query_references(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().ranges.is_empty());
@@ -1588,7 +1650,7 @@ mod tests {
         std::fs::write(&file_path, "function myFunction() { calledFn(); }").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 10);
-        let result = query_callees(&mock, &file_path, &location).await;
+        let result = query_callees(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         let callees = result.unwrap();
@@ -1608,7 +1670,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_callees(&mock, &file_path, &location).await;
+        let result = query_callees(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().callees.is_empty());
@@ -1642,7 +1704,7 @@ mod tests {
         std::fs::write(&file_path, "interface Foo { bar(): void; }").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 11);
-        let result = query_implementations(&mock, &file_path, &location).await;
+        let result = query_implementations(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         let impls = result.unwrap();
@@ -1688,7 +1750,7 @@ mod tests {
         std::fs::write(&file_path, "interface Foo {}").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 11);
-        let result = query_implementations(&mock, &file_path, &location).await;
+        let result = query_implementations(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         let impls = result.unwrap();
@@ -1705,7 +1767,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_implementations(&mock, &file_path, &location).await;
+        let result = query_implementations(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -1728,7 +1790,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_implementations(&mock, &file_path, &location).await;
+        let result = query_implementations(&mock, &file_path, &location, None).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().locations.is_empty());
@@ -2044,9 +2106,9 @@ mod tests {
         let position = Location::new(file.clone(), 1, 10);
 
         let mock = MockLspClient::new_lenient();
-        let _ = query_callees(&mock, &file, &position).await;
-        let _ = query_callees(&mock, &file, &position).await;
-        let _ = query_callers(&mock, &file, &position).await;
+        let _ = query_callees(&mock, &file, &position, None).await;
+        let _ = query_callees(&mock, &file, &position, None).await;
+        let _ = query_callers(&mock, &file, &position, None).await;
 
         let opens = mock
             .sent_notifications()
@@ -2144,11 +2206,11 @@ mod tests {
         let position = Location::new(file.clone(), 1, 10);
 
         let mock = MockLspClient::new_lenient();
-        let _ = query_callers(&mock, &file, &position).await;
+        let _ = query_callers(&mock, &file, &position, None).await;
         assert_opened(&mock, &file, "query_callers");
 
         let mock = MockLspClient::new_lenient();
-        let _ = query_callees(&mock, &file, &position).await;
+        let _ = query_callees(&mock, &file, &position, None).await;
         assert_opened(&mock, &file, "query_callees");
 
         let mock = MockLspClient::new_lenient();
@@ -2166,11 +2228,11 @@ mod tests {
 
         // The three that already did this, so a regression is caught too.
         let mock = MockLspClient::new_lenient();
-        let _ = query_references(&mock, &file, &position).await;
+        let _ = query_references(&mock, &file, &position, None).await;
         assert_opened(&mock, &file, "query_references");
 
         let mock = MockLspClient::new_lenient();
-        let _ = query_implementations(&mock, &file, &position).await;
+        let _ = query_implementations(&mock, &file, &position, None).await;
         assert_opened(&mock, &file, "query_implementations");
 
         let mock = MockLspClient::new_lenient();
@@ -2188,7 +2250,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_references(&mock, &file_path, &location).await;
+        let result = query_references(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -2260,9 +2322,13 @@ mod tests {
             let mock = MockLspClient::new_lenient();
             mock.set_server_capabilities(lsp_types::ServerCapabilities::default());
             let result = match operation {
-                "callers" => query_callers(&mock, &file, &position).await.map(|_| ()),
-                "callees" => query_callees(&mock, &file, &position).await.map(|_| ()),
-                _ => query_implementations(&mock, &file, &position)
+                "callers" => query_callers(&mock, &file, &position, None)
+                    .await
+                    .map(|_| ()),
+                "callees" => query_callees(&mock, &file, &position, None)
+                    .await
+                    .map(|_| ()),
+                _ => query_implementations(&mock, &file, &position, None)
                     .await
                     .map(|_| ()),
             };
@@ -2297,7 +2363,7 @@ mod tests {
             call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),
             ..Default::default()
         });
-        let _ = query_callers(&mock, &file, &position).await;
+        let _ = query_callers(&mock, &file, &position, None).await;
 
         assert!(
             mock.sent_requests()
@@ -2320,7 +2386,7 @@ mod tests {
         std::fs::write(&file_path, "function f() {}").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 10);
-        let result = query_callers(&mock, &file_path, &location).await;
+        let result = query_callers(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -2371,7 +2437,7 @@ mod tests {
         std::fs::write(&file_path, "function myFunction() {}").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 10);
-        let result = query_callers(&mock, &file_path, &location).await;
+        let result = query_callers(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -2395,7 +2461,7 @@ mod tests {
         std::fs::write(&file_path, "const x = 1;").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 7);
-        let result = query_callees(&mock, &file_path, &location).await;
+        let result = query_callees(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -2446,7 +2512,7 @@ mod tests {
         std::fs::write(&file_path, "function myFunction() {}").unwrap();
 
         let location = Location::new(file_path.clone(), 1, 10);
-        let result = query_callees(&mock, &file_path, &location).await;
+        let result = query_callees(&mock, &file_path, &location, None).await;
 
         match result {
             Err(LspError::NullResult { method }) => {
@@ -2480,7 +2546,7 @@ mod tests {
         .await
         .unwrap();
 
-        match query_callees(&mock, &file, &position).await {
+        match query_callees(&mock, &file, &position, None).await {
             Err(LspError::AnalysisNotReady { .. }) => {}
             other => panic!(
                 "a document whose sync_document open timed out must refuse a \
@@ -2510,7 +2576,7 @@ mod tests {
             "setup fact: the first open's analysis wait timed out"
         );
 
-        let result = query_callees(&mock, &file, &position).await;
+        let result = query_callees(&mock, &file, &position, None).await;
         match result {
             Err(LspError::AnalysisNotReady { .. }) => {}
             other => panic!(
