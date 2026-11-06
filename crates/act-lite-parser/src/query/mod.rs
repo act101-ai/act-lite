@@ -462,18 +462,52 @@ fn check_source_format(source: &SourceFile) -> Result<()> {
 ///
 /// Returns the file structure without function/method bodies.
 pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
-    let support = source.grammar().language_support();
-    let grammar = source.grammar();
-
     check_source_format(source)?;
 
-    let query_source = support.skeleton_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let text = source.content();
+    let path = source.path();
+    let mut declarations = one_declaration_per_range(tree_declarations(
+        source.grammar(),
+        source.tree().root_node(),
+        text,
+        path,
+    )?);
+    if !source.regions().is_empty() {
+        for (name, element, start_tag) in region_blocks(source) {
+            declarations.push(Declaration {
+                kind: "module".to_string(),
+                name,
+                range: element,
+                name_range: Some(start_tag),
+                visibility: None,
+            });
+        }
+        for region in source.region_trees() {
+            declarations.extend(one_declaration_per_range(tree_declarations(
+                region.grammar,
+                region.tree.root_node(),
+                text,
+                path,
+            )?));
+        }
+        sort_in_document_order(&mut declarations, |d| &d.range);
+    }
+    Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+}
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
+/// The skeleton declarations of one tree of a file: the file's own tree
+/// or a region tree, with the grammar it was parsed with. `text` is the
+/// whole file.
+fn tree_declarations(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    text: &str,
+    path: &Path,
+) -> Result<Vec<Declaration>> {
+    let support = grammar.language_support();
+    let query = compiled::compiled(grammar, support.skeleton_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, text.as_bytes());
 
     let mut declarations = Vec::new();
 
@@ -498,23 +532,21 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
 
             match *capture_name {
                 "attr_name" => {
-                    is_class_attribute = node.utf8_text(tree.source().as_bytes()) == Ok("class");
+                    is_class_attribute = node.utf8_text(text.as_bytes()) == Ok("class");
                 }
                 "name" => {
-                    let text = node
-                        .utf8_text(tree.source().as_bytes())
-                        .unwrap_or("<invalid UTF-8>");
-                    name_captures.push_str(text);
+                    let name_text = node.utf8_text(text.as_bytes()).unwrap_or("<invalid UTF-8>");
+                    name_captures.push_str(name_text);
                     name_node = Some(node);
                     if name_range.is_none() {
-                        name_range = Some(node_to_range(node, source.path()));
+                        name_range = Some(node_to_range(node, path));
                     }
                 }
                 "import" | "export" | "include" | "use" | "require" => {
                     kind = Some(*capture_name);
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     self_name = Some(
-                        node.utf8_text(tree.source().as_bytes())
+                        node.utf8_text(text.as_bytes())
                             .unwrap_or("<invalid UTF-8>")
                             .to_string(),
                     );
@@ -526,14 +558,14 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
                 | "annotation" | "enum_constant" | "package" | "indexer" | "constant"
                 | "element" | "block" | "tag" => {
                     kind = Some(*capture_name);
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     decl_node = Some(node);
                 }
                 "definition" => {
                     kind = Some(skeleton_kind_for(node_kind_to_symbol_kind(
-                        support.node_kind_with_source(&node, tree.source().as_bytes()),
+                        support.node_kind_with_source(&node, text.as_bytes()),
                     )));
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     decl_node = Some(node);
                 }
                 // `@definition.<kind>` states the kind in the query. See
@@ -550,12 +582,10 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
             && let Some((node, suffix)) = dotted_definition
         {
             let symbol_kind = symbol_kind_from_suffix(suffix).unwrap_or_else(|| {
-                node_kind_to_symbol_kind(
-                    support.node_kind_with_source(&node, tree.source().as_bytes()),
-                )
+                node_kind_to_symbol_kind(support.node_kind_with_source(&node, text.as_bytes()))
             });
             kind = Some(skeleton_kind_for(symbol_kind));
-            range = Some(node_to_range(node, source.path()));
+            range = Some(node_to_range(node, path));
             decl_node = Some(node);
         }
 
@@ -582,7 +612,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
                 .unwrap_or_default()
                 .to_string();
             let name = name.trim().to_string();
-            let name = if grammar == crate::Grammar::Ruby {
+            let name = if grammar == Grammar::Ruby {
                 name.strip_prefix(':').unwrap_or(&name).to_string()
             } else {
                 name
@@ -593,7 +623,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
             // A class attribute value lists several classes; each is a declaration.
             if is_class_attribute && let Some(value) = name_node {
                 for (token, token_range) in
-                    whitespace_separated_tokens(value, tree.source().as_bytes(), source.path())
+                    whitespace_separated_tokens(value, text.as_bytes(), path)
                 {
                     declarations.push(Declaration {
                         kind: k.to_string(),
@@ -605,9 +635,8 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
                 }
                 continue;
             }
-            let visibility = decl_node.and_then(|node| {
-                declaration_visibility(grammar, node, &name, tree.source().as_bytes())
-            });
+            let visibility = decl_node
+                .and_then(|node| declaration_visibility(grammar, node, &name, text.as_bytes()));
             declarations.push(Declaration {
                 kind: k.to_string(),
                 name,
@@ -618,8 +647,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
-    let declarations = one_declaration_per_range(declarations);
-    Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+    Ok(declarations)
 }
 
 /// Two patterns that report the same node: an identical kind is reported
@@ -663,17 +691,40 @@ fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration>
 ///
 /// Returns all symbol definitions in the file.
 pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
-    let support = source.grammar().language_support();
-
     check_source_format(source)?;
 
-    let query_source = support.symbols_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let text = source.content();
+    let path = source.path();
+    let mut symbols = tree_symbols(source.grammar(), source.tree().root_node(), text, path)?;
+    if !source.regions().is_empty() {
+        for (name, _, start_tag) in region_blocks(source) {
+            symbols.push(Symbol::new(name, SymbolKind::Module, start_tag));
+        }
+        for region in source.region_trees() {
+            symbols.extend(tree_symbols(
+                region.grammar,
+                region.tree.root_node(),
+                text,
+                path,
+            )?);
+        }
+        sort_in_document_order(&mut symbols, Symbol::range);
+    }
+    Ok(QueryResult::Symbols { symbols })
+}
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
+/// The symbols of one tree of a file: the file's own tree or a region
+/// tree, with the grammar it was parsed with. `text` is the whole file.
+fn tree_symbols(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    text: &str,
+    path: &Path,
+) -> Result<Vec<Symbol>> {
+    let support = grammar.language_support();
+    let query = compiled::compiled(grammar, support.symbols_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, text.as_bytes());
 
     let mut symbols = Vec::new();
     let mut suppressed: Vec<(String, Range)> = Vec::new();
@@ -694,26 +745,25 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
             match *capture_name {
                 "name" => {
                     // A CSS class or id is declared with its sigil, a sibling token.
-                    let sigil = css_selector_sigil(node, source.grammar());
+                    let sigil = css_selector_sigil(node, grammar);
                     let text_start = sigil.map_or(node.start_byte(), |sigil| sigil.start_byte());
                     name = Some(
-                        tree.source()
-                            .get(text_start..node.end_byte())
+                        text.get(text_start..node.end_byte())
                             .unwrap_or("<invalid UTF-8>")
                             .to_string(),
                     );
                     // Use the name node's range instead of definition node's range
                     range = Some(match sigil {
                         Some(sigil) => Range::new(
-                            node_to_range(sigil, source.path()).start().clone(),
-                            node_to_range(node, source.path()).end().clone(),
+                            node_to_range(sigil, path).start().clone(),
+                            node_to_range(node, path).end().clone(),
                         ),
-                        None => node_to_range(node, source.path()),
+                        None => node_to_range(node, path),
                     });
                     name_node = Some(node);
                 }
                 "attr_name" => {
-                    is_class_attribute = node.utf8_text(tree.source().as_bytes()) == Ok("class");
+                    is_class_attribute = node.utf8_text(text.as_bytes()) == Ok("class");
                 }
                 "definition" => {
                     definition_node = Some(node);
@@ -740,17 +790,15 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
 
         if let Some((node, stated_kind)) = resolved {
             let symbol_kind = stated_kind.unwrap_or_else(|| {
-                let node_kind = support.node_kind_with_source(&node, tree.source().as_bytes());
+                let node_kind = support.node_kind_with_source(&node, text.as_bytes());
                 node_kind_to_symbol_kind(node_kind)
             });
             // Use the @name range when available; fall back to the definition node's range.
-            let symbol_range = range.unwrap_or_else(|| node_to_range(node, source.path()));
+            let symbol_range = range.unwrap_or_else(|| node_to_range(node, path));
             let symbol_name = name.unwrap_or_default();
             // A class attribute value lists several classes; each is a symbol.
             if is_class_attribute && let Some(value) = name_node {
-                for (token, range) in
-                    whitespace_separated_tokens(value, tree.source().as_bytes(), source.path())
-                {
+                for (token, range) in whitespace_separated_tokens(value, text.as_bytes(), path) {
                     symbols.push(Symbol::new(token, symbol_kind, range));
                 }
                 continue;
@@ -759,8 +807,59 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
-    let symbols = one_symbol_per_range(symbols, &suppressed);
-    Ok(QueryResult::Symbols { symbols })
+    Ok(one_symbol_per_range(symbols, &suppressed))
+}
+
+/// The block of each region that is not malformed: its start tag as
+/// written, cut to its first line; the element's range; the start tag's
+/// range.
+fn region_blocks(source: &SourceFile) -> Vec<(String, Range, Range)> {
+    let text = source.content();
+    let lines = crate::regions::LineStarts::new(text);
+    let range = |compact: &act_lite_core::CompactRange| {
+        let location = |line, column| {
+            act_lite_core::Location::full(
+                source.path().to_path_buf(),
+                line,
+                column,
+                lines.byte(line, column),
+            )
+        };
+        Range::new(
+            location(compact.start_line(), compact.start_col()),
+            location(compact.end_line(), compact.end_col()),
+        )
+    };
+    source
+        .regions()
+        .iter()
+        .filter(|region| region.state != crate::regions::RegionState::Malformed)
+        .map(|region| {
+            let start_tag = range(&region.start_tag);
+            let name = match (
+                start_tag.start().byte_offset(),
+                start_tag.end().byte_offset(),
+            ) {
+                (Some(start), Some(end)) => text.get(start..end).unwrap_or_default(),
+                _ => "",
+            };
+            let name = name.lines().next().unwrap_or_default().to_string();
+            (name, range(&region.element), start_tag)
+        })
+        .collect()
+}
+
+/// Stable sort by range start (line, column), then by range end descending,
+/// so an enclosing block comes before its content.
+fn sort_in_document_order<T>(items: &mut [T], range: impl Fn(&T) -> &Range) {
+    items.sort_by(|a, b| {
+        let (a, b) = (range(a), range(b));
+        (a.start().line(), a.start().column())
+            .cmp(&(b.start().line(), b.start().column()))
+            .then_with(|| {
+                (b.end().line(), b.end().column()).cmp(&(a.end().line(), a.end().column()))
+            })
+    });
 }
 
 /// Two patterns that report the same name node: an identical kind is

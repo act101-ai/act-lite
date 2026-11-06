@@ -292,7 +292,7 @@ impl ActLiteServer {
             McpError::internal_error(format!("Failed to execute skeleton query: {}", e), None)
         })?;
         let mut compact = compact_skeleton(&result);
-        if source.tree().root_node().has_error()
+        if source.has_any_error()
             && let serde_json::Value::Object(ref mut map) = compact
         {
             map.insert("parse_error".to_string(), serde_json::Value::Bool(true));
@@ -364,7 +364,7 @@ impl ActLiteServer {
                 })
             })
             .collect();
-        let compact = symbols_success_json(items, source.tree().root_node().has_error());
+        let compact = symbols_success_json(items, source.has_any_error());
         let mut json = serde_json::to_string(&compact)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         if total > limit {

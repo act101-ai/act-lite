@@ -68,6 +68,9 @@ pub enum ParserError {
         detected: String,
         guidance: String,
     },
+
+    #[error("the load was cancelled")]
+    Cancelled,
 }
 
 impl ParserError {
@@ -90,6 +93,7 @@ impl ParserError {
             ParserError::WorkspaceNotInitialized => "workspace_not_initialized",
             ParserError::ReferencesWalkCap { .. } => "references_walk_cap",
             ParserError::UnsupportedSourceFormat { .. } => "unsupported_source_format",
+            ParserError::Cancelled => "cancelled",
         }
     }
 }

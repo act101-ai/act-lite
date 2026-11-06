@@ -17,6 +17,7 @@ pub mod languages;
 pub mod node_kind;
 pub mod parser;
 pub mod query;
+pub mod regions;
 pub mod source_file;
 pub mod symbol_id;
 pub mod syntax_tree;
@@ -45,7 +46,7 @@ pub use query::{
     execute_references_for_symbol, execute_references_for_symbol_across, execute_skeleton,
     execute_symbol, execute_symbols, walk_reference_siblings,
 };
-pub use source_file::{SourceFile, open_regular_within, read_regular_text};
+pub use source_file::{ParseOptions, SourceFile, StopFn, open_regular_within, read_regular_text};
 pub use symbol_id::SymbolId;
 pub use syntax_tree::SyntaxTree;
 pub use workspace::Workspace;
