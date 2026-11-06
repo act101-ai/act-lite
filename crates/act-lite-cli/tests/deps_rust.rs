@@ -2137,3 +2137,111 @@ fn a_leading_path_separator_before_a_use_list_names_a_crate() {
     assert_eq!(kinds_of(&graph, "src/lib.rs", "src/std.rs"), ["module"]);
     assert_eq!(kinds_of(&graph, "src/std.rs", "src/lib.rs"), ["use"]);
 }
+
+/// A body of `src/lib.rs` with `globs` copies of `use std::collections::*;`
+/// and a `use` whose first segment only a glob names.
+fn many_globs(root: &Path, globs: usize) {
+    package(root, ".", "app", "");
+    let mut body = String::from("fn f() {\n");
+    for _ in 0..globs {
+        body.push_str("    use std::collections::*;\n");
+    }
+    body.push_str("    use hash_map::Entry;\n}\n");
+    write(root, "src/lib.rs", &body);
+}
+
+#[test]
+fn many_globs_of_a_body_are_each_tried_once() {
+    for globs in [12, 16] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        many_globs(&root, globs);
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = root.clone();
+        std::thread::spawn(move || {
+            let graph = graph(&worker);
+            let _ = send.send((
+                outcome(&graph, "src/lib.rs", "hash_map::Entry"),
+                outcome(&graph, "src/lib.rs", "std::collections"),
+            ));
+        });
+        let (entry, glob) = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("{globs} globs: no result within 5 s"));
+        assert_eq!(entry, Outcome::External, "{globs} globs: through a glob");
+        assert_eq!(glob, Outcome::External, "{globs} globs: the glob itself");
+    }
+}
+
+#[test]
+fn a_cancelled_token_stops_the_lookup_through_globs() {
+    // The token is cancelled before the second relationship, the `use`
+    // that only a glob of the body resolves.
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    let mut body = String::from("mod y;\nfn f() {\n    use hash_map::Entry;\n");
+    for _ in 0..16 {
+        body.push_str("    use std::collections::*;\n");
+    }
+    body.push_str("}\n");
+    write(root, "src/lib.rs", &body);
+    write(root, "src/y.rs", "pub struct Y;\n");
+    let cancel = CancellationToken::new();
+    let resolver = Cancelling {
+        cancel: cancel.clone(),
+        outcomes: Mutex::new(Vec::new()),
+    };
+    let request = Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap();
+    let ctx = RunContext {
+        root: root.to_path_buf(),
+        discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
+        support: SupportReader::new(root, &Includes::default(), &cancel),
+    };
+    let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
+    let result = DepGraph::build_with(&mut reader, &ctx, &[&resolver], &cancel);
+    assert!(matches!(
+        result,
+        Err(act_lite_cli::analyze::envelope::AnalyzeError::Cancelled)
+    ));
+    let outcomes = resolver.outcomes.lock().unwrap();
+    assert_eq!(outcomes[0].0, "y");
+    assert_eq!(outcomes[1].0, "hash_map::Entry");
+    assert!(
+        !matches!(outcomes[1].1, Outcome::External),
+        "a glob was tried after the cancel: {:?}",
+        outcomes[1].1
+    );
+}
+
+#[test]
+fn a_chain_of_bindings_with_two_declarations_each_is_followed_at_once() {
+    // Each `yN` has two declarations, so the paths through the chain
+    // double at each step; each binding is followed once.
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path().to_path_buf();
+    package(&root, ".", "app", "");
+    let depth = 24;
+    let mut body = String::from("mod m;\nfn f() {\n    use y0::Thing;\n");
+    for i in 0..depth {
+        let next = i + 1;
+        body.push_str(&format!(
+            "    #[cfg(feature = \"a\")]\n    use y{next}::a as y{i};\n"
+        ));
+        body.push_str(&format!(
+            "    #[cfg(not(feature = \"a\"))]\n    use y{next}::b as y{i};\n"
+        ));
+    }
+    body.push_str(&format!("    use crate::m as y{depth};\n}}\n"));
+    write(&root, "src/lib.rs", &body);
+    write(&root, "src/m.rs", "pub use std::collections::*;\n");
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let graph = graph(&root);
+        let _ = send.send(outcome(&graph, "src/lib.rs", "y0::Thing"));
+    });
+    let thing = receive
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("no result within 5 s");
+    assert_eq!(thing, resolved(&["src/m.rs"]));
+}

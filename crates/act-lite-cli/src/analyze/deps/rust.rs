@@ -324,13 +324,32 @@ fn outcome_in(
             tree,
             is_lib,
             m,
-            &[],
+            &mut Lookup::default(),
         ),
     }
 }
 
 /// A `use` binding already being followed: its declaration and name.
 type Followed = (CompactRange, Option<String>);
+
+/// One relationship's lookup through the block-local `use` bindings of a
+/// body: the bindings on the current branch, and what the whole lookup
+/// tried, so that each glob lookup runs once and each binding is followed
+/// once per glob lookup.
+#[derive(Default)]
+struct Lookup {
+    /// The bindings followed on the current branch.
+    followed: Vec<Followed>,
+    /// The glob lookup of the current branch, as an index into `globs`;
+    /// then no further glob applies.
+    origin: Option<usize>,
+    /// Each glob lookup tried: the declaration of the glob, the path
+    /// through it, and its outcome once known.
+    globs: Vec<(CompactRange, String, Option<Outcome>)>,
+    /// Each binding followed, with its path, and the glob lookup it was
+    /// followed in.
+    taken: Vec<(Followed, String, Option<usize>)>,
+}
 
 /// A block-local scope around a `use`: the anonymous module of a block, or
 /// an inline module inside a body.
@@ -413,8 +432,9 @@ fn local_walk(
 /// the body, never a block, and each `super` goes out one such module, then
 /// on from `m`; an inline module of the body hides the blocks and module
 /// around it. A binding is followed through its path, from its own
-/// declaration, never through a binding in `followed`; a glob of a scope
-/// passed on the way adds the path through the glob, as a further target.
+/// declaration, never through a binding on the current branch of `lookup`;
+/// a glob of a scope passed on the way adds the path through the glob, as
+/// a further target, unless the path came through a glob.
 #[allow(clippy::too_many_arguments)]
 fn use_path(
     cx: &mut ResolveCx<'_>,
@@ -424,7 +444,7 @@ fn use_path(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
-    followed: &[Followed],
+    lookup: &mut Lookup,
 ) -> Outcome {
     let (global, path) = match path.strip_prefix("::") {
         Some(rest) => (true, rest),
@@ -516,7 +536,12 @@ fn use_path(
             found = Some(outcome);
             break;
         }
-        let open = |b: &&UseBinding| !followed.iter().any(|(r, n)| *r == b.range && *n == b.name);
+        let open = |b: &&UseBinding| {
+            !lookup
+                .followed
+                .iter()
+                .any(|(r, n)| *r == b.range && *n == b.name)
+        };
         let bound: Vec<&UseBinding> = scope
             .names
             .uses
@@ -525,24 +550,26 @@ fn use_path(
             .filter(open)
             .collect();
         if !bound.is_empty() {
-            let outcomes = bound
-                .iter()
-                .map(|b| {
-                    let path = std::iter::once(b.path.as_str())
-                        .chain(segments[1..].iter().copied())
-                        .collect::<Vec<_>>()
-                        .join("::");
-                    through(cx, b, &path, package, tree, is_lib, m, followed)
-                })
-                .collect();
-            found = Some(combine(outcomes));
+            let mut outcomes = Vec::new();
+            for b in bound {
+                let path = std::iter::once(b.path.as_str())
+                    .chain(segments[1..].iter().copied())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                outcomes.extend(through(cx, b, &path, package, tree, is_lib, m, lookup));
+            }
+            found = Some(if outcomes.is_empty() {
+                Outcome::Unresolved(format!("the binding {first} was followed before"))
+            } else {
+                combine(outcomes)
+            });
             break;
         }
         if scope.module.is_none() && scope.names.names.contains(first) {
             found = Some(Outcome::Resolved(vec![file.clone()]));
             break;
         }
-        if !scope.names.names.contains(first) {
+        if lookup.origin.is_none() && !scope.names.names.contains(first) {
             globs.extend(
                 scope
                     .names
@@ -569,13 +596,16 @@ fn use_path(
     let mut outcomes = vec![outcome];
     for glob in globs {
         let path = format!("{}::{}", glob.path, segments.join("::"));
-        outcomes.push(through(cx, glob, &path, package, tree, is_lib, m, followed));
+        outcomes.extend(through_glob(
+            cx, glob, &path, package, tree, is_lib, m, lookup,
+        ));
     }
     combine(outcomes)
 }
 
 /// Resolves `path`, written through the binding `b`, from the declaration
-/// of `b`, with `b` followed.
+/// of `b`, with `b` followed; `None` after a cancel, or when `b` was
+/// followed before in the same glob lookup.
 #[allow(clippy::too_many_arguments)]
 fn through(
     cx: &mut ResolveCx<'_>,
@@ -585,11 +615,59 @@ fn through(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
-    followed: &[Followed],
-) -> Outcome {
-    let mut followed = followed.to_vec();
-    followed.push((b.range.clone(), b.name.clone()));
-    use_path(cx, path, &b.range, package, tree, is_lib, m, &followed)
+    lookup: &mut Lookup,
+) -> Option<Outcome> {
+    if cx.cancelled() {
+        return None;
+    }
+    let key = (
+        (b.range.clone(), b.name.clone()),
+        b.path.clone(),
+        lookup.origin,
+    );
+    if lookup.taken.contains(&key) {
+        return None;
+    }
+    lookup.taken.push(key);
+    lookup.followed.push((b.range.clone(), b.name.clone()));
+    let outcome = use_path(cx, path, &b.range, package, tree, is_lib, m, lookup);
+    lookup.followed.pop();
+    Some(outcome)
+}
+
+/// Resolves `path`, written through the glob `glob`, from the declaration
+/// of `glob`, where no further glob applies; each such lookup runs once.
+/// `None` after a cancel.
+#[allow(clippy::too_many_arguments)]
+fn through_glob(
+    cx: &mut ResolveCx<'_>,
+    glob: &UseBinding,
+    path: &str,
+    package: Option<&Manifest>,
+    tree: &mut Tree,
+    is_lib: Option<bool>,
+    m: usize,
+    lookup: &mut Lookup,
+) -> Option<Outcome> {
+    if let Some((_, _, outcome)) = lookup
+        .globs
+        .iter()
+        .find(|(range, p, _)| *range == glob.range && p == path)
+    {
+        return outcome.clone();
+    }
+    if cx.cancelled() {
+        return None;
+    }
+    let index = lookup.globs.len();
+    lookup
+        .globs
+        .push((glob.range.clone(), path.to_string(), None));
+    let origin = lookup.origin.replace(index);
+    let outcome = use_path(cx, path, &glob.range, package, tree, is_lib, m, lookup);
+    lookup.origin = origin;
+    lookup.globs[index].2 = Some(outcome.clone());
+    Some(outcome)
 }
 
 /// When `segments[i]` names a `mod x;` of the block-local module `names` of
