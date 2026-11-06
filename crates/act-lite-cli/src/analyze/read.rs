@@ -6,11 +6,14 @@ use super::discovery::{Candidate, Includes, Skip, left_out};
 use super::embedded::{blank, test_regions};
 use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile, rel_path};
 use act_lite_core::CompactRange;
-use act_lite_parser::{Grammar, SourceFile};
+use act_lite_parser::regions::{Region, RegionKind, RegionLanguage, RegionState, TIMEOUT_REASON};
+use act_lite_parser::{Grammar, ParseOptions, ParserError, SourceFile};
 use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tree_sitter::Node;
 
@@ -27,6 +30,59 @@ pub struct Parsed {
     pub removed: Vec<RemovedRegion>,
 }
 
+impl Parsed {
+    /// The code an analyzer reads: for a component file, each script or
+    /// frontmatter region tree in document order (never a style region or
+    /// the outer tree); for any other file, its whole tree.
+    pub fn code(&self) -> Vec<CodeUnit<'_>> {
+        code_units(&self.source)
+    }
+}
+
+/// One unit of code: a tree, its grammar and the text its positions refer
+/// to. Every position is the file's own.
+#[derive(Clone, Copy)]
+pub struct CodeUnit<'a> {
+    pub grammar: Grammar,
+    pub tree: &'a tree_sitter::Tree,
+    pub source: &'a str,
+}
+
+fn code_units(source: &SourceFile) -> Vec<CodeUnit<'_>> {
+    let content = source.content();
+    if !source.grammar().is_component() {
+        return vec![CodeUnit {
+            grammar: source.grammar(),
+            tree: source.tree().inner(),
+            source: content,
+        }];
+    }
+    source
+        .region_trees()
+        .iter()
+        .filter(|tree| is_script(&source.regions()[tree.region]))
+        .map(|tree| CodeUnit {
+            grammar: tree.grammar,
+            tree: &tree.tree,
+            source: content,
+        })
+        .collect()
+}
+
+/// Whether a region holds script code (a script or the frontmatter).
+fn is_script(region: &Region) -> bool {
+    region.kind != RegionKind::Style
+}
+
+/// A script or frontmatter region of a component file that is not
+/// analyzed: its start tag and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionNotAnalyzed {
+    pub file: String,
+    pub range: CompactRange,
+    pub reason: String,
+}
+
 /// A blanked test region and the text it held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovedRegion {
@@ -40,6 +96,12 @@ pub enum ReadResult {
         parsed: Parsed,
         parse_failures: Vec<ParseFailure>,
         test_exclusions: Vec<ExcludedEntry>,
+        /// The script regions of a component file that are not analyzed,
+        /// in document order.
+        regions_not_analyzed: Vec<RegionNotAnalyzed>,
+        /// A component file with script regions, all of a language that is
+        /// not parsed: it holds no code an analyzer reads.
+        without_analyzed_code: bool,
     },
     Skipped(Skip),
     /// A file whose own attribute `#![cfg(test)]` makes it test code.
@@ -48,11 +110,42 @@ pub enum ReadResult {
 
 /// Reads and parses one file.
 pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, AnalyzeError> {
+    read_file_with(file, include_tests, &CancellationToken::new(), None)
+}
+
+/// Reads and parses one file as [`read_file`] does, and checks `cancel`
+/// before each region parse of a component file. `region_timeout`, when
+/// set, is the deadline of each parse of the file (the outer parse and
+/// each region's) in place of the parser's own.
+pub fn read_file_with(
+    file: &Candidate,
+    include_tests: bool,
+    cancel: &CancellationToken,
+    region_timeout: Option<Duration>,
+) -> Result<ReadResult, AnalyzeError> {
+    read_stopped(file, include_tests, region_timeout, token_stop(cancel))
+}
+
+/// A check that stops a load: `true` once the request is cancelled.
+type Stop = Arc<dyn Fn() -> bool + Send + Sync>;
+
+fn token_stop(cancel: &CancellationToken) -> Stop {
+    let cancel = cancel.clone();
+    Arc::new(move || cancel.is_cancelled())
+}
+
+fn read_stopped(
+    file: &Candidate,
+    include_tests: bool,
+    timeout: Option<Duration>,
+    stop: Stop,
+) -> Result<ReadResult, AnalyzeError> {
     let content = match read_content(file) {
         Ok(content) => content,
         Err(skip) => return Ok(ReadResult::Skipped(skip)),
     };
-    let mut source = parse(file, content)?;
+    let parse = |content: String| parse(file, content, timeout, &stop);
+    let mut source = parse(content)?;
     let mut test_exclusions = Vec::new();
     let mut removed = Vec::new();
     if !include_tests {
@@ -80,16 +173,23 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
                     text: source.content()[region.bytes.clone()].to_string(),
                 })
                 .collect();
-            source = parse(file, blank(source.content(), &found.regions))?;
+            source = parse(blank(source.content(), &found.regions))?;
         }
     }
-    let parse_failures = first_error(&source)
-        .map(|range| ParseFailure {
-            file: file.rel.clone(),
-            range,
-        })
-        .into_iter()
-        .collect();
+    let (regions_not_analyzed, without_analyzed_code) = region_evidence(&file.rel, &source);
+    // A file with no analyzed code is read as a file of a language that
+    // is not supported: it adds no parse failure.
+    let parse_failures = if without_analyzed_code {
+        Vec::new()
+    } else {
+        first_failure(&source, &regions_not_analyzed)
+            .map(|range| ParseFailure {
+                file: file.rel.clone(),
+                range,
+            })
+            .into_iter()
+            .collect()
+    };
     Ok(ReadResult::Parsed {
         parsed: Parsed {
             rel: file.rel.clone(),
@@ -98,7 +198,65 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
         },
         parse_failures,
         test_exclusions,
+        regions_not_analyzed,
+        without_analyzed_code,
     })
+}
+
+/// The script regions of a component file that are not analyzed, in
+/// document order, and whether the file has script regions and all of them
+/// are of a language that is not parsed. Style regions and empty regions
+/// are never listed.
+fn region_evidence(rel: &str, source: &SourceFile) -> (Vec<RegionNotAnalyzed>, bool) {
+    let mut has_tree = vec![false; source.regions().len()];
+    for tree in source.region_trees() {
+        has_tree[tree.region] = true;
+    }
+    let mut listed = Vec::new();
+    let (mut scripts, mut unsupported) = (0usize, 0usize);
+    for (region, parsed) in source.regions().iter().zip(has_tree) {
+        if !is_script(region) || region.state == RegionState::Empty {
+            continue;
+        }
+        scripts += 1;
+        let reason = match (&region.state, &region.language) {
+            (RegionState::Malformed, _) => "malformed region".to_string(),
+            (_, RegionLanguage::Unsupported(language)) => {
+                unsupported += 1;
+                format!("unsupported script language: {language}")
+            }
+            _ if !parsed => TIMEOUT_REASON.to_string(),
+            _ => continue,
+        };
+        listed.push(RegionNotAnalyzed {
+            file: rel.to_string(),
+            range: region.start_tag.clone(),
+            reason,
+        });
+    }
+    (listed, scripts > 0 && unsupported == scripts)
+}
+
+/// The file's parse failure: the first ERROR or MISSING node over its code
+/// units and, for a component file, its outer tree, or the start tag of a
+/// script region whose parse timed out, whichever comes first.
+fn first_failure(source: &SourceFile, not_analyzed: &[RegionNotAnalyzed]) -> Option<CompactRange> {
+    let mut found: Vec<CompactRange> = code_units(source)
+        .iter()
+        .filter_map(|unit| first_error(unit.tree.root_node()))
+        .collect();
+    if source.grammar().is_component() {
+        found.extend(first_error(source.tree().root_node()));
+        found.extend(
+            not_analyzed
+                .iter()
+                .filter(|region| region.reason == TIMEOUT_REASON)
+                .map(|region| region.range.clone()),
+        );
+    }
+    found
+        .into_iter()
+        .min_by_key(|range| (range.start_line(), range.start_col()))
 }
 
 /// What reading found besides the files themselves.
@@ -109,6 +267,11 @@ pub struct ReadOutcome {
     pub skipped: Vec<Skip>,
     pub parse_failures: Vec<ParseFailure>,
     pub test_exclusions: Vec<ExcludedEntry>,
+    /// The script regions of component files that are not analyzed, sorted
+    /// by file, then location.
+    pub regions_not_analyzed: Vec<RegionNotAnalyzed>,
+    /// The component files that hold no analyzed code.
+    pub files_without_analyzed_code: u64,
 }
 
 /// Files read on demand, one at a time.
@@ -155,8 +318,8 @@ impl Reader {
         }
     }
 
-    /// The skips, parse failures and test exclusions of every file pulled so
-    /// far, each list sorted.
+    /// The skips, parse failures, test exclusions and regions not analyzed
+    /// of every file pulled so far, each list sorted.
     pub fn finish(mut self) -> ReadOutcome {
         let outcome = &mut self.outcome;
         outcome
@@ -176,6 +339,21 @@ impl Reader {
                 .cmp(b.path.as_bytes())
                 .then_with(|| key(a).cmp(&key(b)))
         });
+        outcome.regions_not_analyzed.sort_by(|a, b| {
+            let key = |r: &RegionNotAnalyzed| {
+                let range = &r.range;
+                (
+                    range.start_line(),
+                    range.start_col(),
+                    range.end_line(),
+                    range.end_col(),
+                )
+            };
+            a.file
+                .as_bytes()
+                .cmp(b.file.as_bytes())
+                .then_with(|| key(a).cmp(&key(b)))
+        });
         self.outcome
     }
 }
@@ -187,14 +365,20 @@ impl FileSource for Reader {
                 return Err(AnalyzeError::Cancelled);
             }
             self.next += 1;
-            match read_file(file, self.include_tests)? {
+            match read_file_with(file, self.include_tests, &self.cancel, None)? {
                 ReadResult::Parsed {
                     parsed,
                     parse_failures,
                     test_exclusions,
+                    regions_not_analyzed,
+                    without_analyzed_code,
                 } => {
                     self.outcome.parse_failures.extend(parse_failures);
                     self.outcome.test_exclusions.extend(test_exclusions);
+                    self.outcome
+                        .regions_not_analyzed
+                        .extend(regions_not_analyzed);
+                    self.outcome.files_without_analyzed_code += u64::from(without_analyzed_code);
                     return Ok(Some(parsed));
                 }
                 ReadResult::Skipped(skip) => self.outcome.skipped.push(skip),
@@ -215,14 +399,17 @@ impl FileSource for Reader {
         let Some(file) = self.files[..self.next].iter().find(|f| f.rel == rel) else {
             return Err(failed(format!("{rel} was not returned by this reader")));
         };
-        match read_file(file, self.include_tests)? {
+        match read_file_with(file, self.include_tests, &self.cancel, None)? {
             ReadResult::Parsed {
                 parsed,
                 parse_failures,
                 test_exclusions,
+                regions_not_analyzed,
+                ..
             } => {
                 add_new(&mut self.outcome.parse_failures, parse_failures);
                 add_new(&mut self.outcome.test_exclusions, test_exclusions);
+                add_new(&mut self.outcome.regions_not_analyzed, regions_not_analyzed);
                 Ok(parsed)
             }
             ReadResult::Skipped(skip) => Err(failed(format!(
@@ -260,8 +447,8 @@ pub fn read_files(
     Ok(outcome)
 }
 
-/// The range of the first ERROR or MISSING node in document order.
-fn first_error(source: &SourceFile) -> Option<CompactRange> {
+/// The range of the first ERROR or MISSING node of a tree in document order.
+fn first_error(root: Node) -> Option<CompactRange> {
     fn find(root: Node) -> Option<Node> {
         let mut cursor = root.walk();
         let mut stack = vec![root];
@@ -280,7 +467,7 @@ fn first_error(source: &SourceFile) -> Option<CompactRange> {
         }
         None
     }
-    let node = find(source.tree().root_node())?;
+    let node = find(root)?;
     let (start, end) = (node.start_position(), node.end_position());
     Some(CompactRange::new(
         start.row as u32 + 1,
@@ -570,11 +757,25 @@ fn skip_error(rel: &str, kind: SkipKind, reason: String) -> SupportError {
     }
 }
 
-fn parse(file: &Candidate, content: String) -> Result<SourceFile, AnalyzeError> {
-    SourceFile::from_content(&file.path, content, file.grammar).map_err(|err| {
-        AnalyzeError::Failed {
-            analysis: "analyze",
-            cause: format!("cannot parse {}: {err}", file.rel),
+fn parse(
+    file: &Candidate,
+    content: String,
+    timeout: Option<Duration>,
+    stop: &Stop,
+) -> Result<SourceFile, AnalyzeError> {
+    let stop = Arc::clone(stop);
+    let options = ParseOptions {
+        timeout,
+        stop: Some(Box::new(move || stop())),
+        ..ParseOptions::default()
+    };
+    SourceFile::from_content_with(&file.path, content, file.grammar, options).map_err(|err| {
+        match err {
+            ParserError::Cancelled => AnalyzeError::Cancelled,
+            err => AnalyzeError::Failed {
+                analysis: "analyze",
+                cause: format!("cannot parse {}: {err}", file.rel),
+            },
         }
     })
 }
@@ -613,6 +814,7 @@ mod tests {
                 parsed,
                 parse_failures,
                 test_exclusions,
+                ..
             }) => (parsed, parse_failures, test_exclusions),
             _ => panic!("expected a parsed file"),
         }
@@ -1040,6 +1242,48 @@ mod tests {
                 "{rel}"
             );
         }
+    }
+
+    #[test]
+    fn a_token_cancelled_after_the_first_region_parse_stops_before_the_second() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Two.vue",
+            b"<script setup lang=\"ts\">\nconst a = 1\n</script>\n<script setup lang=\"ts\">\nconst b = 2\n</script>\n",
+        );
+        let file = Candidate {
+            path: dir.path().join("Two.vue"),
+            rel: "Two.vue".to_string(),
+            grammar: Grammar::Vue,
+        };
+        let token = CancellationToken::new();
+        let checks = Arc::new(AtomicUsize::new(0));
+        let stop: Stop = {
+            let (check, token, checks) = (token_stop(&token), token.clone(), checks.clone());
+            Arc::new(move || {
+                let stopped = check();
+                // The token is cancelled while the first region is parsed.
+                if checks.fetch_add(1, Ordering::SeqCst) == 0 {
+                    token.cancel();
+                }
+                stopped
+            })
+        };
+        assert!(matches!(
+            read_stopped(&file, false, None, stop),
+            Err(AnalyzeError::Cancelled)
+        ));
+        assert_eq!(
+            checks.load(Ordering::SeqCst),
+            2,
+            "one check per region parse"
+        );
+        assert!(matches!(
+            read_file_with(&file, false, &CancellationToken::new(), None),
+            Ok(ReadResult::Parsed { .. })
+        ));
     }
 
     #[cfg(unix)]
