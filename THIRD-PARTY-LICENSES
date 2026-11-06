@@ -1,8 +1,8 @@
-act-lite-cli 0.3.2 MIT
-act-lite-core 0.3.2 MIT
-act-lite-lsp 0.3.2 MIT
-act-lite-parser 0.3.2 MIT
-act-lite-secrets 0.3.2 MIT
+act-lite-cli 1.0.0 MIT
+act-lite-core 1.0.0 MIT
+act-lite-lsp 1.0.0 MIT
+act-lite-parser 1.0.0 MIT
+act-lite-secrets 1.0.0 MIT
 aho-corasick 1.1.5 Unlicense OR MIT
 anstream 1.0.0 MIT OR Apache-2.0
 anstyle 1.0.14 MIT OR Apache-2.0
@@ -106,6 +106,7 @@ syn 2.0.119 MIT OR Apache-2.0
 syn 3.0.9 MIT OR Apache-2.0
 thiserror 2.0.21 MIT OR Apache-2.0
 thiserror-impl 2.0.21 MIT OR Apache-2.0
+tinyvec 1.13.3 Zlib OR Apache-2.0 OR MIT
 tokio 1.54.1 MIT
 tokio-macros 2.7.2 MIT
 tokio-util 0.7.20 MIT
@@ -153,6 +154,7 @@ tree-sitter-yaml 0.7.2 MIT
 tree-sitter-zig 1.1.2 MIT
 typenum 1.20.1 MIT OR Apache-2.0
 unicode-ident 1.0.27 (MIT OR Apache-2.0) AND Unicode-3.0
+unicode-normalization 0.1.26 (MIT OR Apache-2.0) AND Unicode-3.0
 utf8parse 0.2.2 Apache-2.0 OR MIT
 uuid 1.28.0 Apache-2.0 OR MIT
 walkdir 2.5.0 Unlicense OR MIT
@@ -739,6 +741,7 @@ MIT License
 
 Used by:
   heck 0.5.0
+  unicode-normalization 0.1.26
 Copyright (c) 2015 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
@@ -1798,10 +1801,10 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRES
 MIT License
 
 Used by:
-  act-lite-cli 0.3.2
-  act-lite-core 0.3.2
-  act-lite-lsp 0.3.2
-  act-lite-secrets 0.3.2
+  act-lite-cli 1.0.0
+  act-lite-core 1.0.0
+  act-lite-lsp 1.0.0
+  act-lite-secrets 1.0.0
   chrono 0.4.45
   siphasher 1.0.1
   tree-sitter-cpp 0.23.4
@@ -1970,6 +1973,18 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+
+================================================================================
+MIT License
+
+Used by:
+  tinyvec 1.13.3
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the &quot;Software&quot;), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ================================================================================
@@ -2350,7 +2365,7 @@ SOFTWARE.
 MIT License
 
 Used by:
-  act-lite-parser 0.3.2
+  act-lite-parser 1.0.0
   tree-sitter-css 0.25.0
   tree-sitter-language 0.1.9
 The MIT License (MIT)
@@ -2516,7 +2531,7 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRES
 MIT License
 
 Used by:
-  act-lite-parser 0.3.2
+  act-lite-parser 1.0.0
   tree-sitter-dockerfile 0.2.1
 The MIT License (MIT)
 
@@ -2602,7 +2617,7 @@ THE SOFTWARE.
 MIT License
 
 Used by:
-  act-lite-parser 0.3.2
+  act-lite-parser 1.0.0
   tree-sitter-markdown 0.7.1
 The MIT License (MIT)
 
@@ -3039,6 +3054,7 @@ Unicode License v3
 
 Used by:
   unicode-ident 1.0.27
+  unicode-normalization 0.1.26
 UNICODE LICENSE V3
 
 COPYRIGHT AND PERMISSION NOTICE

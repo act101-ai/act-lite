@@ -34,9 +34,14 @@ from pathlib import Path
 ID_RE = re.compile(r"^[A-Z]+-?\d+$")
 LEDGER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STATE_RE = re.compile(r"^(TODO|PLANNED|IN-PROGRESS|DONE|BLOCKED\(.+\)|DROPPED\(.+\))$")
-TIERS = ("simple", "normal", "demanding")
+CAPABILITIES = ("lookup", "mechanical", "implementation", "judgment")
 NONE = "—"
-NODE_HEADER = ("ID", "Node", "Depends", "State", "Tier", "Refs")
+NODE_HEADER = ("ID", "Node", "Depends", "State", "Capability", "Refs")
+# Backward compatibility: a node table or ledger export with the older Tier
+# column loads, its values mapped to capabilities.
+TIER_HEADER = ("ID", "Node", "Depends", "State", "Tier", "Refs")
+TIER_CAPABILITY = {"simple": "mechanical", "normal": "implementation", "demanding": "judgment"}
+HEADER_ALIASES = {NODE_HEADER: (NODE_HEADER, TIER_HEADER), TIER_HEADER: (NODE_HEADER, TIER_HEADER)}
 LOG_HEADER = ("Date", "Event")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SETTING_RE = re.compile(r"^\*\*([A-Za-z ]+):\*\*\s*(.*)$")
@@ -63,7 +68,7 @@ class Row:
     node: str
     depends: list[str]
     state: str
-    tier: str
+    capability: str
     refs: str
     line: str  # normalized: "| " + " | ".join(cells) + " |"
     file: str
@@ -169,14 +174,28 @@ def find_table(lines: list[str], section: str, header: tuple[str, ...]) -> int |
         if line.startswith("## "):
             in_section = line[3:].strip() == section
             continue
-        if in_section and line.startswith("|") and tuple(split_cells(line)) == header:
+        if in_section and line.startswith("|") and tuple(split_cells(line)) in HEADER_ALIASES.get(header, (header,)):
             return i
     return None
 
 
+def node_header(lines: list[str]) -> tuple[str, ...]:
+    """The header of the node table in `lines`; NODE_HEADER when there is none."""
+    head = find_table(lines, "Nodes", NODE_HEADER)
+    return tuple(split_cells(lines[head].rstrip())) if head is not None else NODE_HEADER
+
+
 def section_tables(lines: list[str], section: str, header: tuple[str, ...]) -> list[tuple[int, list[str]]]:
     """(line index, cells) of every data row of the table with `header` under `## section`."""
-    out: list[tuple[int, list[str]]] = []
+    return [(i, cells) for i, cells, _ in table_rows(lines, section, header)]
+
+
+def table_rows(lines: list[str], section: str, header: tuple[str, ...]) -> list[tuple[int, list[str], tuple[str, ...]]]:
+    """(line index, cells, the header of its table) of every data row of the table
+    with `header`, or one of its aliases, under `## section`."""
+    headers = HEADER_ALIASES.get(header, (header,))
+    out: list[tuple[int, list[str], tuple[str, ...]]] = []
+    current: tuple[str, ...] = header
     in_section = in_table = False
     for i, raw in enumerate(lines):
         line = raw.rstrip()
@@ -190,22 +209,23 @@ def section_tables(lines: list[str], section: str, header: tuple[str, ...]) -> l
             in_table = False
             continue
         cells = split_cells(line)
-        if tuple(cells) == header:
-            in_table = True
+        if tuple(cells) in headers:
+            in_table, current = True, tuple(cells)
             continue
         if in_table and not is_separator(line):
-            out.append((i, cells))
+            out.append((i, cells, current))
     return out
 
 
 def parse_rows(lines: list[str], file: str, malformed: list[str]) -> list[Row]:
     rows = []
-    for index, cells in section_tables(lines, "Nodes", NODE_HEADER):
+    for index, cells, header in table_rows(lines, "Nodes", NODE_HEADER):
         if len(cells) != len(NODE_HEADER) or not ID_RE.match(cells[0]):
             malformed.append(f"{file}: malformed node row: {normal(cells)}")
             continue
         depends = [] if cells[2] in (NONE, "") else [d.strip() for d in cells[2].split(",")]
-        rows.append(Row(cells[0], cells[1], depends, cells[3], cells[4], cells[5], normal(cells), file, index))
+        capability = TIER_CAPABILITY.get(cells[4], cells[4]) if header == TIER_HEADER else cells[4]
+        rows.append(Row(cells[0], cells[1], depends, cells[3], capability, cells[5], normal(cells), file, index))
     return rows
 
 
@@ -219,7 +239,8 @@ def ledger_rows(data: object, malformed: list[str]) -> list[Row]:
         if not isinstance(item, dict):
             malformed.append(f"row {n}: not an object")
             continue
-        missing = [k for k in ("id", "depends", "state", "tier") if k not in item]
+        key = "tier" if "capability" not in item and "tier" in item else "capability"
+        missing = [k for k in ("id", "depends", "state", key) if k not in item]
         if missing:
             malformed.append(f"row {n}: missing {', '.join(missing)}")
             continue
@@ -229,8 +250,10 @@ def ledger_rows(data: object, malformed: list[str]) -> list[Row]:
             continue
         depends = [str(d) for d in item["depends"]]
         node, refs = str(item.get("node", "")), str(item.get("refs", ""))
-        line = normal([node_id, node, ", ".join(depends) or NONE, str(item["state"]), str(item["tier"]), refs])
-        rows.append(Row(node_id, node, depends, str(item["state"]), str(item["tier"]), refs, line, "ledger"))
+        value = str(item[key])
+        capability = TIER_CAPABILITY.get(value, value) if key == "tier" else value
+        line = normal([node_id, node, ", ".join(depends) or NONE, str(item["state"]), value, refs])
+        rows.append(Row(node_id, node, depends, str(item["state"]), capability, refs, line, "ledger"))
     return rows
 
 
@@ -422,8 +445,9 @@ def check(graph: Graph) -> list[str]:
         seen.add(r.id)
         if not STATE_RE.match(r.state):
             defects.append(f"{r.id}: state {r.state} is not TODO, PLANNED, IN-PROGRESS, DONE, BLOCKED(reason) or DROPPED(evidence)")
-        if r.tier not in TIERS and not (r.tier == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
-            defects.append(f"{r.id}: tier {r.tier} is not simple, normal or demanding")
+        if r.capability not in CAPABILITIES and not (
+                r.capability == NONE and (r.closed or (ext_for(graph) and EXT.model_optional(r)))):
+            defects.append(f"{r.id}: capability {r.capability} is not lookup, mechanical, implementation or judgment")
         if len(r.line) > ROW_CAP and not graph.ledger:
             defects.append(f"{r.id}: row exceeds {ROW_CAP} characters ({len(r.line)}); move detail to nodes/{r.id}.md")
         for dep in r.depends:
@@ -610,7 +634,7 @@ def history_skeleton(graph: Graph) -> list[str]:
     title = next((line[2:].strip() for line in graph.docs.get(GRAPH, []) if line.startswith("# ")), "Work Graph")
     return ([f"# {title} — History", "",
              "Closed node rows and Log entries moved from graph.md, verbatim. Append-only.", ""]
-            + table_skeleton("Nodes", NODE_HEADER) + [""] + table_skeleton("Log", LOG_HEADER))
+            + table_skeleton("Nodes", node_header(graph.docs.get(GRAPH, []))) + [""] + table_skeleton("Log", LOG_HEADER))
 
 
 def write_docs(graph: Graph, docs: dict[str, list[str]]) -> None:
@@ -624,7 +648,8 @@ def write_docs(graph: Graph, docs: dict[str, list[str]]) -> None:
 
 def trim(graph: Graph, docs: dict[str, list[str]]) -> list[str]:
     """Move closed rows of graph.md beyond the cap (oldest first, unless a ledger
-    holds the rows) and Log entries beyond the window to history.md, verbatim."""
+    holds the rows) and Log entries beyond the window to history.md, verbatim,
+    except that a Tier row moved into a Capability table takes the mapped value."""
     lines = docs[GRAPH]
     closed = [] if graph.ledger else [r for r in graph.rows if r.closed]
     excess = closed[: max(0, len(closed) - CLOSED_CAP)]
@@ -633,7 +658,12 @@ def trim(graph: Graph, docs: dict[str, list[str]]) -> list[str]:
     if not excess and not old_log:
         return []
     history = docs.setdefault(HISTORY, history_skeleton(graph))
-    insert_table_lines(history, "Nodes", NODE_HEADER, [lines[r.index] for r in excess])
+    moved = [lines[r.index] for r in excess]
+    if node_header(lines) == TIER_HEADER and node_header(history) == NODE_HEADER:
+        # A Capability destination takes each Tier value in its own vocabulary.
+        moved = [normal([TIER_CAPABILITY.get(c, c) if k == 4 else c for k, c in enumerate(split_cells(line))])
+                 for line in moved]
+    insert_table_lines(history, "Nodes", node_header(lines), moved)
     insert_table_lines(history, "Log", LOG_HEADER, [lines[i] for i, _ in old_log])
     for i in sorted([r.index for r in excess] + [i for i, _ in old_log], reverse=True):
         del lines[i]

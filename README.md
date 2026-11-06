@@ -5,7 +5,9 @@ source files with tree-sitter and answers structural questions without reading
 whole files: a file's skeleton, its symbols, a repository outline, where a
 symbol is defined, and where it is used. It also measures code health:
 functions over size, nesting, branching or parameter thresholds, the files
-where complexity concentrates, and duplicated code. It does not edit code. It also sequesters a project's secrets out of the working
+where complexity concentrates, and duplicated code. It maps file
+dependencies: the import edges of a scope, file-level cycles, coupling counts
+per file, and the files that depend on a given file. It does not edit code. It also sequesters a project's secrets out of the working
 tree and runs commands with them injected and redacted (`act-lite env`); the
 only file it writes is the project's `.env`, and only the value tokens of the
 lines it sequesters.
@@ -13,7 +15,8 @@ lines it sequesters.
 act-lite ships one binary, `act-lite`, with four commands:
 
 - `act-lite query` runs one query and prints JSON.
-- `act-lite analyze` runs one code-health analysis and prints JSON.
+- `act-lite analyze` runs one code-health or dependency analysis and prints
+  JSON.
 - `act-lite mcp serve` serves the same queries and analyses as MCP tools over
   stdio.
 - `act-lite env` sequesters secrets, lists them by name, and runs commands
@@ -385,17 +388,19 @@ act-lite mcp serve                    # workspace: nearest git root, else the cu
 act-lite --workspace /path/to/repo mcp serve
 ```
 
-The server exposes eleven tools: `status`, `skeleton`, `symbols`,
-`symbols_batch`, `repo_outline`, `references`, `callers`, `definition`, and
-the analyzers `analyze_patterns`, `analyze_hotspots` and `analyze_clones`
-(see [Code-health analyzers](#code-health-analyzers)).
+The server exposes fifteen tools: `status`, `skeleton`, `symbols`,
+`symbols_batch`, `repo_outline`, `references`, `callers`, `definition`, the
+code-health analyzers `analyze_patterns`, `analyze_hotspots` and
+`analyze_clones` (see [Code-health analyzers](#code-health-analyzers)), and
+the dependency analyzers `graph`, `analyze_cycles`, `analyze_coupling` and
+`analyze_impact` (see [Dependency analyzers](#dependency-analyzers)).
 `status` lists the 40 languages and, for each language server, whether it is
 `ready` or `not_installed`. MCP `skeleton` omits `import` entries for every
 language. It keeps `include` entries: C and C++ `#include`, Make `include`,
 CMake `include()` and `add_subdirectory()`, R `source()` and Julia
 `include()`. `act-lite query skeleton` and `symbols-batch` list both.
 
-**Analyzer tools.** Each `analyze_*` tool returns the same JSON
+**Analyzer tools.** Each analyzer tool (`graph` and the `analyze_*` tools) returns the same JSON
 as its `act-lite analyze` command (see [`act-lite analyze`](#act-lite-analyze)):
 for the same workspace root, language-server setting and parameters, the first
 content block, parsed, equals the command's stdout, parsed. The tool
@@ -403,14 +408,16 @@ parameters follow one rule: a parameter `snake_case` is the flag
 `--kebab-case`, an array is a repeatable flag, a boolean (default `false`) is a
 presence flag, and `paths` is the positional arguments. `--workspace`,
 `--format` and `--disable-lsp` are fixed when the server starts. An array can
-also be sent as a string that holds a JSON array, and `limit` as a numeric
+also be sent as a string that holds a JSON array, and `limit` and `max_depth` as a numeric
 string. A request error is a JSON-RPC `invalid_params` error (-32602) with the
 command's message; an internal failure is `internal_error` (-32603). A
 cancelled request stops its analysis and gets no response.
 
 The second content block is a hint, and is not part of the result. When
 `truncated` is `true`, it gives `total` and names the parameters that narrow
-the result: `paths`, `include`, `exclude` and `limit`. When `excluded` or
+the result: `paths`, `include`, `exclude` and `limit`; for `graph` and
+`analyze_impact` also `focus`, and `max_depth` when the request has a focus.
+When `excluded` or
 `incomplete` has a list cut at 100 entries, it says so and gives that object's
 `counts`. Otherwise it gives the analyzer's usual next step. The first block
 is always the JSON result alone.
@@ -427,7 +434,7 @@ The command prints one JSON object, the result described under
 `--workspace`, else the current directory.
 
 **Names.** An analyzer's command is its MCP tool name without the `analyze_`
-prefix, with `_` changed to `-`; the `analysis` value in the result is the
+prefix (`graph` has none), with `_` changed to `-`; the `analysis` value in the result is the
 command name. A tool parameter `snake_case` is the flag `--kebab-case`, an
 array is a repeatable flag, and a boolean is a presence flag. `paths` is the
 positional arguments.
@@ -437,9 +444,10 @@ positional arguments.
 | `analyze_patterns` | `act-lite analyze patterns` | `patterns` |
 | `analyze_hotspots` | `act-lite analyze hotspots` | `hotspots` |
 | `analyze_clones` | `act-lite analyze clones` | `clones` |
-
-The dependency analyzers (cycles, coupling, impact and graph) arrive in a later
-release.
+| `graph` | `act-lite analyze graph` | `graph` |
+| `analyze_cycles` | `act-lite analyze cycles` | `cycles` |
+| `analyze_coupling` | `act-lite analyze coupling` | `coupling` |
+| `analyze_impact` | `act-lite analyze impact` | `impact` |
 
 **Shared parameters.** Every analyzer takes these:
 
@@ -481,7 +489,8 @@ The paths are checked in order, and the first that fails is reported.
 
 **Narrowing a truncated result.** `truncated` is `true` when `total` is more
 than the number of findings returned. Narrow the request with `PATH`
-arguments, `--include` and `--exclude`, or change `--limit`. `--limit 0`
+arguments, `--include` and `--exclude` (for `graph` and `impact` also
+`--focus` and `--max-depth`), or change `--limit`. `--limit 0`
 returns the counts only. When `excluded.truncated` or `incomplete.truncated`
 is `true`, a list was cut at 100 entries and its `counts` hold the totals.
 
@@ -507,7 +516,7 @@ present, in this order, including empty lists and zero counts:
 | `truncated` | `true` if and only if `total` is more than the length of `findings`. |
 | `coverage` | `analyzed_files`; `languages`, a list of `{ "language", "files", "supported" }`; `unrecognized_files`. |
 | `excluded` | `tests`, `generated`, `vendored`, `ignored` (lists of `{ "path", "range"? }`), `counts` (the same four keys), `truncated`. |
-| `incomplete` | `skipped_files`, `parse_failures`, `unresolved`, `limits_hit` (lists), `counts` (the same four keys), `truncated`. |
+| `incomplete` | `skipped_files`, `parse_failures`, `unresolved`, `limits_hit` (lists), `counts` (the same four keys, and `failed_inputs` for the dependency analyzers), `truncated`. |
 | `evidence` | `sources` (list of strings), `language_servers` (list). |
 
 An analyzer can add one more top-level key, `details` (an object), for
@@ -544,6 +553,9 @@ a result incomplete; they appear in `coverage.languages` with
   relationship that the analysis needs and could not resolve.
 - `limits_hit`: `{ "limit", "value", "detail" }`, an analysis bound (a
   request parameter) that stopped the analysis early.
+- `counts.failed_inputs` (dependency analyzers only, no list): the number of
+  resolution inputs that could not be read or parsed, over every input read,
+  also those past the entries listed in `details.resolution_inputs`.
 
 **Locations.** `file` and `path` are relative to the workspace root, with `/`
 separators and no leading `./`. A directory ends with `/`; the root is `"."`.
@@ -763,6 +775,692 @@ analysis bound that stops early, so `incomplete.limits_hit` is always empty.
 They use no language server: `evidence` is
 `{"sources":["tree-sitter"],"language_servers":[]}`.
 
+## Dependency analyzers
+
+Four analyzers read the file dependencies of a repository: `graph`
+(`act-lite analyze graph`), `analyze_cycles` (`act-lite analyze cycles`),
+`analyze_coupling` (`act-lite analyze coupling`) and `analyze_impact`
+(`act-lite analyze impact`). Each returns the result described under
+[Analysis results](#analysis-results), with `details` always present. They
+report which files import which other files, with the import statements as
+evidence. They do not report which symbols a file uses.
+
+**Languages.** The four analyzers support seven languages, in four families:
+JS/TS (JavaScript, JSX, TypeScript, TSX), Python, Go and Rust. The other 33
+languages are listed in `coverage.languages` with `supported: false`; a scope
+that holds only such files gives `unsupported`, and a mixed scope is not made
+incomplete by them. A language gets dependency resolution when its import
+construct names a file, or a package directory of files, by a rule that its
+language or toolchain documentation fixes and that act-lite can apply from the
+files in the repository, without compiler flags, build-system evaluation or
+the network.
+
+| Language | Relationship constructs | Static file rule | Supported | Reason when not supported |
+|---|---|---|---|---|
+| JavaScript | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| JSX | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| TypeScript | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| TSX | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| Python | `import`, `from … import` | yes | yes | — |
+| Go | `import` | yes | yes | — |
+| Rust | `mod`, `use`, `extern crate`, `include!` | yes | yes | — |
+| Dart | `import`/`export` URIs | relative URIs yes; `package:` needs `.dart_tool/package_config.json`, which a tool generates | no | Later candidate: user value below the seven. |
+| Ruby | `require_relative` (relative to the file), `require` (`$LOAD_PATH` at run time) | `require_relative` only | no | Later candidate; `require` has no static rule. |
+| Bash | `source`, `.` | no: the path is relative to the shell's working directory or `PATH` at run time | no | No static rule. |
+| C | `#include "…"`, `#include <…>` | no: search paths come from compiler flags | no | Needs build-system input. |
+| C++ | `#include "…"`, `#include <…>` | no: search paths come from compiler flags | no | Needs build-system input. |
+| C# | `using` | no: names a namespace, not a file | no | Not a file relationship. |
+| Java | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Kotlin | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Scala | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Swift | `import` | no: names a module (a build target); files of one module see each other | no | Not a file relationship. |
+| PHP | `use`, `require`/`include` | no: `use` names a namespace (autoload maps it through `composer.json`); `require` paths are often computed | no | Needs Composer autoload configuration. |
+| Elixir | `alias`, `import`, `use`, `require` | no: names modules; the build compiles every file | no | Not a file relationship. |
+| Lua | `require` | no: searched through `package.path` at run time | no | No static rule. |
+| CSS | `@import`, `@use`, `@forward` | CSS relative URLs yes; Sass load paths come from configuration | no | Later candidate: data and style formats are outside the supported set. |
+| SCSS | `@import`, `@use`, `@forward` | CSS relative URLs yes; Sass load paths come from configuration | no | Later candidate: data and style formats are outside the supported set. |
+| HCL/Terraform | module `source = "./…"` | yes for local paths (a directory) | no | Later candidate (directory targets). |
+| HTML | `<script src>`, `<link href>` | no: URLs resolve against a server root | no | Not a file relationship. |
+| Dockerfile | `FROM`, `COPY` | no: image names and build-context paths | no | Not a code dependency. |
+| JSON | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| YAML | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| TOML | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| Markdown | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| SQL | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| JSONC | none in the format | — | no | No relationship construct modeled. |
+| XML | none (no build-system semantics for XML) | — | no | No relationship construct modeled. |
+| GraphQL | none in the specification | — | no | No relationship construct. |
+| Protocol Buffers | `import "x.proto"` | no: resolved against `--proto_path` flags | no | Needs build input. |
+| Make | `include` | no: relative to make's working directory and `-I` | no | Needs build input. |
+| CMake | `include()`, `add_subdirectory()` | partly: `add_subdirectory` is relative to the current source directory; `include()` searches `CMAKE_MODULE_PATH` | no | Later candidate (`add_subdirectory`); `include()` needs configuration evaluation. |
+| Zig | `@import("x.zig")` | yes for a path literal (relative to the file); package names come from `build.zig` | no | Later candidate. |
+| R | `source()`, `library()` | no: `source` is relative to the working directory; `library` names packages | no | No static rule. |
+| Julia | `include("x.jl")`, `using`, `import` | `include` yes (relative to the file); `using` names packages | no | Later candidate. |
+| Nix | `import ./x.nix`, `<nixpkgs>` | yes for a path literal; `<…>` uses `NIX_PATH` | no | Later candidate. |
+
+**Parameters.** Each analyzer takes the shared parameters. `paths` is the
+*scope*: the files whose relationships are read. Only files in scope can be
+the source of an edge, so a dependent outside the scope is not found; the
+default scope is the workspace root. `graph` and `analyze_impact` also take:
+
+| MCP parameter | Option | Default | Meaning |
+|---|---|---|---|
+| `focus` | `--focus <PATH>`, repeatable, one path per flag | none | The files whose connections (`graph`) or dependents (`analyze_impact`, which needs at least one) are reported. A directory means every file below it. Each path must exist, be inside the workspace root and be at or below a `PATH` argument. |
+| `direction` | `--direction <in\|out\|both>` | `both` | `graph` with a focus only. `out`: what the focus files depend on. `in`: what depends on them. `both`: the union. |
+| `max_depth` | `--max-depth <N>` | `graph`: 1; `analyze_impact`: 1000 | How many edges from a focus file the traversal follows, 1 to 1000. For `graph`, with a focus only. |
+
+The focus files are the files that discovery reaches at or below a `focus`
+path, analyzed or not: discovery's directory pruning applies (`.git`, ignored,
+vendored and generated directories are not walked), and a file that a later
+step leaves out (unrecognized, tests, generated, globs, unsupported language,
+skipped) is still a focus file. A focus path that names a file, or a directory
+inside a pruned directory, is walked as named: `--focus vendor/lib/x.js` gives
+that one file. A focus file need not be analyzed: as the target of an `in`
+traversal it only needs analyzed sources (an `import './style.css'` makes
+`src/view.tsx` a dependent of the CSS file); only the `out` direction reads a
+focus file's own relationships. `graph` explores, and its first useful answer
+is the direct neighbourhood, so its default depth is 1. `analyze_impact` asks
+for direct and transitive dependents, so its default follows chains to the
+end; reaching 1000 is disclosed in `limits_hit`. The traversal costs time in
+proportion to the edges it visits, whatever the depth.
+
+**Relationships.** A *relationship* is one occurrence of an import construct in
+an analyzed file, with a `kind`, a `specifier` (the target text as written,
+without quotes) and a `range`. One statement can hold several relationships
+(`import a, b` in Python, `use a::{b, c}` in Rust, a Go `import (…)` block);
+they share the statement's range. Relationships inside removed test regions
+are not extracted. A file with a parse error gives the relationships of its
+recovered tree.
+
+A specifier, `#[path]` value or `include` argument read from a string literal
+is resolved by its value, decoded by the language's escape rules: JS/TS strings
+and template strings without a substitution (`\xHH`, `\uHHHH` and surrogate
+pairs, `\u{…}`, `\0`, single-character escapes, line continuations); Go
+interpreted strings (`\xHH`, octal `\OOO`, `\uHHHH`, `\UHHHHHHHH`,
+single-character escapes); Rust strings (`\xHH` up to `\x7F`, `\u{…}`,
+single-character escapes, line continuations). Go and Rust raw strings are
+their own value. The `specifier`, and the `target` of an `unresolved` entry,
+keep the written text. A literal that does not decode is `unresolved`, reason
+`invalid string literal`.
+
+| Family | Construct | `kind` | `specifier` | `range` |
+|---|---|---|---|---|
+| JS/TS | `import … from '…'`, `import '…'` | `import`; `type_import` for `import type` | the source string | the statement |
+| JS/TS | `export … from '…'`, `export * from '…'` | `reexport` | the source string | the statement |
+| JS/TS | `import(…)` | `dynamic_import` | the first argument when it is a string or a template string without a substitution; otherwise the argument's text, `unresolved` with reason `specifier is not a string literal` | the call |
+| JS/TS | `require(…)`; TS `import x = require('…')` | `require` | as `dynamic_import` | the call; the statement for `import x = require` |
+| Python | `import a.b.c`, `import a as b` | `import` | the dotted name | the statement |
+| Python | `from X import n`, `from X import *` | `from_import`, one per imported name, or one for `*` | the module name and the imported name joined by `.`, unless the module name ends with `.` (`from .models import User` gives `.models.User`, `from . import helpers` gives `.helpers`, `from a import *` gives `a.*`) | the statement |
+| Go | each import spec | `import` | the import path | the spec |
+| Rust | `mod x;` (without a body) | `module` | the name; a preceding `#[path = "…"]` replaces the file probe | the `mod` item, without its attributes |
+| Rust | `use` declaration, one per leaf path (`use a::{b, c::d}` gives `a::b` and `a::c::d`; `self` in a list gives the list's prefix; `use a::*` gives `a`; `use a::b as c` gives `a::b`) | `use` | the leaf path | the declaration |
+| Rust | `extern crate x;` | `extern_crate` | the name | the declaration |
+| Rust | `include!`, `include_str!`, `include_bytes!` | `include` | the string literal, or the argument's text when it is not a string literal (`unresolved`) | the invocation |
+| Rust | `mod x;` and `use …;` token sequences inside a macro invocation in item position: at module level or as a statement of a block (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens, and inside the `#[path …]` tokens, are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
+
+The kinds are `dynamic_import`, `extern_crate`, `from_import`, `import`,
+`include`, `module`, `reexport`, `require`, `type_import` and `use`. A Python `from __future__ import …` is not a relationship.
+
+**Outcomes.** Each relationship has exactly one outcome:
+
+| Outcome | Meaning | Where it appears | Effect on `complete` |
+|---|---|---|---|
+| `resolved` | The family rule finds one or more existing files inside the workspace. | an edge per target file | none |
+| `external` | The family rule places the target outside the workspace by a stated test (below). | `details.relationships.external`, and `external` per `analyze_coupling` item | none: the target is not a workspace file |
+| `unresolved` | The family rule cannot decide, or decides that the target should be a workspace file and finds none. | `incomplete.unresolved`, with `file`, `range`, `kind`, `target` (the specifier) and `reason` | `false` when the entry is relevant to the question (below) |
+
+An import is never `external` by default. It is `external` only by these
+tests: JS/TS, a Node built-in module name, a package that a `package.json` in
+the importing file's directory or an ancestor declares in a dependency table
+with a registry version, or a `node_modules/<package>/` directory there;
+Python, a top-level name that exists under none of the roots and is a
+standard-library module or a declared dependency; Go, a standard-library path
+(no `.` in the first path element), a path under no workspace module from a
+file that belongs to a workspace module, or a path under a module path that a
+`replace` of the file's `go.mod` replaces with a target outside the workspace; Rust, a built-in crate name (`std`,
+`core`, `alloc`, `proc_macro`, `test`) or a dependency key of the crate's
+`Cargo.toml`; every family, a path that leaves the workspace root. Two
+overrides apply: a name that the test would call `external` but that names a
+project of the workspace outside the vendored directories is `unresolved`,
+because a workspace file could be its target; and when a resolution input of
+the family could not be read, every relationship of that family that would be
+`external` is `unresolved`, reason `<file> could not be read`. Vendored
+directories are outside the analyzed project: a package name that resolves
+only into one is `external`.
+
+**Resolution.** Every probe lists the parent directory and compares names byte
+for byte, so the result is the same on case-sensitive and case-insensitive file
+systems. A probe resolves a symlink: a target inside the workspace is used at
+its own path, a target outside makes the relationship `external`, and a broken
+symlink is no match. A relative path is normalized (`.` and `..` removed)
+against the importing file's directory; one that leaves the workspace root is
+`external` without a probe. A probe can match a file that discovery excluded or
+that is outside `paths`: the relationship is `resolved` and the edge has
+`"to_analyzed": false`.
+
+- **JS/TS.** A specifier that starts with `./` or `../` is probed, first match
+  wins: for `.js`, `.jsx`, `.mjs` or `.cjs`, the TypeScript source first
+  (`.ts`, `.tsx`, `.d.ts` for `.js`; `.tsx` for `.jsx`; `.mts`, `.d.mts` for
+  `.mjs`; `.cts`, `.d.cts` for `.cjs`); the path as a file (any extension,
+  `./style.css` too); the path plus `.ts`, `.tsx`, `.d.ts`, `.js`, `.jsx`,
+  `.mjs`, `.cjs`, `.mts`, `.cts`, `.json`; the path as a directory, by its
+  `package.json` `main` (as a file, as a file plus each of those extensions,
+  then its own `index` plus each of those extensions; a trailing `/` on
+  `main` changes nothing), then `index` plus each of those extensions. No match
+  is `unresolved`, reason `no file matches <S>`. A specifier that starts with
+  `/` is `unresolved` (`root-relative specifier is not applied`); `node:` is
+  `external`; `#` is `unresolved` (`package.json "imports" is not applied`).
+  A bare specifier uses the nearest `tsconfig.json` or `jsconfig.json`
+  (`tsconfig.json` when both exist): first `compilerOptions.paths` (the
+  matching pattern with the longest prefix before `*`; each replacement is
+  probed from `baseUrl`, or from the declaring config's directory), then
+  `compilerOptions.baseUrl`, then a workspace package whose `package.json`
+  `name` is the package name (a package with an `exports` field is
+  `unresolved`, `package.json "exports" of <name> is not applied`; a name that
+  two `package.json` files declare is `unresolved`), then a dependency whose
+  value is `file:`, `link:`, `portal:` or `workspace:` and names a workspace
+  location, then the `external` test. Otherwise it is `unresolved`, reason
+  `bare specifier is not a declared dependency: <package name>`. A relative
+  `extends` of a config is read, and its `paths` and `baseUrl` apply unless the
+  extending config sets them.
+- **Python.** A file's *own root* is the parent of the topmost directory of the
+  chain of directories with `__init__.py` above it, or its own directory when
+  that has no `__init__.py`. The *roots*, in order, are the own root, the
+  workspace root, and `src/` when it is a directory. A module name is
+  resolved as its identifiers joined by `.`, without the whitespace and line
+  continuations between them (`import pkg . sub` resolves `pkg.sub`); the
+  `specifier` keeps the written text. Identifiers are compared, and module
+  files probed, after NFKC normalization, as Python reads them (PEP 3131):
+  the names a module binds and unbinds, the segments of a module name and
+  the `n` of `from X import n`. `K = 1` written with the Kelvin sign
+  (U+212A) binds `K`, so `from pkg import K` targets that `pkg/__init__.py`,
+  not `pkg/K.py`; `import ｐkg` (fullwidth `ｐ`) probes `pkg`. `a.b.c` exists under a
+  root as `a/b/c/__init__.py`, else `a/b/c.py`; a directory without
+  `__init__.py` is a namespace package (it exists, with no file). The name is
+  found segment by segment, as Python imports it: each segment before the last
+  must be a package (a regular package or a namespace package) in the one
+  before it, the package checked before a module file. A module file there
+  stops the search: with `a.py` and `a/b.py` but no `a/__init__.py`,
+  `import a.b` is `unresolved` (`a is not a package`). The submodules
+  of a regular package are found in its directory as written, also when its
+  `__init__.py` is a symlink to a file elsewhere; that file is read and
+  reported at its own path. `import
+  a.b.c` uses the first root under which `a` is a module or regular package,
+  else the first under which it is a namespace package. `from X import n`
+  targets `X`'s file when its top-level statements leave `n` bound (a
+  `match` binds the capture names of its `case` patterns,
+  such as `case n:` or `case [_, n]:`, and the names its case bodies bind;
+  an annotation binds only with a value: `n: int = 1` binds, `n: int` does
+  not; `n += 1` and `type n = …` bind; `n := …` binds wherever the module
+  runs it, also in a condition, a call argument, a list, set or dict
+  comprehension, a default value, a decorator or a base class, but not in a
+  `def`, `lambda` or `class` body or a generator expression (its body runs
+  only when it is iterated); `except … as n` does not bind, as `n` is deleted at the end
+  of the handler; a module-level `del n` unbinds, a `del` inside a block
+  does not; a `del` runs its targets from left to right, and a `:=` in a
+  target binds: `del items[(n := 0)]` binds `n`, `del items[(n := 0)], n`
+  does not; `global n` does not bind), else the submodule `X.n`, and also
+  `X`'s file when it has a `from … import *`. A
+  relative import (`.`, `..models`) resolves in the package of the file, and
+  is `unresolved` outside a package (`relative import outside a package`) or
+  above the top-level package (`relative import beyond the top-level
+  package`). A top-level name found under no root is `unresolved` when a
+  module or regular package of that name exists elsewhere in the workspace
+  (`<a> is a module of the workspace outside the roots: <path>`), `external`
+  when it passes the external test (a standard-library module of the list
+  below, or a distribution name, normalized by PEP 503, declared in a
+  `pyproject.toml`, `requirements*.txt` or `setup.cfg` in the file's directory
+  or an ancestor), else `unresolved`.
+- **Go.** The module map is the set of `go.mod` files in the workspace (not in
+  directories named `testdata` or starting with `_` or `.`). A `go.mod` is
+  read as the go command reads it: a quoted string (interpreted `"…"`,
+  decoded by Go's escapes, or raw `` `…` ``) is one word, and `//` starts a
+  comment only outside a string, in a single-line directive and in a
+  `replace ( … )` block; `replace example.com/lib => "./local lib"` replaces
+  with the directory `./local lib`. A `go.mod` that the go command rejects
+  is an input error (its `resolution_inputs` entry gets `error`, and the
+  result is incomplete): a string not closed on its line or that does not
+  decode, a `( … )` block not closed, a `module` directive without exactly
+  one path or a second `module` directive, a `replace` directive that is not
+  `old [version] => new [version]`, or no `module` directive. Every import of
+  a file whose own `go.mod` is such a file, except `C`, is `unresolved`
+  (`<go.mod> could not be read`). When the first well-formed `module` line of
+  such a `go.mod` can be read, its module path stays in the module map with
+  its directory, and an import under that path is `unresolved`
+  (`<go.mod> could not be read`) even when another module of the same path
+  would resolve it. An import path
+  under a module path (or under a `replace` directive with a relative path
+  inside the workspace) names the package directory below that module's
+  directory. A `replace` in the importing file's `go.mod`, with or without a
+  version, replaces its module path whatever its target: other workspace
+  modules that declare the same path are never candidates. A relative path
+  (`.`, `..`, or one starting with `./` or `../`) inside the workspace makes its directory the only directory of that module
+  path; a relative path outside the workspace, or a module path with a
+  version, makes an import under the replaced path `external`. A replacement
+  directory is compared with the module that owns a package at its own path,
+  symlinks inside the workspace resolved, as package files are: `./alias`, a
+  symlink to `actual`, gives the files of `actual`; a directory whose symlink
+  leads outside the workspace is outside it. When exactly one such directory exists, belongs to that module and
+  holds a `.go` file that is not a `*_test.go` file, the import has one edge to
+  each such file in it. Two are `unresolved` (`ambiguous import: <module
+  paths>`); none is `unresolved` (`no Go package files for <I> in the
+  workspace`). `C` (cgo) is `external`. A file under no `go.mod` of the
+  workspace gives `unresolved` (`file is under no go.mod in the workspace`) for
+  a path that is not standard library. Test files are never edge targets.
+- **Rust.** The crates are the `[package]` entries of the workspace's
+  `Cargo.toml` files, with their roots (`[lib]`, else `src/lib.rs`; `[[bin]]`
+  paths, else `src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`; `build.rs`;
+  `examples/*.rs`, `benches/*.rs`, `tests/*.rs`) and their dependencies. The
+  module tree follows the Rust Reference: `mod x;` probes `<dir>/x.rs`, then
+  `<dir>/x/mod.rs`, where `<dir>` is the module file's directory when the file
+  is a crate root, a `mod.rs` or a `#[path]` file, else that directory plus the
+  file's stem; `#[path = "p"]` replaces the probe (comments inside the
+  attribute are skipped). An absolute `#[path]` is `unresolved` (`absolute
+  path is not resolved: <path>`); one that leaves the workspace is
+  `external`. The same holds for each `mod x;` inside an inline module with
+  such a `#[path]` (`#[path = "/outside"] mod inline { mod x; }`), at any
+  depth: the inline module has no directory, and none is probed. A raw identifier `r#name` is the identifier
+  `name`: `mod r#type;` probes `type.rs`, then `type/mod.rs`, and `use`
+  segments, `extern crate` names, declared names and attribute names
+  compare without `r#`; the relationship's target keeps the written
+  spelling. A `use` path starts at the
+  crate root (`crate`), the current module (`self`), its parent (`super`), a
+  child module, the package's own lib (from a bin, example, bench, test or
+  `build.rs`), a path dependency or a workspace crate that the crate depends
+  on; it follows module segments, and its first remaining segment must be an
+  item that the reached module's file declares (or the file has a glob `use`).
+  A dependency is named as Cargo names it: by its key when the entry renames
+  the package (`baz = { package = "foo", … }`, also through an inherited
+  `workspace = true` entry), else by the depended-on crate's lib name
+  (`[lib] name`, else its package name with `-` replaced by `_`); a
+  dependency outside the workspace is named by its key.
+  A `use` inside a function, closure or other block body resolves as rustc
+  does: an inline module or an item declared in that body, or in a block
+  around it, is found first (`fn f() { mod x { … } use x::Y; }`). A `use`
+  in such a body binds its leaves and aliases there, in the whole block and
+  the blocks inside it, also before the `use`: a path whose first segment is
+  such a binding resolves through the binding's path, from the binding's
+  `use` (`fn f() { use crate::b as a; use a::Thing; }` targets the file of
+  `b`). A name that the body's scopes do not declare is also resolved
+  through each glob `use` of those scopes (`use m::*;`), and the targets
+  are combined with those of the rest of the lookup. Such an
+  inline module is not part of the crate's module tree. Inside it, `self` is
+  that module and `super` is the module around it, which ends at the module
+  that holds the body; directly in a body, `self` is the module that holds
+  the body. An inline module in a body does not see the body around it:
+  only its own names, the crates, and `crate`, `self` and `super` paths
+  apply. A path that stays inside the body targets the file itself, which is
+  a self-relationship: it is `resolved` and gives no edge.
+  A `mod x;` inside a body belongs to that body's scope, as an inline module
+  there does. rustc loads its file only through `#[path]`, so without one the
+  declaration is `unresolved` (`a file module inside a block needs a #[path]
+  attribute`). The `#[path]` is relative to the directory that a `#[path]`
+  outside the body would use, plus one directory for each inline module of
+  the body around the declaration (its own `#[path]`, else its name). The
+  declaration is a `module` relationship to the file, and the file is in the
+  crate tree, but `x` is not a child of the module around the body:
+  `crate::x` from elsewhere does not reach it, and a path inside the body
+  finds it first (`fn f() { #[path = "b.rs"] mod a; use a::Thing; }`
+  targets `b.rs`). In that file, `super` is the inline module of the body
+  around the declaration, else the module that holds the body; it does not
+  see the body's own items. The `mod`, `use` and item forms of a macro
+  invocation in a body belong to the body's scope in the same way
+  (`fn f() { cfg_x! { #[path = "b.rs"] mod a; } }`), never to the module
+  around it.
+  A file is in a crate tree when that tree's modules reach it, through any
+  `#[path]`, not by its directory: an example, bench or test root that loads
+  `src/shared.rs` has it in its tree. The trees of every workspace crate
+  count, not only those of the package of the file's nearest `Cargo.toml`,
+  and each tree resolves the file with its own package (lib name,
+  dependencies, `crate`). A file in several crate trees, or loaded as several
+  modules of one tree, resolves each relationship in every tree and every
+  module that loads it, in root order (the trees of the file's own package
+  first, then those of the other crates by directory): it is `resolved` when
+  any of them resolves it, with one edge to each distinct target, and
+  `unresolved` only when none resolves it, with the reason of the first tree.
+  `include!` paths are relative to the declaring file. A `Cargo.toml` that
+  cannot be read makes every relationship of its package `unresolved`.
+
+**What the dependency analyzers read.** Besides the files in scope, they read:
+
+- *Resolution inputs*: the configuration files found in the workspace,
+  whatever `paths` says, outside pruned directories, and only when an analyzed
+  file of their family needs them. Each is listed in
+  `details.resolution_inputs` (`{ "file", "kind" }`, at most 100, with
+  `resolution_inputs_total`); one that cannot be read or parsed keeps its entry
+  with an `error` key, and the relationships whose rule reads it are
+  `unresolved`, reason `<file> could not be read`. Such an input counts in
+  `incomplete.counts.failed_inputs` and makes the result incomplete by itself
+  (`complete` is `false`), also when every relationship resolves: a malformed `package.json` or `Cargo.toml` could
+  have declared a name that competes with another package or crate. A
+  resolution input that is
+  a symlink to a regular file inside the workspace is read through its target
+  and listed at the symlink's own path; its package or module directory is the
+  symlink's directory. A symlink whose target leaves the workspace, is not a
+  regular file, or does not exist is an input that cannot be read.
+
+  | File | `kind` | Family | What is read |
+  |---|---|---|---|
+  | `package.json` | `package.json` | JS/TS | `name`, `main`, the presence of `exports`, the keys of `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
+  | `tsconfig.json`, `jsconfig.json`, and each file a relative `extends` names (comments and trailing commas accepted) | `tsconfig` | JS/TS | `compilerOptions.baseUrl`, `compilerOptions.paths`, `extends` |
+  | `go.mod` | `go.mod` | Go | `module`, `replace` lines |
+  | `Cargo.toml` | `Cargo.toml` | Rust | `[package] name`, `[lib] name` and `path`, `[[bin]] path`, the dependency table keys |
+  | `pyproject.toml`, `requirements*.txt`, `setup.cfg` | `pyproject.toml`, `requirements`, `setup.cfg` | Python | the declared distribution names |
+
+  A `package.json`, `go.mod` or `Cargo.toml` below a test directory (`test`,
+  `tests`, `__tests__`, `spec`, `testdata`) adds no workspace package, module
+  or crate, so a test fixture that copies a real package does not create a
+  duplicate.
+- *Support reads*: source files that are not analyzed but that resolution
+  needs: the Rust module files of every crate tree of an analyzed file's
+  package (each tree is read once, to find every module that loads the file)
+  and those on a `use` path into another crate, and a module file whose names a `from X import n` or a `use` checks,
+  when that file is outside `paths` or excluded by discovery. Each is read and
+  parsed only for that purpose, with the grammar of the family that needs it
+  whatever the file's extension (a Python module file as Python, a Rust module
+  file as Rust, so a `#[path]` module without `.rs` and an `__init__.py` that
+  links to `init.js` are read), and an analyzed file read this way keeps its
+  own language in its analysis. The reads are under the 8 MiB, regular-file
+  and UTF-8 bounds, inside the workspace and outside pruned directories. Such
+  a file counts nowhere in `coverage`, and its own relationships are not
+  edges. When it cannot be read, the relationship that needed it is
+  `unresolved`, reason `<file> could not be read`.
+- *Probe listings*: the directory listings of the probes, including the
+  existence check of `node_modules/<package>/` in directories that discovery
+  prunes (metadata only; nothing in them is read).
+- *Removed Rust test regions*: the text of a removed test region is read only
+  for its `mod` declarations and inline modules, at any depth, with their
+  `#[path]` attributes and the `mod` forms of item-position macros, which
+  build the module tree (so a `src/tests.rs` that `#[cfg(test)] mod tests;`
+  loads is reached, and so is a `src/checks/helper.rs` that
+  `#[cfg(test)] mod checks { mod helper; }` loads). It is never analyzed, and
+  none of its relationships is reported.
+
+Nothing else is read, and nothing is written.
+
+**Edges.** An *edge* is an ordered pair (source file, target file) with at
+least one resolved relationship from the source to the target. The source is
+an analyzed file and the target is a workspace file. All relationships from
+one source to one target form one edge. A relationship whose target is its own
+source gives no edge and counts as `resolved`. `to_analyzed` is `true` when the
+target is an analyzed file of the same scope, else `false` (a CSS file, an
+excluded test file, a file outside `paths`); a traversal does not continue from
+a target with `to_analyzed: false`, because its relationships are unknown.
+
+```json
+{"file":"src/main.ts","to":"src/a.ts","to_analyzed":true,
+ "kinds":["import"],
+ "evidence":[{"range":"1:1-1:25","kind":"import","specifier":"./a"}],
+ "evidence_total":1}
+```
+
+`kinds` is the set of kinds in the edge; `evidence` holds at most 5
+relationships, in location order, with `evidence_total`. A *step*, used in
+cycle paths and impact chains, is the compact form
+`{ "file", "range", "kind", "specifier", "to" }` of an edge's first
+relationship.
+
+**Common `details`.** Every dependency analyzer returns
+`relationships` (`total`, `resolved`, `external`, `unresolved`, counted over
+every relationship of every analyzed file, also for `graph` and
+`analyze_impact`), `kinds` with `kinds_total` (the kinds that occur, in byte
+order), and `resolution_inputs` with `resolution_inputs_total`.
+
+**Which unresolved relationships count.** An unresolved relationship is listed
+in `incomplete.unresolved`, and makes `complete` `false`, when it is relevant
+to the question:
+
+| Analyzer | Relevant unresolved relationships |
+|---|---|
+| `analyze_coupling`, `graph` without `focus` | every one |
+| `analyze_cycles` | every one, except kind `module` (a `module` edge cannot be part of a cycle) |
+| `graph` with `direction: out` | those of the visited files whose outgoing relationships the traversal reads |
+| `graph` with `direction: in`, `analyze_impact` | those of every analyzed file in a family of a focus file, plus every unresolved JS/TS relationship and every unresolved Rust `include` (either can name a file of any language) |
+| `graph` with `direction: both` | the union of the two rows above |
+
+An irrelevant one is not listed, but still counts in
+`details.relationships.unresolved`. So an unresolved import never implies that
+a file has no dependents: an `analyze_impact` result with a relevant
+unresolved relationship is never `no_findings`.
+
+**Not modeled.** These relationships are not seen or not followed:
+
+1. Python `sys.path` entries other than the roots (`PYTHONPATH`, `.pth`
+   files, test-runner `pythonpath` settings): a module found only through them
+   is `external` or `unresolved`.
+2. Implicit relationships without an import construct: Go files of one
+   package use each other without an import; Python parent-package
+   `__init__.py` files that an import also runs; Rust paths in expressions
+   without `use`; JavaScript globals.
+3. Bundler constructs such as Vite's `import.meta.glob`, and relative imports
+   inside a namespace-only Python tree (no `__init__.py`), which are
+   `unresolved` (`relative import outside a package`) although Python accepts
+   them when the module runs as part of the package.
+4. Dynamic imports with a computed specifier (`import(name)`, `require(x)`):
+   extracted and `unresolved`, never dropped.
+5. Other constructs: Python `importlib` and `__import__`, JS
+   `new URL(…, import.meta.url)`, triple-slash references, Rust `macro_rules!`
+   imports.
+6. Build configuration: Go build constraints, Rust `cfg`,
+   `cfg_attr(…, path)` and features, bundler aliases (webpack, Vite) and
+   root-relative `/…` specifiers, `package.json` `exports` and `imports` maps,
+   non-relative `tsconfig` `extends` and project `references`, `go.work` (each
+   workspace module is found through its own `go.mod`).
+7. Names the rules cannot map: a Python import name that differs from its
+   distribution name (`yaml` for `PyYAML`) is `unresolved`; Rust macro output
+   other than the passed-through `mod`, `use` and item forms is not seen, so a
+   `use` into it is `unresolved`; Rust 2015-edition paths; a package name that
+   resolves only into a vendored directory is `external`, so the dependents of
+   a vendored file are found only through relative paths.
+8. Symbol-level relationships: an edge says that a file imports another file,
+   not which symbols it uses or whether it uses them.
+
+**`graph`.** The findings are edge objects with one more field, `depth`.
+Without `focus`, every edge whose source is an analyzed file, with `depth`
+`null`; `direction` and `max_depth` are errors there. With `focus`, a
+breadth-first traversal from the focus files (distance 0) visits files in
+distance order, then path order: `out` follows edges from a visited file to
+its targets, `in` from their sources to a visited file. An edge is reported
+when its near end (the source for `out`, the target for `in`) has a distance
+*d* below `max_depth`; its `depth` is *d* + 1. `both` reports the union, an
+edge found by both with the smaller `depth`. When an edge that the traversal
+would follow from a file at distance `max_depth` is not in the result,
+`limits_hit` has `{"limit":"max_depth","value":<max_depth>,"detail":"<n> files
+at depth <max_depth> have relationships that were not followed"}` and
+`complete` is `false`. Order: `depth`, then `file`, then `to`. `details` adds
+`direction` and `max_depth` (the effective values, `null` without focus),
+`focus` (the focus paths, at most 30) with `focus_total`, `focus_files` (the
+number of focus files), `focus_not_analyzed` (focus paths under which no file
+was analyzed, at most 30), `focus_files_not_analyzed` (each focus file that is
+not analyzed, `{ "file", "reason" }`, at most 30), each with its `_total`,
+`files` (the distinct files in all reported edges, before the `limit` cut) and
+`not_followed` (the targets with `to_analyzed: false` that the traversal
+reached, `{ "file" }`, at most 100, with `not_followed_total`). A reason is one
+of `excluded as tests`, `excluded as generated`, `excluded as vendored`,
+`excluded as ignored`, `left out by include or exclude`, `unrecognized`,
+`language not supported: <language>` and `skipped: <kind>`.
+
+**`analyze_cycles`.** The cycle graph is the set of edges among analyzed files
+with `to_analyzed: true`, without the edges whose only kind is `module`: a
+Rust `mod x;` states that a file contains a child module, and nearly every
+child refers back to its parent, so counting containment would make almost
+every crate one cycle. An edge with `module` and another kind counts. Each
+strongly connected component of two or more files is one finding: `file` (the
+member first in path order), `members` (in path order, at most 20, with
+`members_total`), `edges_total` (the edges between members), and `path`, one
+shortest cycle through `file`, as steps, starting and ending at `file` (a
+breadth-first search from `file` over edges inside the component, visiting
+targets in path order, stopping at the first edge back to `file`; at most 20
+steps, with `path_total`). Order: `members_total`, highest first, then `file`.
+`details` adds `cyclic_files` (the files in all components, before the `limit`
+cut) and `not_followed` with `not_followed_total` (the targets with
+`to_analyzed: false`, which the cycle graph leaves out). `no_findings` means
+no cycle among the analyzed files, on complete evidence. Every unresolved
+relationship except kind `module` makes `complete` `false`, because it could
+close a cycle.
+
+**`analyze_coupling`.** Over the edges (one per source and target, so repeated
+imports and several kinds count once; a self-relationship counts zero):
+
+| Value | Formula |
+|---|---|
+| `fan_in` | the number of distinct analyzed files with an edge to the file |
+| `fan_out` | the number of distinct workspace files the file has an edge to |
+| `degree` | `fan_in + fan_out` |
+| `instability` | `fan_out / (fan_in + fan_out)`, rounded to 3 decimals: 0 = only depended on, 1 = only depending |
+| `external`, `unresolved` | the file's relationships with that outcome; in no formula, they show how far `fan_out` is a lower bound |
+
+One finding per analyzed file with `degree` 1 or more:
+`{ "file", "fan_in", "fan_out", "degree", "instability", "external",
+"unresolved" }`. Order: `degree`, highest first, then `fan_in`, highest first,
+then `file`. `details` adds `formulas` (the four formulas, as text) and
+`edges` (the edges among the analyzed sources). `fan_in` counts only analyzed
+files: a scope narrower than the workspace undercounts it.
+
+**`analyze_impact`.** A dependent is a file that imports a focus file, directly or through other files. It is exposed to a change in the focus file. This is not proof that it will break, and a file that is not listed is not proof that it is safe: relationships that act-lite does not model (see the README) are not followed.
+
+`focus` is required. The traversal is `graph`'s `in` traversal from the focus
+files, with `max_depth` 1000 by default; each analyzed file reached that is not
+itself a focus file is one finding: `file`, `depth` (the distance to the
+nearest focus file: 1 is a direct dependent, more is transitive), `chain` (the
+steps from the dependent to a focus file, fixed by the traversal: each file
+keeps the edge through which it was first reached; at most 20 steps, with
+`chain_total`, equal to `depth`), and `reaches` (the focus file at the end of
+`chain`). Order: `depth`, then `file`. When a file at distance `max_depth` has
+a dependent that is neither a focus file nor reached, `limits_hit` has
+`{"limit":"max_depth","value":<max_depth>,"detail":"<n> files at depth
+<max_depth> have dependents that were not followed"}` and `complete` is
+`false`. `details` adds `max_depth`, the `focus` keys of `graph`, and `direct`
+and `transitive` (dependents at depth 1 and at depth 2 or more, before the
+`limit` cut). A focus file that depends on another focus file is not a
+dependent. `no_findings` means no dependent, on complete evidence.
+
+**Request errors.** In addition to the shared ones, checked in this order
+after `--limit`:
+
+| Request error | Message |
+|---|---|
+| `--max-depth` outside 1 to 1000 | `max_depth must be between 1 and 1000, got <n>` |
+| `direction` not `in`, `out` or `both` (over MCP; the command line rejects it with exit 2 and lists the values) | `direction must be one of in, out, both, got <value>` |
+| `analyze impact` without `--focus` | `impact needs at least one focus path` |
+| `analyze graph` with `--max-depth` and no `--focus` | `max_depth needs a focus path` |
+| `analyze graph` with `--direction` and no `--focus` | `direction needs a focus path` |
+| A `--focus` path does not exist | the not-found text |
+| A `--focus` path is outside the workspace root | `path must be inside the workspace root: <path>` |
+| A `--focus` path is not at or below a `PATH` argument | `focus path is not inside the requested paths: <path>` |
+| `analyze graph --direction out` and no focus file is analyzed (checked after discovery, after the empty-scope check) | `no focus file can be analyzed: <file> (<reason>)[, …]`, at most 10 entries, then `, …`; a focus directory with no file in scope is written `<dir>/ (no file)` |
+
+A `--max-depth` that is not an integer from 0 to 4294967295 is rejected with
+exit 2.
+
+**Bounds.** These analyzers read every in-scope file of up to 8 MiB and have no
+hard time or memory cap; cancel a run to bound its time. The analysis bounds
+are `max_depth` and the Rust module tree: one module tree holds at most 10,000
+module instances (a file that several `mod` declarations load is one instance
+for each). Past that, the tree's other modules are not expanded, the files only
+they load are not reached, and `limits_hit` has
+`{"limit":"rust_module_instances","value":10000,"detail":"the module tree of
+<root> reached 10000 module instances; its other modules were not expanded"}`,
+so `complete` is `false`. One relationship makes at most 10,000 lookups through
+the `use` bindings and globs of a body (each binding or glob with each path it
+is applied to is one lookup). Past that, the relationship keeps the targets
+found so far, and `limits_hit` has
+`{"limit":"rust_use_lookups","value":10000,"detail":"the use <path> in <file>
+reached 10000 lookups through block-local bindings and globs; its other lookups
+were not followed"}`, so `complete` is `false`. These two are the only
+`limits_hit` entries of `analyze_cycles` and `analyze_coupling`. Nested lists are cut at: `evidence` 5,
+`members`, `path` and `chain` 20, `focus`, `focus_not_analyzed` and
+`focus_files_not_analyzed` 30, `resolution_inputs` and `not_followed` 100. They
+start and use no language server: `evidence` is
+`{"sources":["tree-sitter"],"language_servers":[]}` when a file is analyzed.
+
+**Examples.** The workspace `acyclic` holds an empty `.git/` directory and four
+files:
+
+```text
+src/a.ts   import { b } from './b';
+           import fs from 'node:fs';
+src/b.ts   import { c } from './c';
+src/c.ts   export const c = 1;
+src/d.ts   import './b';
+           import './c';
+```
+
+The edges are `src/a.ts` → `src/b.ts`, `src/b.ts` → `src/c.ts`,
+`src/d.ts` → `src/b.ts` and `src/d.ts` → `src/c.ts`, with one `external`
+(`node:fs`). In every example below, `complete` is `true`, `total` is the
+number of findings, `truncated` is `false`, `coverage` is 4 analyzed
+TypeScript files, every `excluded` and `incomplete` list is empty, and
+`details.relationships` is
+`{"total":5,"resolved":4,"external":1,"unresolved":0}` with
+`"kinds":["import"]` and no resolution input.
+
+`act-lite --workspace acyclic analyze graph --focus src/b.ts --direction in`
+(MCP: `graph` with `{"focus":["src/b.ts"],"direction":"in"}`) gives `status`
+`findings` and:
+
+```json
+"findings":[{"file":"src/a.ts","to":"src/b.ts","to_analyzed":true,"depth":1,"kinds":["import"],"evidence":[{"range":"1:1-1:25","kind":"import","specifier":"./b"}],"evidence_total":1},
+            {"file":"src/d.ts","to":"src/b.ts","to_analyzed":true,"depth":1,"kinds":["import"],"evidence":[{"range":"1:1-1:14","kind":"import","specifier":"./b"}],"evidence_total":1}]
+```
+
+with `details` `"direction":"in"`, `"max_depth":1`, `"files":3`,
+`"focus":["src/b.ts"]` and `"focus_files":1`.
+
+`act-lite --workspace acyclic analyze coupling` (MCP: `analyze_coupling` with
+`{}`) gives `status` `findings` and:
+
+```json
+"findings":[{"file":"src/b.ts","fan_in":2,"fan_out":1,"degree":3,"instability":0.333,"external":0,"unresolved":0},
+            {"file":"src/c.ts","fan_in":2,"fan_out":0,"degree":2,"instability":0,"external":0,"unresolved":0},
+            {"file":"src/d.ts","fan_in":0,"fan_out":2,"degree":2,"instability":1,"external":0,"unresolved":0},
+            {"file":"src/a.ts","fan_in":0,"fan_out":1,"degree":1,"instability":1,"external":1,"unresolved":0}]
+```
+
+with `details` `"edges":4`.
+
+`act-lite --workspace acyclic analyze impact --focus src/c.ts` (MCP:
+`analyze_impact` with `{"focus":["src/c.ts"]}`) gives `status` `findings`
+and:
+
+```json
+"findings":[{"file":"src/b.ts","depth":1,"reaches":"src/c.ts","chain":[{"file":"src/b.ts","range":"1:1-1:25","kind":"import","specifier":"./c","to":"src/c.ts"}],"chain_total":1},
+            {"file":"src/d.ts","depth":1,"reaches":"src/c.ts","chain":[{"file":"src/d.ts","range":"2:1-2:14","kind":"import","specifier":"./c","to":"src/c.ts"}],"chain_total":1},
+            {"file":"src/a.ts","depth":2,"reaches":"src/c.ts","chain":[{"file":"src/a.ts","range":"1:1-1:25","kind":"import","specifier":"./b","to":"src/b.ts"},{"file":"src/b.ts","range":"1:1-1:25","kind":"import","specifier":"./c","to":"src/c.ts"}],"chain_total":2}]
+```
+
+with `details` `"max_depth":1000`, `"direct":2` and `"transitive":1`.
+
+`act-lite --workspace acyclic analyze cycles` (MCP: `analyze_cycles` with
+`{}`) gives `status` `no_findings`, `findings` `[]` and `details`
+`"cyclic_files":0`. The workspace `cyclic` holds an empty `.git/` directory
+and three files:
+
+```text
+src/a.ts     import { b } from './b';
+             export const a = 1;
+src/b.ts     import { a } from './a';
+             export const b = a;
+src/main.ts  import { a } from './a';
+```
+
+`act-lite --workspace cyclic analyze cycles` gives `status` `findings`,
+`complete` `true`, `details.relationships`
+`{"total":3,"resolved":3,"external":0,"unresolved":0}`, `"cyclic_files":2`,
+and:
+
+```json
+"findings":[{"file":"src/a.ts","members":[{"file":"src/a.ts"},{"file":"src/b.ts"}],"members_total":2,"edges_total":2,
+             "path":[{"file":"src/a.ts","range":"1:1-1:25","kind":"import","specifier":"./b","to":"src/b.ts"},
+                     {"file":"src/b.ts","range":"1:1-1:25","kind":"import","specifier":"./a","to":"src/a.ts"}],"path_total":2}]
+```
+
+**Fixed name lists.** The Node built-in modules (the `node:module`
+`builtinModules` list): `_http_agent`, `_http_client`, `_http_common`, `_http_incoming`, `_http_outgoing`, `_http_server`, `_stream_duplex`, `_stream_passthrough`, `_stream_readable`, `_stream_transform`, `_stream_wrap`, `_stream_writable`, `_tls_common`, `_tls_wrap`, `assert`, `assert/strict`, `async_hooks`, `buffer`, `child_process`, `cluster`, `console`, `constants`, `crypto`, `dgram`, `diagnostics_channel`, `dns`, `dns/promises`, `domain`, `events`, `fs`, `fs/promises`, `http`, `http2`, `https`, `inspector`, `inspector/promises`, `module`, `net`, `os`, `path`, `path/posix`, `path/win32`, `perf_hooks`, `process`, `punycode`, `querystring`, `readline`, `readline/promises`, `repl`, `stream`, `stream/consumers`, `stream/promises`, `stream/web`, `string_decoder`, `sys`, `timers`, `timers/promises`, `tls`, `trace_events`, `tty`, `url`, `util`, `util/types`, `v8`, `vm`, `wasi`, `worker_threads`, `zlib`.
+
+The Python standard-library modules (Python 3.13's `sys.stdlib_module_names`):
+`__future__`, `_abc`, `_aix_support`, `_android_support`, `_apple_support`, `_ast`, `_asyncio`, `_bisect`, `_blake2`, `_bz2`, `_codecs`, `_codecs_cn`, `_codecs_hk`, `_codecs_iso2022`, `_codecs_jp`, `_codecs_kr`, `_codecs_tw`, `_collections`, `_collections_abc`, `_colorize`, `_compat_pickle`, `_compression`, `_contextvars`, `_csv`, `_ctypes`, `_curses`, `_curses_panel`, `_datetime`, `_dbm`, `_decimal`, `_elementtree`, `_frozen_importlib`, `_frozen_importlib_external`, `_functools`, `_gdbm`, `_hashlib`, `_heapq`, `_imp`, `_interpchannels`, `_interpqueues`, `_interpreters`, `_io`, `_ios_support`, `_json`, `_locale`, `_lsprof`, `_lzma`, `_markupbase`, `_md5`, `_multibytecodec`, `_multiprocessing`, `_opcode`, `_opcode_metadata`, `_operator`, `_osx_support`, `_overlapped`, `_pickle`, `_posixshmem`, `_posixsubprocess`, `_py_abc`, `_pydatetime`, `_pydecimal`, `_pyio`, `_pylong`, `_pyrepl`, `_queue`, `_random`, `_scproxy`, `_sha1`, `_sha2`, `_sha3`, `_signal`, `_sitebuiltins`, `_socket`, `_sqlite3`, `_sre`, `_ssl`, `_stat`, `_statistics`, `_string`, `_strptime`, `_struct`, `_suggestions`, `_symtable`, `_sysconfig`, `_thread`, `_threading_local`, `_tkinter`, `_tokenize`, `_tracemalloc`, `_typing`, `_uuid`, `_warnings`, `_weakref`, `_weakrefset`, `_winapi`, `_wmi`, `_zoneinfo`, `abc`, `antigravity`, `argparse`, `array`, `ast`, `asyncio`, `atexit`, `base64`, `bdb`, `binascii`, `bisect`, `builtins`, `bz2`, `cProfile`, `calendar`, `cmath`, `cmd`, `code`, `codecs`, `codeop`, `collections`, `colorsys`, `compileall`, `concurrent`, `configparser`, `contextlib`, `contextvars`, `copy`, `copyreg`, `csv`, `ctypes`, `curses`, `dataclasses`, `datetime`, `dbm`, `decimal`, `difflib`, `dis`, `doctest`, `email`, `encodings`, `ensurepip`, `enum`, `errno`, `faulthandler`, `fcntl`, `filecmp`, `fileinput`, `fnmatch`, `fractions`, `ftplib`, `functools`, `gc`, `genericpath`, `getopt`, `getpass`, `gettext`, `glob`, `graphlib`, `grp`, `gzip`, `hashlib`, `heapq`, `hmac`, `html`, `http`, `idlelib`, `imaplib`, `importlib`, `inspect`, `io`, `ipaddress`, `itertools`, `json`, `keyword`, `linecache`, `locale`, `logging`, `lzma`, `mailbox`, `marshal`, `math`, `mimetypes`, `mmap`, `modulefinder`, `msvcrt`, `multiprocessing`, `netrc`, `nt`, `ntpath`, `nturl2path`, `numbers`, `opcode`, `operator`, `optparse`, `os`, `pathlib`, `pdb`, `pickle`, `pickletools`, `pkgutil`, `platform`, `plistlib`, `poplib`, `posix`, `posixpath`, `pprint`, `profile`, `pstats`, `pty`, `pwd`, `py_compile`, `pyclbr`, `pydoc`, `pydoc_data`, `pyexpat`, `queue`, `quopri`, `random`, `re`, `readline`, `reprlib`, `resource`, `rlcompleter`, `runpy`, `sched`, `secrets`, `select`, `selectors`, `shelve`, `shlex`, `shutil`, `signal`, `site`, `smtplib`, `socket`, `socketserver`, `sqlite3`, `sre_compile`, `sre_constants`, `sre_parse`, `ssl`, `stat`, `statistics`, `string`, `stringprep`, `struct`, `subprocess`, `symtable`, `sys`, `sysconfig`, `syslog`, `tabnanny`, `tarfile`, `tempfile`, `termios`, `textwrap`, `this`, `threading`, `time`, `timeit`, `tkinter`, `token`, `tokenize`, `tomllib`, `trace`, `traceback`, `tracemalloc`, `tty`, `turtle`, `turtledemo`, `types`, `typing`, `unicodedata`, `unittest`, `urllib`, `uuid`, `venv`, `warnings`, `wave`, `weakref`, `webbrowser`, `winreg`, `winsound`, `wsgiref`, `xml`, `xmlrpc`, `zipapp`, `zipfile`, `zipimport`, `zlib`, `zoneinfo`.
+
 ## Repository discovery
 
 An analyzer walks each requested path below the workspace root: a directory
@@ -914,7 +1612,9 @@ U+FFFD. A FIFO, socket or device file is not opened by discovery.
   process (for example with Ctrl-C), which then prints no result; over MCP,
   cancel the request, and the analysis stops at its next check.
 - **Side effects:** an analyzer writes no file, inside or outside the
-  workspace, keeps no cache, and starts no language server.
+  workspace, keeps no cache, and starts no language server. The dependency
+  analyzers also read configuration files and some files outside the scope
+  (see [What the dependency analyzers read](#dependency-analyzers)).
 
 ## `act-lite env`
 
@@ -968,7 +1668,7 @@ the reverse; a user with both binaries sees one set of secrets per project.
 ## Claude Code plugin
 
 The `plugin/` directory is a Claude Code plugin that registers the MCP server
-and adds eight skills: seven that you invoke and one shared skill.
+and adds nine skills: eight that you invoke and one shared skill.
 
 - `define-work` turns a request into an approved design before code is
   written: repo recon, one question at a time, three fresh reads of the
@@ -980,11 +1680,16 @@ and adds eight skills: seven that you invoke and one shared skill.
 - `diagnose-defect` finds the root cause of a defect and fixes it with a test
   that failed first.
 - `review-change` reviews a diff, branch or pull request for code health: the
-  structural problems in the changed functions and the duplication that
-  touches the change, as a report with no edit.
+  structural problems in the changed functions, the duplication that
+  touches the change, the files exposed to it (impact) and the dependency
+  cycles that involve it, as a report with no edit.
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
-  them, and the largest duplicated code, as a report with no edit.
+  them, the largest duplicated code, the dependency cycles and the most coupled
+  files, as a report with no edit.
+- `map-repo` maps a repository for orientation: its languages and size, the
+  files where complexity concentrates, and how those files connect to the rest,
+  as a report with no edit.
 
 `work-graph` is a shared skill, not one you invoke. It defines the work-graph
 format that `plan-work` writes and `execute-work` runs, and holds the script

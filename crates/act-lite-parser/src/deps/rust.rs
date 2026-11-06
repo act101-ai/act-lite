@@ -1,0 +1,628 @@
+//! Rust: `mod x;`, the leaves of each `use` tree, `extern crate`, the
+//! `include!` family, the `mod` and `use` forms inside an item-position macro
+//! invocation, the names a module file declares, and the blocks of its
+//! bodies that declare items (block-local scopes).
+//!
+//! tree-sitter leaves a macro body as a flat `token_tree`. Wrapper macros
+//! (`cfg_rt! { pub mod a; pub use a::B; }`) pass their items through, so at
+//! module level three token forms are read, each with an optional `pub` or
+//! `pub(…)`: `mod <name> ;`, `use <tree> ;` (the text is parsed again as a
+//! `use` declaration), and an item keyword followed by a name. A
+//! `# [ path = "…" ]` among the attributes directly before a `mod` form is
+//! its `#[path]` value. A comment is no token. A nested
+//! token tree is read the same way when it is the body of a nested macro
+//! invocation (`name! { … }`).
+//!
+//! A raw identifier `r#name` is the identifier `name`: declared names,
+//! inline module names and attribute names are given without `r#`; a
+//! relationship's specifier keeps the written spelling.
+
+use act_lite_core::CompactRange;
+use tree_sitter::Node;
+
+use super::{
+    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind,
+    UseBinding, nodes, range_of, rust_value, text, unquote,
+};
+use crate::{Grammar, Parser};
+
+const INCLUDE_MACROS: [&str; 3] = ["include", "include_str", "include_bytes"];
+
+/// The keywords that declare a name inside a macro body.
+const ITEM_KEYWORDS: [&str; 9] = [
+    "const", "enum", "fn", "mod", "static", "struct", "trait", "type", "union",
+];
+
+/// The item kinds whose `name` a module file declares.
+const NAMED_ITEMS: [&str; 9] = [
+    "const_item",
+    "enum_item",
+    "function_item",
+    "macro_definition",
+    "static_item",
+    "struct_item",
+    "trait_item",
+    "type_item",
+    "union_item",
+];
+
+/// One leaf of a `use` tree.
+struct Leaf {
+    path: String,
+    alias: Option<String>,
+    glob: bool,
+}
+
+/// A form read from a macro body.
+enum MacroItem {
+    /// The name, the range and the `#[path]` value.
+    Mod(String, CompactRange, Option<LiteralValue>),
+    Use(Vec<Leaf>, CompactRange),
+    Name(String),
+}
+
+pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
+    let mut found = Vec::new();
+    for node in nodes(root) {
+        match node.kind() {
+            "mod_item" if node.child_by_field_name("body").is_none() => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    found.push(Relationship {
+                        path_attribute: path_attribute(node, source),
+                        ..Relationship::new(RelationshipKind::Module, text(name, source), node)
+                    });
+                }
+            }
+            "use_declaration" => {
+                if let Some(argument) = node.child_by_field_name("argument") {
+                    for leaf in use_leaves(argument, source) {
+                        found.push(Relationship::new(RelationshipKind::Use, &leaf.path, node));
+                    }
+                }
+            }
+            "extern_crate_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    found.push(Relationship::new(
+                        RelationshipKind::ExternCrate,
+                        text(name, source),
+                        node,
+                    ));
+                }
+            }
+            "macro_invocation" => {
+                found.extend(include(node, source));
+                if at_item_level(node)
+                    && let Some(tree) = token_tree(node)
+                {
+                    let mut items = Vec::new();
+                    macro_items(tree, source, &mut items);
+                    for item in items {
+                        found.extend(macro_relationships(item));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+fn macro_relationships(item: MacroItem) -> Vec<Relationship> {
+    let relationship = |kind, specifier: String, range: &CompactRange| Relationship {
+        kind,
+        value: Ok(specifier.clone()),
+        specifier,
+        literal: true,
+        range: range.clone(),
+        imported: None,
+        path_attribute: None,
+        in_macro: true,
+    };
+    match item {
+        MacroItem::Mod(name, range, path_attribute) => vec![Relationship {
+            path_attribute,
+            ..relationship(RelationshipKind::Module, name, &range)
+        }],
+        MacroItem::Use(leaves, range) => leaves
+            .into_iter()
+            .map(|leaf| relationship(RelationshipKind::Use, leaf.path, &range))
+            .collect(),
+        MacroItem::Name(_) => Vec::new(),
+    }
+}
+
+/// The names declared at the module level of the file, its inline modules
+/// with their own names, and the blocks with items of each.
+pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
+    declared(root, source, false, false)
+}
+
+/// The names that the items of `container` declare, also those of the
+/// `mod`, `use` and item forms of its macro invocations. In a block, only
+/// the items and modules count: a `use` there and an `extern crate`
+/// declare nothing. In a body (`in_body`), the leaves of each `use` are
+/// also kept as bindings, and each `mod x;` as a file module of the scope.
+fn declared(container: Node, source: &str, block: bool, in_body: bool) -> ModuleNames {
+    let mut names = ModuleNames::default();
+    let mut cursor = container.walk();
+    for item in container.named_children(&mut cursor) {
+        match item.kind() {
+            kind if NAMED_ITEMS.contains(&kind) => {
+                if let Some(name) = item.child_by_field_name("name")
+                    && text(name, source) != "_"
+                {
+                    names.names.insert(unraw(text(name, source)).to_string());
+                }
+            }
+            "mod_item" => {
+                let Some(name) = item.child_by_field_name("name") else {
+                    continue;
+                };
+                let name = unraw(text(name, source)).to_string();
+                if let Some(body) = item.child_by_field_name("body") {
+                    names.names.insert(name.clone());
+                    names.inline.push(InlineModule {
+                        name,
+                        range: range_of(item),
+                        path_attribute: path_attribute(item, source),
+                        names: declared(body, source, false, in_body),
+                    });
+                } else if in_body {
+                    names.names.insert(name.clone());
+                    names.files.push((name, range_of(item)));
+                }
+            }
+            "use_declaration" if in_body => {
+                if let Some(argument) = item.child_by_field_name("argument") {
+                    for leaf in use_leaves(argument, source) {
+                        names.uses.extend(binding(&leaf, &range_of(item)));
+                        if !block {
+                            declare_leaf(&mut names, leaf);
+                        }
+                    }
+                }
+            }
+            "macro_invocation" | "expression_statement" => {
+                let invocation = if item.kind() == "macro_invocation" {
+                    Some(item)
+                } else {
+                    item.named_child(0)
+                        .filter(|c| c.kind() == "macro_invocation")
+                };
+                let mut items = Vec::new();
+                if let Some(tree) = invocation.and_then(token_tree) {
+                    macro_items(tree, source, &mut items);
+                }
+                for item in items {
+                    match item {
+                        MacroItem::Mod(name, range, _) => {
+                            let name = unraw(&name).to_string();
+                            names.names.insert(name.clone());
+                            if in_body {
+                                names.files.push((name, range));
+                            }
+                        }
+                        MacroItem::Name(name) => {
+                            names.names.insert(unraw(&name).to_string());
+                        }
+                        MacroItem::Use(leaves, range) => {
+                            for leaf in leaves {
+                                if in_body {
+                                    names.uses.extend(binding(&leaf, &range));
+                                }
+                                if !block {
+                                    declare_leaf(&mut names, leaf);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ if block => {}
+            "extern_crate_declaration" => {
+                if let Some(alias) = item.child_by_field_name("alias") {
+                    names.names.insert(unraw(text(alias, source)).to_string());
+                }
+            }
+            "use_declaration" => {
+                if let Some(argument) = item.child_by_field_name("argument") {
+                    for leaf in use_leaves(argument, source) {
+                        declare_leaf(&mut names, leaf);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks_in(container, source, &mut names.blocks);
+    names
+}
+
+/// The blocks with items under `node`, not inside another such block or an
+/// inline module; a block without items gives the blocks inside it.
+fn blocks_in(node: Node, source: &str, found: &mut Vec<BlockModule>) {
+    let mut stack: Vec<Node> = {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor).collect()
+    };
+    stack.reverse();
+    while let Some(child) = stack.pop() {
+        match child.kind() {
+            "mod_item" => {}
+            "block" => {
+                let names = declared(child, source, true, true);
+                if names.names.is_empty() && names.uses.is_empty() {
+                    found.extend(names.blocks);
+                } else {
+                    found.push(BlockModule {
+                        range: range_of(child),
+                        names,
+                    });
+                }
+            }
+            _ => {
+                let mut cursor = child.walk();
+                let children: Vec<Node> = child.named_children(&mut cursor).collect();
+                stack.extend(children.into_iter().rev());
+            }
+        }
+    }
+}
+
+/// The binding of a `use` leaf of the declaration at `range`; `None` for
+/// `as _`, which binds no name.
+fn binding(leaf: &Leaf, range: &CompactRange) -> Option<UseBinding> {
+    let name = match (&leaf.alias, leaf.glob) {
+        (_, true) => None,
+        (Some(alias), _) if alias == "_" => return None,
+        (Some(alias), _) => Some(unraw(alias).to_string()),
+        (None, _) => Some(unraw(leaf.path.rsplit("::").next().unwrap_or(&leaf.path)).to_string()),
+    };
+    Some(UseBinding {
+        name,
+        path: leaf.path.clone(),
+        range: range.clone(),
+    })
+}
+
+fn declare_leaf(names: &mut ModuleNames, leaf: Leaf) {
+    if leaf.glob {
+        names.glob = true;
+        return;
+    }
+    let name = leaf.alias.unwrap_or_else(|| {
+        let last = leaf.path.rsplit("::").next().unwrap_or(&leaf.path);
+        last.to_string()
+    });
+    names.names.insert(unraw(&name).to_string());
+}
+
+/// The identifier that `name` spells: `r#type` is `type`.
+fn unraw(name: &str) -> &str {
+    name.strip_prefix("r#").unwrap_or(name)
+}
+
+fn is_comment(node: &Node) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment")
+}
+
+/// The names of the `mod x;` declarations at the top level of `text`.
+pub(super) fn mods_in_text(text_: &str) -> Vec<String> {
+    let Ok(tree) = Parser::new().parse(text_, Grammar::Rust) else {
+        return Vec::new();
+    };
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    root.named_children(&mut cursor)
+        .filter(|item| item.kind() == "mod_item" && item.child_by_field_name("body").is_none())
+        .filter_map(|item| item.child_by_field_name("name"))
+        .map(|name| unraw(text(name, text_)).to_string())
+        .collect()
+}
+
+/// The leaves of a `use` tree: `a::{b, c::d}` gives `a::b` and `a::c::d`;
+/// `self` in a list gives the list's prefix; `a::*` gives `a`; `a::b as c`
+/// gives `a::b`; `::{a, b::c}` gives `::a` and `::b::c`.
+fn use_leaves(node: Node, source: &str) -> Vec<Leaf> {
+    let mut leaves = Vec::new();
+    collect_leaves(node, source, "", &mut leaves);
+    leaves
+}
+
+fn collect_leaves(node: Node, source: &str, prefix: &str, leaves: &mut Vec<Leaf>) {
+    let leaf = |path: String, glob| Leaf {
+        path,
+        alias: None,
+        glob,
+    };
+    match node.kind() {
+        "use_as_clause" => {
+            if let Some(path) = node.child_by_field_name("path") {
+                let first = leaves.len();
+                collect_leaves(path, source, prefix, leaves);
+                let alias = node
+                    .child_by_field_name("alias")
+                    .map(|a| text(a, source).to_string());
+                for leaf in &mut leaves[first..] {
+                    leaf.alias = alias.clone();
+                }
+            }
+        }
+        "use_wildcard" => {
+            let mut cursor = node.walk();
+            let path = match node.named_children(&mut cursor).find(|c| !is_comment(c)) {
+                Some(path) => join(prefix, &path_text(path, source)),
+                None => prefix.to_string(),
+            };
+            leaves.push(leaf(path, true));
+        }
+        "scoped_use_list" => {
+            // `::{a, b}` keeps its leading `::`: each leaf names a crate.
+            let mut cursor = node.walk();
+            let rooted = node.children(&mut cursor).any(|c| c.kind() == "::");
+            let prefix = match node.child_by_field_name("path") {
+                Some(path) => join(prefix, &path_text(path, source)),
+                None if rooted && prefix.is_empty() => "::".to_string(),
+                None => prefix.to_string(),
+            };
+            if let Some(list) = node.child_by_field_name("list") {
+                collect_leaves(list, source, &prefix, leaves);
+            }
+        }
+        "use_list" => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if !child.kind().ends_with("comment") {
+                    collect_leaves(child, source, prefix, leaves);
+                }
+            }
+        }
+        "self" if !prefix.is_empty() => leaves.push(leaf(prefix.to_string(), false)),
+        _ => leaves.push(leaf(join(prefix, &path_text(node, source)), false)),
+    }
+}
+
+fn join(prefix: &str, rest: &str) -> String {
+    if prefix.is_empty() {
+        rest.to_string()
+    } else if prefix == "::" {
+        format!("::{rest}")
+    } else {
+        format!("{prefix}::{rest}")
+    }
+}
+
+/// The text of a path without its whitespace and comments.
+fn path_text(node: Node, source: &str) -> String {
+    if is_comment(&node) {
+        return String::new();
+    }
+    if node.child_count() == 0 {
+        return text(node, source).split_whitespace().collect();
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .map(|child| path_text(child, source))
+        .collect()
+}
+
+/// The value of a `#[path = "…"]` attribute among the attributes before an
+/// item.
+fn path_attribute(item: Node, source: &str) -> Option<LiteralValue> {
+    let mut sibling = item.prev_sibling();
+    while let Some(node) = sibling {
+        match node.kind() {
+            "attribute_item" => {
+                if let Some(attribute) = first_named(node)
+                    && first_named(attribute).map(|p| unraw(text(p, source))) == Some("path")
+                    && let Some(value) = attribute.child_by_field_name("value")
+                    && let Some((_, path)) = string_value(value, source)
+                {
+                    return Some(path);
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = node.prev_sibling();
+    }
+    None
+}
+
+/// The first named child that is no comment.
+fn first_named(node: Node) -> Option<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| !is_comment(c))
+}
+
+/// The text without delimiters and the decoded value of a string literal;
+/// a raw string is its own value.
+fn string_value<'a>(node: Node, source: &'a str) -> Option<(&'a str, LiteralValue)> {
+    let written = text(node, source);
+    match node.kind() {
+        "string_literal" => {
+            let inner = unquote(written);
+            Some((inner, rust_value(inner)))
+        }
+        "raw_string_literal" => {
+            let inner = unquote(written.trim_start_matches('r').trim_matches('#'));
+            Some((inner, Ok(inner.to_string())))
+        }
+        _ => None,
+    }
+}
+
+/// `include!`, `include_str!` and `include_bytes!`: the string literal, or
+/// the argument's text when it is not one.
+fn include(node: Node, source: &str) -> Option<Relationship> {
+    let name = text(node.child_by_field_name("macro")?, source);
+    if !INCLUDE_MACROS.contains(&unraw(name.rsplit("::").next().unwrap_or(name))) {
+        return None;
+    }
+    let tree = token_tree(node)?;
+    let mut cursor = tree.walk();
+    let arguments: Vec<Node> = tree
+        .named_children(&mut cursor)
+        .filter(|c| !is_comment(c))
+        .collect();
+    if let [only] = arguments.as_slice()
+        && let Some((inner, value)) = string_value(*only, source)
+    {
+        return Some(Relationship {
+            value,
+            ..Relationship::new(RelationshipKind::Include, inner, node)
+        });
+    }
+    Some(Relationship {
+        literal: false,
+        ..Relationship::new(
+            RelationshipKind::Include,
+            unquote(text(tree, source)).trim(),
+            node,
+        )
+    })
+}
+
+fn token_tree(invocation: Node) -> Option<Node> {
+    let mut cursor = invocation.walk();
+    invocation
+        .named_children(&mut cursor)
+        .find(|c| c.kind() == "token_tree")
+}
+
+/// A macro invocation in item position: directly in a file, in an inline
+/// module, or as a statement of a block.
+fn at_item_level(invocation: Node) -> bool {
+    let mut parent = invocation.parent();
+    if parent.is_some_and(|p| p.kind() == "expression_statement") {
+        parent = parent.and_then(|p| p.parent());
+    }
+    match parent {
+        Some(p) if p.kind() == "source_file" || p.kind() == "block" => true,
+        Some(p) if p.kind() == "declaration_list" => {
+            p.parent().is_some_and(|m| m.kind() == "mod_item")
+        }
+        _ => false,
+    }
+}
+
+/// The `mod`, `use` and item-name forms of a macro body.
+fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
+    let mut cursor = tree.walk();
+    let all: Vec<Node> = tree.children(&mut cursor).collect();
+    let Some(tokens) = all.get(1..all.len().saturating_sub(1)) else {
+        return;
+    };
+    // A comment is no token: it keeps a pending attribute and does not split
+    // a declaration.
+    let tokens: Vec<Node> = tokens.iter().copied().filter(|t| !is_comment(t)).collect();
+    let kind_at = |j: usize| tokens.get(j).map(|t| t.kind());
+    // The `#[path]` value among the attributes read since the last item.
+    let mut attribute_path = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = tokens[i];
+        if token.kind() == "#"
+            && let Some(attribute) = tokens
+                .get(i + 1)
+                .filter(|t| t.kind() == "token_tree" && text(**t, source).starts_with('['))
+        {
+            if let Some(path) = path_in_attribute(*attribute, source) {
+                attribute_path = Some(path);
+            }
+            i += 2;
+            continue;
+        }
+        let path_attribute = attribute_path.take();
+        let mut j = i;
+        if token.kind() == "pub" {
+            j += 1;
+            if tokens
+                .get(j)
+                .is_some_and(|t| t.kind() == "token_tree" && text(*t, source).starts_with('('))
+            {
+                j += 1;
+            }
+        }
+        if kind_at(j) == Some("mod")
+            && kind_at(j + 1) == Some("identifier")
+            && kind_at(j + 2) == Some(";")
+        {
+            let name = text(tokens[j + 1], source).to_string();
+            items.push(MacroItem::Mod(
+                name,
+                span(token, tokens[j + 2]),
+                path_attribute,
+            ));
+            i = j + 3;
+            continue;
+        }
+        if kind_at(j) == Some("use")
+            && let Some(end) = (j + 1..tokens.len()).find(|&k| tokens[k].kind() == ";")
+            && let Some(leaves) = parse_use(&source[token.start_byte()..tokens[end].end_byte()])
+        {
+            items.push(MacroItem::Use(leaves, span(token, tokens[end])));
+            i = end + 1;
+            continue;
+        }
+        let word = text(token, source);
+        if ITEM_KEYWORDS.contains(&word) && kind_at(i + 1) == Some("identifier") {
+            items.push(MacroItem::Name(text(tokens[i + 1], source).to_string()));
+        } else if word == "macro_rules"
+            && kind_at(i + 1) == Some("!")
+            && kind_at(i + 2) == Some("identifier")
+        {
+            items.push(MacroItem::Name(text(tokens[i + 2], source).to_string()));
+        } else if token.kind() == "token_tree"
+            && i >= 2
+            && kind_at(i - 1) == Some("!")
+            && kind_at(i - 2) == Some("identifier")
+        {
+            macro_items(token, source, items);
+        }
+        i += 1;
+    }
+}
+
+/// The value of the attribute token tree `[path = "…"]`, comments skipped.
+fn path_in_attribute(attribute: Node, source: &str) -> Option<LiteralValue> {
+    let mut cursor = attribute.walk();
+    let tokens: Vec<Node> = attribute
+        .children(&mut cursor)
+        .filter(|t| !is_comment(t))
+        .collect();
+    match tokens.as_slice() {
+        [_, name, equals, value, _]
+            if name.kind() == "identifier"
+                && unraw(text(*name, source)) == "path"
+                && equals.kind() == "=" =>
+        {
+            string_value(*value, source).map(|(_, value)| value)
+        }
+        _ => None,
+    }
+}
+
+/// The leaves of a `use` form read from a macro body.
+fn parse_use(text_: &str) -> Option<Vec<Leaf>> {
+    let tree = Parser::new().parse(text_, Grammar::Rust).ok()?;
+    let root = tree.root_node();
+    if root.has_error() || root.named_child_count() != 1 {
+        return None;
+    }
+    let declaration = root
+        .named_child(0)
+        .filter(|d| d.kind() == "use_declaration")?;
+    let argument = declaration.child_by_field_name("argument")?;
+    Some(use_leaves(argument, text_))
+}
+
+fn span(first: Node, last: Node) -> CompactRange {
+    let (start, end) = (first.start_position(), last.end_position());
+    CompactRange::new(
+        start.row as u32 + 1,
+        start.column as u32 + 1,
+        end.row as u32 + 1,
+        end.column as u32 + 1,
+    )
+}

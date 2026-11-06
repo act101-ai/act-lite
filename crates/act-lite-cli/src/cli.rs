@@ -73,6 +73,14 @@ pub enum AnalyzeCommand {
     Hotspots(HotspotsArgs),
     /// Exact and renamed duplicate syntax subtrees
     Clones(ClonesArgs),
+    /// File dependency edges, or the edges a traversal from focus files reaches
+    Graph(GraphArgs),
+    /// File-level dependency cycles, each with one path around it
+    Cycles(CyclesArgs),
+    /// Incoming and outgoing file dependency counts per file
+    Coupling(CouplingArgs),
+    /// The files that depend on the focus files, directly or transitively
+    Impact(ImpactArgs),
     /// The test analyzer: reports each Rust function of 5 or more lines
     #[cfg(debug_assertions)]
     #[command(hide = true)]
@@ -101,6 +109,49 @@ pub struct ClonesArgs {
     /// Report only the clone classes with a member at or below this path (repeatable)
     #[arg(long, value_name = "PATH")]
     pub focus: Vec<String>,
+}
+
+/// Arguments for `analyze graph`.
+#[derive(clap::Args, Debug)]
+pub struct GraphArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+    /// Report the edges a traversal from the files at or below this path reaches (repeatable)
+    #[arg(long, value_name = "PATH")]
+    pub focus: Vec<String>,
+    /// With --focus: follow what the focus files depend on (out), what depends on them (in), or both [default: both]
+    #[arg(long, value_parser = ["in", "out", "both"])]
+    pub direction: Option<String>,
+    /// With --focus: the most edges from a focus file to follow, 1 to 1000 [default: 1]
+    #[arg(long, value_name = "N")]
+    pub max_depth: Option<u32>,
+}
+
+/// Arguments for `analyze cycles`.
+#[derive(clap::Args, Debug)]
+pub struct CyclesArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+}
+
+/// Arguments for `analyze coupling`.
+#[derive(clap::Args, Debug)]
+pub struct CouplingArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+}
+
+/// Arguments for `analyze impact`.
+#[derive(clap::Args, Debug)]
+pub struct ImpactArgs {
+    #[command(flatten)]
+    pub shared: SharedArgs,
+    /// Report the dependents of the files at or below this path (repeatable, at least one)
+    #[arg(long, value_name = "PATH")]
+    pub focus: Vec<String>,
+    /// The most edges from a focus file to follow, 1 to 1000 [default: 1000]
+    #[arg(long, value_name = "N")]
+    pub max_depth: Option<u32>,
 }
 
 /// The arguments every analyzer takes.

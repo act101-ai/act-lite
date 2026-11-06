@@ -55,6 +55,22 @@ pub const TOOLS: &[ToolEntry] = &[
         name: "analyze_clones",
         description: "Find duplicated code: exact and renamed duplicate syntax subtrees of at least 50 tokens, with member ranges, normalized size and variants. Exact matching ignores formatting and comments; renamed matching abstracts identifiers and literals consistently. A clone class shows the same syntax tree, not that the members behave the same. Use `focus` to report only the classes that touch given files. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100), focus (string[])]",
     },
+    ToolEntry {
+        name: "graph",
+        description: "Get the file dependency edges of a scope: each edge is a source file, the workspace file it imports, the relationship kinds (import, require, reexport, module, include and others) and the import ranges as evidence. Without `focus`, every edge of the scope; with `focus`, the edges a traversal from the focus files reaches, `direction` out (what they depend on), in (what depends on them) or both, up to `max_depth` edges away. Imports that resolve outside the workspace are counted as external, the ones that cannot be resolved are listed as unresolved. Covers JavaScript, JSX, TypeScript, TSX, Python, Go and Rust. The README lists the relationships act-lite does not model. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100), focus (string[]), direction (in, out or both, default both; needs focus), max_depth (u32, 1 to 1000, default 1; needs focus)]",
+    },
+    ToolEntry {
+        name: "analyze_cycles",
+        description: "Find file-level dependency cycles: each finding is a set of files in which every file reaches every other one through imports, with its members and one shortest path around the cycle as import steps. A Rust `mod` declaration alone does not make a cycle. An unresolved import makes the result incomplete, because it could close a cycle. Covers JavaScript, JSX, TypeScript, TSX, Python, Go and Rust. The README lists the relationships act-lite does not model. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+    },
+    ToolEntry {
+        name: "analyze_coupling",
+        description: "Count each file's dependencies: fan_in (distinct analyzed files that import it), fan_out (distinct workspace files it imports), degree = fan_in + fan_out and instability = fan_out / degree, with its external and unresolved import counts; the formulas are in `details`. fan_in counts only the analyzed files, so a scope narrower than the workspace undercounts it. Covers JavaScript, JSX, TypeScript, TSX, Python, Go and Rust. The README lists the relationships act-lite does not model. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+    },
+    ToolEntry {
+        name: "analyze_impact",
+        description: "List the files that depend on the focus files, directly or through other files, each with its depth and the chain of imports that reaches a focus file. A dependent is a file that imports a focus file, directly or through other files. It is exposed to a change in the focus file. This is not proof that it will break, and a file that is not listed is not proof that it is safe: relationships that act-lite does not model (see the README) are not followed. Only files in `paths` are read as importers. Covers JavaScript, JSX, TypeScript, TSX, Python, Go and Rust. Params: focus (string[], at least one) [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100), max_depth (u32, 1 to 1000, default 1000)]",
+    },
     #[cfg(debug_assertions)]
     ToolEntry {
         name: "analyze_fixture",

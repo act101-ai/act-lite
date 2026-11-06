@@ -57,11 +57,17 @@ fn run_closed(args: &[&str]) -> (std::process::ExitStatus, String) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("act-lite must spawn");
+    // Read stderr while waiting: a pipe buffer can be smaller than the
+    // usage text (the kernel shrinks new pipes under memory pressure), and a
+    // child that blocks on a full stderr never exits.
     let mut stderr = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut err = String::new();
+        stderr.read_to_string(&mut err).unwrap();
+        err
+    });
     let status = wait(&mut child, &format!("act-lite {args:?}"));
-    let mut err = String::new();
-    stderr.read_to_string(&mut err).unwrap();
-    (status, err)
+    (status, reader.join().unwrap())
 }
 
 #[test]

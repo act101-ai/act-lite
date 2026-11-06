@@ -15,12 +15,13 @@ sys.path.insert(0, str(SCRIPTS))
 
 import work_graph as wg  # noqa: E402
 
-HEADER = "| ID | Node | Depends | State | Tier | Refs |\n|----|------|---------|-------|-------|------|\n"
+HEADER = "| ID | Node | Depends | State | Capability | Refs |\n|----|------|---------|-------|------------|------|\n"
+TIER_HEADER = "| ID | Node | Depends | State | Tier | Refs |\n|----|------|---------|-------|-------|------|\n"
 LOG_HEADER = "| Date | Event |\n|------|-------|\n"
 
 
-def row(id_, depends="—", state="TODO", tier="normal", node=None, refs="—"):
-    return f"| {id_} | {node or 'Node ' + id_} | {depends} | {state} | {tier} | {refs} |"
+def row(id_, depends="—", state="TODO", capability="implementation", node=None, refs="—"):
+    return f"| {id_} | {node or 'Node ' + id_} | {depends} | {state} | {capability} | {refs} |"
 
 
 def contract(files="—", consumes="—", produces="—", acceptance="`make test` → pass", omit=()):
@@ -38,7 +39,7 @@ def contract(files="—", consumes="—", produces="—", acceptance="`make test
 class GraphDir:
     """A temporary graph directory built from rows, contracts and history."""
 
-    def __init__(self, rows, nodes=None, history=None, log=None, run="parallel=3", extra_header=""):
+    def __init__(self, rows, nodes=None, history=None, log=None, run="parallel=3", extra_header="", header=HEADER):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         log = log if log is not None else [("2026-10-21", "Graph created.")]
@@ -46,7 +47,7 @@ class GraphDir:
             "# Test Work Graph\n\n<!-- work-graph -->\n\n"
             "**Goal:** test.\n**Authority:** spec.md\n"
             f"**Run:** {run} · worktrees=.worktrees/test/ · disk-per-node=—\n{extra_header}\n"
-            "## Nodes\n\n" + HEADER + "\n".join(rows) + "\n\n## Log\n\n" + LOG_HEADER
+            "## Nodes\n\n" + header + "\n".join(rows) + "\n\n## Log\n\n" + LOG_HEADER
             + "\n".join(f"| {d} | {e} |" for d, e in log) + "\n"
         )
         self.graph = self.root / "graph.md"
@@ -56,7 +57,7 @@ class GraphDir:
             (self.root / "nodes" / f"{id_}.md").write_text(body, encoding="utf-8")
         if history is not None:
             (self.root / "history.md").write_text(
-                "# Test Work Graph — History\n\n## Nodes\n\n" + HEADER + "\n".join(history)
+                "# Test Work Graph — History\n\n## Nodes\n\n" + header + "\n".join(history)
                 + "\n\n## Log\n\n" + LOG_HEADER, encoding="utf-8")
 
     def check(self):
@@ -184,16 +185,41 @@ class CheckTests(CoreCase):
         g = self.make([row("N1")], nodes={"N1": contract()}, history=[row("N0", state="TODO")])
         self.assertDefect(g, "history: N0 is TODO; history holds only DONE or DROPPED")
 
-    def test_bad_state_and_tier_refused(self):
-        g = self.make([row("N1", state="WIP", tier="gpt")], nodes={"N1": contract()})
+    def test_bad_state_and_capability_refused(self):
+        g = self.make([row("N1", state="WIP", capability="gpt")], nodes={"N1": contract()})
         self.assertDefect(g, "N1: state WIP")
-        self.assertDefect(g, "N1: tier gpt is not simple, normal or demanding")
+        self.assertDefect(g, "N1: capability gpt is not lookup, mechanical, implementation or judgment")
 
-    def test_tier_opus_refused_and_strong_accepted(self):
-        bad = self.make([row("N1", tier="opus")], nodes={"N1": contract()})
-        self.assertDefect(bad, "N1: tier opus is not simple, normal or demanding")
-        good = self.make([row("N1", tier="demanding")], nodes={"N1": contract()})
+    def test_model_name_capability_refused_and_judgment_accepted(self):
+        bad = self.make([row("N1", capability="opus")], nodes={"N1": contract()})
+        self.assertDefect(bad, "N1: capability opus is not lookup, mechanical, implementation or judgment")
+        good = self.make([row("N1", capability="judgment")], nodes={"N1": contract()})
         self.assertEqual(good.check(), [])
+
+    def test_capability_graph_validates(self):
+        values = ("lookup", "mechanical", "implementation", "judgment")
+        g = self.make([row(f"N{i}", capability=v) for i, v in enumerate(values, 1)],
+                      nodes={f"N{i}": contract() for i in range(1, 5)})
+        self.assertEqual(g.check(), [])
+        self.assertEqual([r.capability for r in wg.load(g.graph).rows], list(values))
+
+    def test_tier_graph_validates_with_values_mapped(self):
+        g = self.make([row("N1", capability="simple"), row("N2", capability="normal"),
+                       row("N3", capability="demanding")],
+                      nodes={f"N{i}": contract() for i in range(1, 4)},
+                      history=[row("N0", state="DONE", capability="normal")], header=TIER_HEADER)
+        self.assertEqual(g.check(), [])
+        graph = wg.load(g.graph)
+        self.assertEqual([r.capability for r in graph.rows], ["mechanical", "implementation", "judgment"])
+        self.assertEqual([r.capability for r in graph.history], ["implementation"])
+
+    def test_tier_graph_unknown_value_refused(self):
+        g = self.make([row("N1", capability="opus")], nodes={"N1": contract()}, header=TIER_HEADER)
+        self.assertDefect(g, "N1: capability opus is not lookup, mechanical, implementation or judgment")
+
+    def test_tier_value_in_capability_graph_refused(self):
+        g = self.make([row("N1", capability="normal")], nodes={"N1": contract()})
+        self.assertDefect(g, "N1: capability normal is not lookup, mechanical, implementation or judgment")
 
     def test_blocked_and_dropped_states_accepted(self):
         g = self.make(
@@ -321,8 +347,8 @@ class LedgerRowsTests(CoreCase):
         return g, path
 
     @staticmethod
-    def jrow(id_, depends=(), state="TODO", tier="normal"):
-        return {"id": id_, "node": f"Node {id_}", "depends": list(depends), "state": state, "tier": tier, "refs": ""}
+    def jrow(id_, depends=(), state="TODO", capability="implementation", key="capability"):
+        return {"id": id_, "node": f"Node {id_}", "depends": list(depends), "state": state, key: capability, "refs": ""}
 
     def run_main(self, args):
         out = io.StringIO()
@@ -337,6 +363,29 @@ class LedgerRowsTests(CoreCase):
         )
         code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
         self.assertEqual(code, 0, out)
+
+    def test_rows_json_capability_loads(self):
+        g, rows = self.ledger([self.jrow("N1", capability="lookup"), self.jrow("N2", ["N1"], capability="judgment")],
+                              {"N1": contract(), "N2": contract()})
+        code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
+        self.assertEqual(code, 0, out)
+        graph = wg.load(g.graph, rows=json.loads(rows.read_text(encoding="utf-8")))
+        self.assertEqual([r.capability for r in graph.rows], ["lookup", "judgment"])
+
+    def test_rows_json_legacy_tier_loads_mapped(self):
+        g, rows = self.ledger([self.jrow("N1", capability="simple", key="tier"),
+                               self.jrow("N2", ["N1"], capability="demanding", key="tier")],
+                              {"N1": contract(), "N2": contract()})
+        code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
+        self.assertEqual(code, 0, out)
+        graph = wg.load(g.graph, rows=json.loads(rows.read_text(encoding="utf-8")))
+        self.assertEqual([r.capability for r in graph.rows], ["mechanical", "judgment"])
+
+    def test_rows_json_missing_capability_refused(self):
+        g, rows = self.ledger([{"id": "N1", "depends": [], "state": "TODO"}], {"N1": contract()})
+        code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
+        self.assertEqual(code, 1)
+        self.assertIn("row 1: missing capability", out)
 
     def test_rows_json_cycle_refused(self):
         g, rows = self.ledger([self.jrow("N1", ["N2"]), self.jrow("N2", ["N1"])], {"N1": contract(), "N2": contract()})
@@ -430,6 +479,34 @@ class ArchiveTests(CoreCase):
             self.assertEqual(wg.main(["archive", str(g.graph)]), 0)
         self.assertEqual(g.check(), [])
 
+    def test_archive_tier_graph_keeps_its_header(self):
+        rows = [row(f"N{i}", state="DONE", capability="normal") for i in range(1, 28)] + [row("N99", capability="simple")]
+        g = self.make(rows, nodes={"N99": contract()}, header=TIER_HEADER)
+        wg.archive(wg.load(g.graph))
+        history = (g.root / "history.md").read_text(encoding="utf-8")
+        self.assertIn(TIER_HEADER.splitlines()[0], history)
+        self.assertIn(row("N1", state="DONE", capability="normal"), history)
+        self.assertEqual(g.check(), [])
+        self.assertEqual([r.id for r in wg.load(g.graph).history], ["N1", "N2"])
+
+
+    def test_archive_tier_graph_into_capability_history_maps_values(self):
+        rows = ([row("N1", state="DONE", capability="simple"), row("N2", state="DONE", capability="demanding")]
+                + [row(f"N{i}", state="DONE", capability="normal") for i in range(3, 28)]
+                + [row("N99", capability="simple")])
+        g = self.make(rows, nodes={"N99": contract()}, header=TIER_HEADER)
+        (g.root / "history.md").write_text(
+            "# Test Work Graph — History\n\n## Nodes\n\n" + HEADER + row("N0", state="DONE")
+            + "\n\n## Log\n\n" + LOG_HEADER, encoding="utf-8")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(wg.main(["archive", str(g.graph)]), 0)
+            self.assertEqual(wg.main(["check", str(g.graph)]), 0, out.getvalue())
+        history = (g.root / "history.md").read_text(encoding="utf-8")
+        self.assertIn(row("N1", state="DONE", capability="mechanical"), history)
+        self.assertIn(row("N2", state="DONE", capability="judgment"), history)
+        self.assertEqual([r.capability for r in wg.load(g.graph).history], ["implementation", "mechanical", "judgment"])
+
 
 class TemplateTests(unittest.TestCase):
     """The shipped templates, filled in, pass check: template and script agree."""
@@ -453,6 +530,7 @@ class TemplateTests(unittest.TestCase):
             node = re.sub(r"<[^<>]+>", "x", node)
             (root / "nodes").mkdir()
             (root / "nodes" / "N1.md").write_text(node + "\n", encoding="utf-8")
+            self.assertIn(HEADER.splitlines()[0], graph)
             loaded = wg.load(root / "graph.md")
             self.assertEqual([r.id for r in loaded.rows], ["N1"])
             self.assertEqual(wg.check(loaded), [])
@@ -570,7 +648,7 @@ class ReviewFixTests(CoreCase):
     def test_l2_archive_with_rows_moves_only_log(self):
         g = self.make([], log=[("2026-09-01", "old"), ("2026-10-21", "new")])
         rows = g.root / "rows.json"
-        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "tier": "normal"}]), encoding="utf-8")
+        rows.write_text(json.dumps([{"id": "N1", "depends": [], "state": "TODO", "capability": "implementation"}]), encoding="utf-8")
         (g.root / "nodes" / "N1.md").write_text(contract(), encoding="utf-8")
         code, out = self.run_main(["check", str(g.graph), "--rows", str(rows)])
         self.assertEqual(code, 1)
