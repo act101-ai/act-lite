@@ -350,6 +350,25 @@ add_library(\"lib\" STATIC a.c)
 ";
 
 #[test]
+fn a_comment_before_the_first_argument_does_not_hide_a_declaration() {
+    let source = "set(\n  # c\n  FOO 1\n)\nset(BAR 1 BAZ)\nset(#[[ b ]] BRK 3)\nfunction(\n  # c\n  qf a)\nendfunction()\nadd_library(# c\n  core STATIC a.c)\n";
+    let expected = pair_set(&[
+        ("variable", "FOO"),
+        ("variable", "BAR"),
+        ("variable", "BRK"),
+        ("function", "qf"),
+        ("class", "core"),
+    ]);
+    let ws = workspace("CMakeLists.txt", source);
+    let (_, list) = skeleton_declarations(ws.path(), "CMakeLists.txt");
+    assert_eq!(pairs(&Value::Array(list)), expected);
+    let (symbols, _) = symbol_triples(ws.path(), "CMakeLists.txt");
+    let symbol_pairs: BTreeSet<(String, String)> =
+        symbols.into_iter().map(|(k, n, _)| (k, n)).collect();
+    assert_eq!(symbol_pairs, expected);
+}
+
+#[test]
 fn quote_and_bracket_delimiters_are_not_part_of_a_name() {
     let ws = workspace("CMakeLists.txt", DELIMITED);
     let (_, list) = skeleton_declarations(ws.path(), "CMakeLists.txt");

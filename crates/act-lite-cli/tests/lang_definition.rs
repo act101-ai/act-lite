@@ -284,6 +284,15 @@ fn cmake_variable_use_resolves_to_the_variable_not_the_enclosing_argument() {
 }
 
 #[test]
+fn cmake_use_resolves_to_a_declaration_behind_a_leading_comment() {
+    let ws = workspace(&[(
+        "CMakeLists.txt",
+        "set(\n  # c\n  FOO 1\n)\nmessage(${FOO})\n",
+    )]);
+    assert_found(ws.path(), "CMakeLists.txt", "FOO", 5, 11, "FOO 3:3-3:6");
+}
+
+#[test]
 fn cmake_use_resolves_to_a_quoted_or_bracketed_declaration_content() {
     let ws = workspace(&[(
         "CMakeLists.txt",

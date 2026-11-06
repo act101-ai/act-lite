@@ -2,7 +2,7 @@
 (function_def
   (function_command
     (argument_list
-      .
+      . [(line_comment) (bracket_comment)]* .
       (argument
         [
           (unquoted_argument) @name
@@ -16,7 +16,7 @@
 (macro_def
   (macro_command
     (argument_list
-      .
+      . [(line_comment) (bracket_comment)]* .
       (argument
         [
           (unquoted_argument) @name
@@ -30,7 +30,7 @@
 (normal_command
   (identifier) @command
   (argument_list
-    .
+    . [(line_comment) (bracket_comment)]* .
     (argument
       [
         (unquoted_argument) @name
@@ -45,7 +45,7 @@
 (normal_command
   (identifier) @command
   (argument_list
-    .
+    . [(line_comment) (bracket_comment)]* .
     (argument
       [
         (unquoted_argument) @name
@@ -60,7 +60,7 @@
 (normal_command
   (identifier) @command
   (argument_list
-    .
+    . [(line_comment) (bracket_comment)]* .
     (argument
       [
         (unquoted_argument) @name
@@ -75,7 +75,7 @@
 (normal_command
   (identifier) @command
   (argument_list
-    .
+    . [(line_comment) (bracket_comment)]* .
     (argument
       [
         (unquoted_argument) @name
@@ -90,7 +90,7 @@
 (normal_command
   (identifier) @command
   (argument_list
-    .
+    . [(line_comment) (bracket_comment)]* .
     (argument
       [
         (unquoted_argument) @name
