@@ -427,8 +427,26 @@ pub(crate) fn traverse_observed(
 
 impl Analyzer for GraphAnalyzer {
     const NAME: &'static str = "graph";
-    const HINT: &'static str = "Narrow the result with paths, include, exclude or focus, or change limit; with a focus, max_depth sets how far the traversal goes.";
+    const HINT: &'static str =
+        "Narrow the result with paths, include, exclude or focus, or change limit.";
     type Finding = GraphFinding;
+
+    /// With a focus, the hint also names `max_depth`.
+    fn hint(&self) -> &'static str {
+        if self.focus.is_empty() {
+            Self::HINT
+        } else {
+            "Narrow the result with paths, include, exclude or focus, or change limit; max_depth sets how far the traversal goes."
+        }
+    }
+
+    fn narrowing(&self) -> &'static [&'static str] {
+        if self.focus.is_empty() {
+            &["focus"]
+        } else {
+            &["focus", "max_depth"]
+        }
+    }
 
     fn supports(&self, grammar: Grammar) -> bool {
         deps::supports(grammar)

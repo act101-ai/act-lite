@@ -154,6 +154,10 @@ impl Analyzer for ImpactAnalyzer {
     const HINT: &'static str = "Narrow the result with paths, include, exclude or focus, or change limit; max_depth sets how far the traversal goes.";
     type Finding = ImpactFinding;
 
+    fn narrowing(&self) -> &'static [&'static str] {
+        &["focus", "max_depth"]
+    }
+
     fn supports(&self, grammar: Grammar) -> bool {
         deps::supports(grammar)
     }

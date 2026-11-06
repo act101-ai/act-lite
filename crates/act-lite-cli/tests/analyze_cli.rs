@@ -986,3 +986,161 @@ fn data_formats_are_unsupported_for_every_analyzer() {
         }
     }
 }
+
+// ---- the dependency analyzers: graph, cycles, coupling, impact ----
+
+/// The `acyclic` workspace: a diamond of imports, `src/a.ts` → `src/b.ts` →
+/// `src/c.ts` and `src/d.ts` → `src/b.ts`, `src/c.ts`, with one external.
+fn acyclic(root: &Path) {
+    fs::create_dir_all(root.join(".git")).unwrap();
+    write(
+        root,
+        "src/a.ts",
+        "import { b } from './b';\nimport fs from 'node:fs';\n",
+    );
+    write(root, "src/b.ts", "import { c } from './c';\n");
+    write(root, "src/c.ts", "export const c = 1;\n");
+    write(root, "src/d.ts", "import './b';\nimport './c';\n");
+}
+
+#[test]
+fn dependency_subcommands_name_their_options() {
+    let ws = TempDir::new().unwrap();
+    for (analyzer, options) in [
+        ("graph", &["--focus", "--direction", "--max-depth"][..]),
+        ("cycles", &[][..]),
+        ("coupling", &[][..]),
+        ("impact", &["--focus", "--max-depth"][..]),
+    ] {
+        let run = run_named(ws.path(), analyzer, &["--help"]);
+        assert_eq!(run.code, Some(0), "{analyzer}: {}", run.stderr);
+        for option in options {
+            assert!(
+                run.stdout.contains(option),
+                "{analyzer} {option}: {}",
+                run.stdout
+            );
+        }
+    }
+    let impact = run_named(ws.path(), "impact", &["--help"]).stdout;
+    assert!(!impact.contains("--direction"), "{impact}");
+}
+
+#[test]
+fn dependency_analyzers_run_through_the_cli() {
+    let ws = TempDir::new().unwrap();
+    acyclic(ws.path());
+    for (analyzer, args, status) in [
+        ("graph", &[][..], "findings"),
+        ("cycles", &[][..], "no_findings"),
+        ("coupling", &[][..], "findings"),
+        ("impact", &["--focus", "src/c.ts"][..], "findings"),
+    ] {
+        let v = run_named(ws.path(), analyzer, args).json();
+        assert_eq!(v["analysis"], analyzer, "{v}");
+        assert_eq!(v["status"], status, "{analyzer}: {v}");
+    }
+}
+
+/// The stderr of a clap usage error, after checking its exit status.
+fn usage_error(run: Run) -> String {
+    assert_eq!(run.code, Some(2), "stdout: {}", run.stdout);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    run.stderr
+}
+
+#[test]
+fn dependency_request_errors() {
+    let tmp = TempDir::new().unwrap();
+    let ws = &tmp.path().join("ws");
+    acyclic(ws);
+    write(ws, "src/style.css", "a {}\n");
+    write(tmp.path(), "x.ts", "export const x = 1;\n");
+    let range = |n: &str| format!("max_depth must be between 1 and 1000, got {n}");
+    for (analyzer, args, message) in [
+        (
+            "graph",
+            &["--max-depth", "2"][..],
+            "max_depth needs a focus path".to_string(),
+        ),
+        ("graph", &["--max-depth", "0"][..], range("0")),
+        ("graph", &["--max-depth", "1001"][..], range("1001")),
+        (
+            "graph",
+            &["--direction", "in"][..],
+            "direction needs a focus path".to_string(),
+        ),
+        (
+            "graph",
+            &["--focus", "src/c.ts", "--max-depth", "1001"][..],
+            range("1001"),
+        ),
+        (
+            "graph",
+            &["--focus", "src/style.css", "--direction", "out"][..],
+            "no focus file can be analyzed: src/style.css (language not supported: CSS)"
+                .to_string(),
+        ),
+        (
+            "impact",
+            &[][..],
+            "impact needs at least one focus path".to_string(),
+        ),
+        ("impact", &["--max-depth", "0"][..], range("0")),
+        (
+            "impact",
+            &["--focus", "src/c.ts", "--max-depth", "1001"][..],
+            range("1001"),
+        ),
+    ] {
+        assert_eq!(
+            request_error(run_named(ws, analyzer, args)),
+            message,
+            "{analyzer} {args:?}"
+        );
+    }
+    for analyzer in ["graph", "impact"] {
+        let missing = request_error(run_named(ws, analyzer, &["--focus", "nope.ts"]));
+        assert!(
+            missing.starts_with("The path 'nope.ts' does not exist."),
+            "{analyzer}: {missing}"
+        );
+        assert_eq!(
+            request_error(run_named(ws, analyzer, &["--focus", "../x.ts"])),
+            "path must be inside the workspace root: ../x.ts",
+            "{analyzer}"
+        );
+        assert_eq!(
+            request_error(run_named(
+                ws,
+                analyzer,
+                &["src/a.ts", "--focus", "src/c.ts"]
+            )),
+            "focus path is not inside the requested paths: src/c.ts",
+            "{analyzer}"
+        );
+    }
+}
+
+#[test]
+fn dependency_usage_errors_exit_2() {
+    let ws = TempDir::new().unwrap();
+    acyclic(ws.path());
+    let direction = usage_error(run_named(
+        ws.path(),
+        "graph",
+        &["--focus", "src/c.ts", "--direction", "up"],
+    ));
+    for value in ["in", "out", "both"] {
+        assert!(direction.contains(value), "{direction}");
+    }
+    for analyzer in ["graph", "impact"] {
+        for depth in ["two", "-1", "4294967296"] {
+            usage_error(run_named(
+                ws.path(),
+                analyzer,
+                &["--focus", "src/c.ts", "--max-depth", depth],
+            ));
+        }
+    }
+}

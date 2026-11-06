@@ -299,6 +299,62 @@ pub struct ClonesParams {
     pub focus: Vec<String>,
 }
 
+/// Parameters for the graph tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GraphParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+    /// The files whose connections are reported, relative to the workspace root;
+    /// a directory means every file below it. Default: every edge of the scope.
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub focus: Vec<String>,
+    /// With a focus: `out` (what the focus files depend on), `in` (what depends
+    /// on them) or `both`. Default: both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// With a focus: how many edges from a focus file the traversal follows,
+    /// 1 to 1000. Default: 1.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u32_lax_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_depth: Option<u32>,
+}
+
+/// Parameters for the analyze_cycles tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CyclesParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+}
+
+/// Parameters for the analyze_coupling tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CouplingParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+}
+
+/// Parameters for the analyze_impact tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ImpactParams {
+    #[serde(flatten)]
+    pub shared: AnalyzeParams,
+    /// The files whose dependents are reported, relative to the workspace root;
+    /// a directory means every file below it. At least one is required.
+    #[serde(default, deserialize_with = "deserialize_string_vec_or_empty")]
+    pub focus: Vec<String>,
+    /// How many edges from a focus file the traversal follows, 1 to 1000.
+    /// Default: 1000.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_u32_lax_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_depth: Option<u32>,
+}
+
 /// Parameters for the analyze_fixture tool.
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -330,6 +386,16 @@ fn default_analyze_limit() -> u32 {
     100
 }
 
+/// Like [`deserialize_u32_lax`], with null read as `None`.
+fn deserialize_u32_lax_opt<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Lax(#[serde(deserialize_with = "deserialize_u32_lax")] u32);
+    Option::<Lax>::deserialize(deserializer).map(|v| v.map(|Lax(n)| n))
+}
+
 /// Like [`deserialize_string_vec_lax`], with an absent or null array read as
 /// empty.
 fn deserialize_string_vec_or_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -340,18 +406,28 @@ where
 }
 
 /// The hint shown with an analyzer's result: how to narrow a truncated
-/// result, and the counts of any cut evidence list; else `usual`.
+/// result, with `paths`, `include`, `exclude` and the analyzer's own
+/// `narrowing` parameters, and the counts of any cut evidence list; else
+/// `usual`.
 pub fn analyze_hint(
     total: u64,
     truncated: bool,
     excluded: &Excluded,
     incomplete: &Incomplete,
     usual: &str,
+    narrowing: &[&str],
 ) -> String {
     let mut parts = Vec::new();
     if truncated {
+        let names: Vec<String> = ["paths", "include", "exclude"]
+            .iter()
+            .chain(narrowing)
+            .map(|name| format!("`{name}`"))
+            .collect();
+        let (last, rest) = names.split_last().expect("three names at least");
         parts.push(format!(
-            "The result holds {total} findings in total and is cut to `limit`. Narrow it with `paths`, `include` or `exclude`, or change `limit` (0 to 1000)."
+            "The result holds {total} findings in total and is cut to `limit`. Narrow it with {} or {last}, or change `limit` (0 to 1000).",
+            rest.join(", ")
         ));
     }
     if excluded.truncated {
@@ -407,13 +483,13 @@ mod tests {
 
     #[test]
     fn untruncated_result_gets_the_usual_hint() {
-        let hint = analyze_hint(3, false, &excluded(100), &incomplete(100), "usual");
+        let hint = analyze_hint(3, false, &excluded(100), &incomplete(100), "usual", &[]);
         assert_eq!(hint, "usual");
     }
 
     #[test]
     fn truncated_result_names_the_narrowing_parameters_and_total() {
-        let hint = analyze_hint(3, true, &excluded(0), &incomplete(0), "usual");
+        let hint = analyze_hint(3, true, &excluded(0), &incomplete(0), "usual", &[]);
         for word in ["`paths`", "`include`", "`exclude`", "`limit`", "3 findings"] {
             assert!(hint.contains(word), "{word}: {hint}");
         }
@@ -422,7 +498,7 @@ mod tests {
 
     #[test]
     fn cut_evidence_lists_give_their_counts() {
-        let hint = analyze_hint(0, false, &excluded(101), &incomplete(102), "usual");
+        let hint = analyze_hint(0, false, &excluded(101), &incomplete(102), "usual", &[]);
         assert!(
             hint.contains("tests 101, generated 0, vendored 0, ignored 0"),
             "{hint}"

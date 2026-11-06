@@ -20,6 +20,17 @@ pub trait Analyzer: Send + Sync {
     const HINT: &'static str;
     type Finding: Finding;
 
+    /// The usual next step for this request. By default [`Analyzer::HINT`].
+    fn hint(&self) -> &'static str {
+        Self::HINT
+    }
+
+    /// The analyzer's own parameters that the hint of a truncated result
+    /// names beside `paths`, `include` and `exclude`. By default none.
+    fn narrowing(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Whether the analyzer reads files of `grammar`.
     fn supports(&self, grammar: Grammar) -> bool;
 
