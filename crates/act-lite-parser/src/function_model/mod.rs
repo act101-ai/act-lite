@@ -22,6 +22,7 @@ mod tokens;
 
 use act_lite_core::CompactRange;
 use act_lite_core::registry::LanguageCategory;
+use std::borrow::Cow;
 use tree_sitter::Node;
 
 use crate::{Grammar, SourceFile};
@@ -77,6 +78,39 @@ pub fn functions_in<'a>(
     tree: &'a tree_sitter::Tree,
     source: &'a str,
 ) -> Functions<'a> {
+    with_lines(grammar, tree, source, Cow::Owned(LineStarts::new(source).0))
+}
+
+/// The start byte of each line of a text, computed once and shared by the
+/// trees of one file (a component file has one tree per region).
+pub struct LineStarts(Vec<usize>);
+
+impl LineStarts {
+    pub fn new(source: &str) -> Self {
+        LineStarts(
+            std::iter::once(0)
+                .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+                .collect(),
+        )
+    }
+}
+
+/// [`functions_in`] with the line starts of `source` computed by the caller.
+pub fn functions_in_lines<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+    lines: &'a LineStarts,
+) -> Functions<'a> {
+    with_lines(grammar, tree, source, Cow::Borrowed(&lines.0))
+}
+
+fn with_lines<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+    line_starts: Cow<'a, [usize]>,
+) -> Functions<'a> {
     let ctx = table::row(grammar)
         .filter(|_| supports(grammar))
         .map(|row| Ctx {
@@ -92,9 +126,7 @@ pub fn functions_in<'a>(
     Functions {
         ctx,
         stack,
-        line_starts: std::iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
-            .collect(),
+        line_starts,
     }
 }
 
@@ -102,7 +134,7 @@ pub fn functions_in<'a>(
 pub struct Functions<'a> {
     ctx: Option<Ctx<'a>>,
     stack: Vec<Node<'a>>,
-    line_starts: Vec<usize>,
+    line_starts: Cow<'a, [usize]>,
 }
 
 impl Iterator for Functions<'_> {
