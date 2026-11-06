@@ -53,8 +53,9 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
 /// statements bind, also inside top-level `if`, `try`, `with`, `match` and
 /// loop blocks, by a top-level `for` target, `with … as` alias or `case`
 /// pattern capture, and by a `:=` the module runs (not inside a function,
-/// lambda or class body). An `except … as` name is deleted at the end of
-/// its handler, and a module-level `del` unbinds what it names.
+/// lambda or class body or a generator expression). An `except … as` name
+/// is deleted at the end of its handler, and a module-level `del` unbinds
+/// what it names.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     let mut names = ModuleNames::default();
     let mut cursor = root.walk();
@@ -84,8 +85,12 @@ fn bind_block(block: Node, source: &str, names: &mut ModuleNames) {
 
 /// The `:=` targets of the parts of a statement that run at module scope:
 /// not its blocks (each is a statement list of its own, read by
-/// `bind_block`, or a function or class body), and not a lambda's body.
+/// `bind_block`, or a function or class body), not a lambda's body, and not
+/// a generator expression, whose body runs only when it is iterated.
 fn bind_walrus(node: Node, source: &str, names: &mut ModuleNames) {
+    if node.kind() == "generator_expression" {
+        return;
+    }
     if node.kind() == "named_expression"
         && let Some(name) = node.child_by_field_name("name")
     {

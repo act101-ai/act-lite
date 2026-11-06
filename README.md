@@ -961,9 +961,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   such as `case n:` or `case [_, n]:`, and the names its case bodies bind;
   an annotation binds only with a value: `n: int = 1` binds, `n: int` does
   not; `n += 1` and `type n = …` bind; `n := …` binds wherever the module
-  runs it, also in a condition, a call argument, a comprehension, a default
-  value, a decorator or a base class, but not in a `def`, `lambda` or
-  `class` body; `except … as n` does not bind, as `n` is deleted at the end
+  runs it, also in a condition, a call argument, a list, set or dict
+  comprehension, a default value, a decorator or a base class, but not in a
+  `def`, `lambda` or `class` body or a generator expression (its body runs
+  only when it is iterated); `except … as n` does not bind, as `n` is deleted at the end
   of the handler; a module-level `del n` unbinds, a `del` inside a block
   does not; a `del` runs its targets from left to right, and a `:=` in a
   target binds: `del items[(n := 0)]` binds `n`, `del items[(n := 0)], n`
@@ -983,7 +984,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   directories named `testdata` or starting with `_` or `.`). An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
-  directory. When exactly one such directory exists, belongs to that module and
+  directory. A `replace` with a relative path in the importing file's
+  `go.mod`, with or without a version, makes its directory the only
+  directory of that module path: other workspace modules that declare the
+  same path are not candidates. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
   each such file in it. Two are `unresolved` (`ambiguous import: <module
   paths>`); none is `unresolved` (`no Go package files for <I> in the
@@ -1243,9 +1247,15 @@ A `--max-depth` that is not an integer from 0 to 4294967295 is rejected with
 exit 2.
 
 **Bounds.** These analyzers read every in-scope file of up to 8 MiB and have no
-hard time or memory cap; cancel a run to bound its time. The only analysis
-bound is `max_depth`, so the `limits_hit` of `analyze_cycles` and
-`analyze_coupling` is always empty. Nested lists are cut at: `evidence` 5,
+hard time or memory cap; cancel a run to bound its time. The analysis bounds
+are `max_depth` and the Rust module tree: one module tree holds at most 10,000
+module instances (a file that several `mod` declarations load is one instance
+for each). Past that, the tree's other modules are not expanded, the files only
+they load are not reached, and `limits_hit` has
+`{"limit":"rust_module_instances","value":10000,"detail":"the module tree of
+<root> reached 10000 module instances; its other modules were not expanded"}`,
+so `complete` is `false`. That is the only `limits_hit` entry of
+`analyze_cycles` and `analyze_coupling`. Nested lists are cut at: `evidence` 5,
 `members`, `path` and `chain` 20, `focus`, `focus_not_analyzed` and
 `focus_files_not_analyzed` 30, `resolution_inputs` and `not_followed` 100. They
 start and use no language server: `evidence` is

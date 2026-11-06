@@ -254,6 +254,8 @@ fn a_name_still_bound_in_the_package_file_beats_a_submodule() {
     for init in [
         "if (n := 1): pass\n",
         "print([(n := x) for x in [1]])\n",
+        "print({(n := x) for x in [1]})\n",
+        "print({(n := x): 1 for x in [1]})\n",
         "n = 0\nn += 1\n",
         "type n = int\n",
         "items = [1]\ndel items[(n := 0)]\n",
@@ -276,6 +278,8 @@ fn a_name_still_bound_in_the_package_file_beats_a_submodule() {
 fn a_name_no_longer_bound_in_the_package_file_does_not_beat_a_submodule() {
     for init in [
         "f = lambda: (n := 1)\n",
+        "g = ((n := x) for x in [1])\n",
+        "print(sum((n := x) for x in [1]))\n",
         "class C:\n    m = (n := 1)\n",
         "try:\n    pass\nexcept ValueError as n:\n    n = 1\n",
         "n = 1\ndel n\n",

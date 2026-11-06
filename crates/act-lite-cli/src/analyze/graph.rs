@@ -549,6 +549,8 @@ impl Analyzer for GraphAnalyzer {
             *self.focus_set.lock().map_err(|_| poisoned())? = Some(set);
             (findings, unresolved, limits_hit, traversal.not_followed)
         };
+        let mut limits_hit = limits_hit;
+        limits_hit.extend_from_slice(graph.limits_hit());
         let files: BTreeSet<&str> = findings
             .iter()
             .flat_map(|f: &GraphFinding| [f.edge.file.as_str(), f.edge.to.as_str()])

@@ -649,13 +649,18 @@ def q():
 #[test]
 fn python_assignment_expressions_bound_at_module_scope() {
     // A `:=` binds in the module wherever the module runs it, also in a
-    // comprehension, a default value, a decorator or a base class; not in a
-    // function, lambda or class body.
+    // list, set or dict comprehension, a default value, a decorator or a
+    // base class; not in a function, lambda or class body, and not in a
+    // generator expression, whose body runs only when it is iterated.
     let file = parse(
         Grammar::Python,
         r#"if (a := 1): pass
 print((b := 2))
 [(cv := x) for x in [1] if (d := x)]
+{(sc := x) for x in [1]}
+{(dk := x): 1 for x in [1]}
+gen = ((gb := x) for x in [1] if (gf := x))
+print(sum((ga := x) for x in [1]))
 f = lambda p=(g := 1): (h := 2)
 @(i := deco)
 def j(q=(k := 1)):
@@ -678,8 +683,8 @@ def fn():
     assert_eq!(
         deps::module_names(&file).names,
         names(&[
-            "C", "a", "aa", "b", "bb", "cc", "cv", "d", "dd", "ee", "f", "ff", "fn", "g", "gg",
-            "i", "j", "k", "r", "u", "v", "w"
+            "C", "a", "aa", "b", "bb", "cc", "cv", "d", "dd", "dk", "ee", "f", "ff", "fn", "g",
+            "gen", "gg", "i", "j", "k", "r", "sc", "u", "v", "w"
         ])
     );
 }

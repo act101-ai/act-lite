@@ -108,7 +108,7 @@ impl Analyzer for CouplingAnalyzer {
         Ok(Analysis {
             findings,
             unresolved: graph.unresolved(&|_| true),
-            limits_hit: Vec::new(),
+            limits_hit: graph.limits_hit().to_vec(),
             details: Some(details(&graph)),
         })
     }

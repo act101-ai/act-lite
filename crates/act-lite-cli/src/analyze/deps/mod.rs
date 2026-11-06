@@ -18,7 +18,7 @@ pub mod rust;
 mod toml;
 
 use super::discovery::{Skip, walk_workspace};
-use super::envelope::{AnalyzeError, Unresolved};
+use super::envelope::{AnalyzeError, LimitHit, Unresolved};
 use super::read::{
     DirEntry, EntryKind, FileSource, Parsed, RemovedRegion, SupportError, SymlinkTarget,
 };
@@ -179,6 +179,8 @@ struct State {
     reads: HashMap<String, Result<Vec<RemovedRegion>, String>>,
     /// The workspace walk under the request's includes, on first use.
     workspace: OnceCell<Result<Walked, AnalyzeError>>,
+    /// The analysis bounds that resolution reached, each once.
+    limits: Vec<LimitHit>,
     cache: HashMap<TypeId, Box<dyn Any + Send>>,
 }
 
@@ -499,6 +501,20 @@ impl ResolveCx<'_> {
         }
     }
 
+    /// Whether the request is cancelled: a resolver that works on without
+    /// reads checks this, so that a cancel stops it soon.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Records that resolution reached an analysis bound; the graph lists
+    /// each distinct entry once.
+    pub fn limit_hit(&mut self, hit: LimitHit) {
+        if !self.state.limits.contains(&hit) {
+            self.state.limits.push(hit);
+        }
+    }
+
     /// One value of type `T` for the whole build.
     pub fn cache<T: Default + Send + 'static>(&mut self) -> &mut T {
         self.state
@@ -615,6 +631,8 @@ pub struct DepGraph {
     edges: Vec<Edge>,
     /// The resolution inputs read: kind and error, by path.
     inputs: BTreeMap<String, (InputKind, Option<String>)>,
+    /// The analysis bounds that resolution reached.
+    limits_hit: Vec<LimitHit>,
 }
 
 impl DepGraph {
@@ -685,6 +703,9 @@ impl DepGraph {
                 if let Some(err) = walk_failed(&mut state) {
                     return Err(err);
                 }
+                if cancel.is_cancelled() {
+                    return Err(AnalyzeError::Cancelled);
+                }
                 resolved.push(ResolvedRel {
                     relationship,
                     outcome,
@@ -709,6 +730,7 @@ impl DepGraph {
             }
         }
         graph.edges = edges(&graph.relationships, &graph.analyzed);
+        graph.limits_hit = state.limits;
         graph.inputs = state
             .inputs
             .into_iter()
@@ -720,6 +742,11 @@ impl DepGraph {
     /// Sorted by `file`, then `to`.
     pub fn edges(&self) -> &[Edge] {
         &self.edges
+    }
+
+    /// The analysis bounds that resolution reached, for `limits_hit`.
+    pub fn limits_hit(&self) -> &[LimitHit] {
+        &self.limits_hit
     }
 
     /// The files whose relationships were read.
