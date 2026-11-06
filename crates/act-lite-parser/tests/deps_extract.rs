@@ -410,6 +410,28 @@ fn use_trees_give_one_relationship_per_leaf() {
 }
 
 #[test]
+fn a_leading_path_separator_before_a_use_list_is_kept() {
+    let file = parse(
+        Grammar::Rust,
+        "use ::{std::fmt};\nuse ::{a, b::c};\nuse ::{x::{y}};\nuse :: /* c */ {d};\nw! { use ::{e::f}; }\n",
+    );
+    let specifiers: Vec<(String, u32)> = deps::extract(&file)
+        .into_iter()
+        .map(|r| (r.specifier, r.range.start_line()))
+        .collect();
+    let expected = [
+        ("::std::fmt", 1),
+        ("::a", 2),
+        ("::b::c", 2),
+        ("::x::y", 3),
+        ("::d", 4),
+        ("::e::f", 5),
+    ];
+    let expected: Vec<(String, u32)> = expected.iter().map(|(s, l)| (s.to_string(), *l)).collect();
+    assert_eq!(specifiers, expected);
+}
+
+#[test]
 fn macro_token_forms_are_relationships() {
     let file = parse(
         Grammar::Rust,
