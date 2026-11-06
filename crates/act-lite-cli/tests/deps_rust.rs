@@ -345,6 +345,30 @@ fn a_use_through_a_module_that_a_macro_declares() {
 }
 
 #[test]
+fn a_path_attribute_inside_a_macro_replaces_the_probe() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "cfg_x! {\n    #[path = \"other.rs\"]\n    mod x;\n}\nuse crate::x::Thing;\n",
+    );
+    write(root, "src/other.rs", "pub struct Thing;\n");
+    write(root, "src/x.rs", "pub struct Decoy;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "x"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "crate::x::Thing"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(pairs(&graph), [edge("src/lib.rs", "src/other.rs")]);
+}
+
+#[test]
 fn a_use_through_a_missing_module_file() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();
