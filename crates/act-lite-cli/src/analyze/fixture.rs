@@ -59,6 +59,7 @@ impl Analyzer for FixtureAnalyzer {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: None,
+            input_failed: false,
         })
     }
 }

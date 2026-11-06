@@ -781,6 +781,11 @@ impl DepGraph {
         &self.limits_hit
     }
 
+    /// Whether a resolution input could not be read or parsed.
+    pub fn input_failed(&self) -> bool {
+        self.inputs.values().any(|(_, error)| error.is_some())
+    }
+
     /// The files whose relationships were read.
     pub fn analyzed(&self) -> &BTreeSet<String> {
         &self.analyzed

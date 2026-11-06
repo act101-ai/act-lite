@@ -110,6 +110,7 @@ impl Analyzer for CouplingAnalyzer {
             unresolved: graph.unresolved(&|_| true),
             limits_hit: graph.limits_hit().to_vec(),
             details: Some(details(&graph)),
+            input_failed: graph.input_failed(),
         })
     }
 }

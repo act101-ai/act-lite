@@ -1093,3 +1093,57 @@ fn a_symlinked_go_mod_that_leaves_the_workspace_is_an_input_error() {
         "{listed}"
     );
 }
+
+/// A malformed `go.mod` that competes for a module path with a good one.
+fn competing_malformed(root: &Path) {
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "good/go.mod", "module example.com/lib\n");
+    write(root, "good/lib.go", "package lib\n");
+    write(root, "bad/go.mod", "module example.com/lib\n\nreplace (\n");
+    write(root, "bad/lib.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/lib\"\n",
+    );
+}
+
+#[test]
+fn a_malformed_go_mod_keeps_its_module_path_as_a_candidate() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    competing_malformed(root);
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Unresolved("bad/go.mod could not be read".to_string())
+    );
+    assert_eq!(pairs(&graph), Vec::<(String, String)>::new());
+    assert!(!complete(root));
+}
+
+#[test]
+fn a_malformed_go_mod_of_another_module_path_leaves_a_resolved_import_and_the_result_incomplete() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "good/go.mod", "module example.com/lib\n");
+    write(root, "good/lib.go", "package lib\n");
+    write(
+        root,
+        "bad/go.mod",
+        "module example.com/other\n\nreplace (\n",
+    );
+    write(root, "bad/other.go", "package other\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/lib\"\n",
+    );
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Resolved(vec!["good/lib.go".to_string()])
+    );
+    assert!(!complete(root));
+}

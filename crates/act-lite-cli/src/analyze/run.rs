@@ -4,7 +4,7 @@
 use super::discovery::{Discovered, Includes, Scope, discover};
 use super::envelope::{
     AnalyzeError, Coverage, EmptyScope, Envelope, Evidence, Excluded, ExcludedKind, Exclusion,
-    Finding, Incomplete, LanguageCoverage, Limit, LimitHit, Unresolved,
+    Finding, Incomplete, LanguageCoverage, Limit, LimitHit, Status, Unresolved,
 };
 use super::read::{FileSource, Parsed, ReadOutcome, Reader, SupportReader};
 use act_lite_parser::Grammar;
@@ -83,6 +83,10 @@ pub struct Analysis<F> {
     pub unresolved: Vec<Unresolved>,
     pub limits_hit: Vec<LimitHit>,
     pub details: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Whether a resolution input could not be read or parsed. The input
+    /// is listed with its `error` in `details`, and the result is not
+    /// complete.
+    pub input_failed: bool,
 }
 
 /// What an analyzer can read besides the files it is given.
@@ -213,7 +217,8 @@ fn run_named<A: Analyzer>(
         && read.skipped.is_empty()
         && read.parse_failures.is_empty()
         && analysis.unresolved.is_empty()
-        && analysis.limits_hit.is_empty();
+        && analysis.limits_hit.is_empty()
+        && !analysis.input_failed;
 
     if no_supported_file && complete && (no_recognized_file || removed_supported) {
         let counts = &excluded.counts;
@@ -245,7 +250,7 @@ fn run_named<A: Analyzer>(
     } else {
         Vec::new()
     };
-    Envelope::new(
+    let mut envelope = Envelope::new(
         A::NAME,
         analysis.findings,
         request.limit,
@@ -254,7 +259,12 @@ fn run_named<A: Analyzer>(
         incomplete,
         Evidence::new(sources, Vec::new()),
         analysis.details,
-    )
+    )?;
+    if analysis.input_failed {
+        envelope.complete = false;
+        envelope.status = Status::derive(envelope.total, false, envelope.coverage.analyzed_files);
+    }
+    Ok(envelope)
 }
 
 /// A [`FileSource`] that counts the files it gives.
@@ -631,6 +641,7 @@ mod tests {
                 unresolved: vec![],
                 limits_hit,
                 details: None,
+                input_failed: false,
             })
         }
     }
