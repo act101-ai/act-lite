@@ -1,7 +1,9 @@
 //! Python: `import a.b`, `from X import n`, and the names a module binds at
-//! its top level.
+//! its top level. Identifiers are compared after NFKC normalization, as
+//! Python reads them (PEP 3131); a specifier keeps the written text.
 
 use tree_sitter::Node;
+use unicode_normalization::UnicodeNormalization;
 
 use super::{ModuleNames, Relationship, RelationshipKind, nodes, text};
 
@@ -24,18 +26,21 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
                 };
                 let value = module_name(module, source);
                 let module = text(module, source);
-                let mut imported: Vec<String> = field_children(node, "name")
+                let mut imported: Vec<(String, String)> = field_children(node, "name")
                     .into_iter()
-                    .map(|n| module_name(n.child_by_field_name("name").unwrap_or(n), source))
+                    .map(|n| {
+                        let n = n.child_by_field_name("name").unwrap_or(n);
+                        (text(n, source).to_string(), module_name(n, source))
+                    })
                     .collect();
                 if has_child(node, "wildcard_import") {
-                    imported.push("*".to_string());
+                    imported.push(("*".to_string(), "*".to_string()));
                 }
-                for name in imported {
+                for (written, name) in imported {
                     let specifier = if module.ends_with('.') {
-                        format!("{module}{name}")
+                        format!("{module}{written}")
                     } else {
-                        format!("{module}.{name}")
+                        format!("{module}.{written}")
                     };
                     let value = if value.ends_with('.') {
                         format!("{value}{name}")
@@ -100,7 +105,7 @@ fn bind_walrus(node: Node, source: &str, names: &mut ModuleNames) {
     if node.kind() == "named_expression"
         && let Some(name) = node.child_by_field_name("name")
     {
-        names.names.insert(text(name, source).to_string());
+        names.names.insert(identifier(text(name, source)));
     }
     let mut cursor = node.walk();
     for (i, child) in node.children(&mut cursor).enumerate() {
@@ -117,7 +122,7 @@ fn bind_walrus(node: Node, source: &str, names: &mut ModuleNames) {
 
 fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
     let insert = |names: &mut ModuleNames, node: Node| {
-        names.names.insert(text(node, source).to_string());
+        names.names.insert(identifier(text(node, source)));
     };
     match statement.kind() {
         "function_definition" | "class_definition" => {
@@ -253,10 +258,10 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
 fn bind_pattern(pattern: Node, source: &str, names: &mut ModuleNames) {
     match pattern.kind() {
         "identifier" => {
-            names.names.insert(text(pattern, source).to_string());
+            names.names.insert(identifier(text(pattern, source)));
         }
         "dotted_name" if pattern.named_child_count() == 1 => {
-            names.names.insert(text(pattern, source).to_string());
+            names.names.insert(identifier(text(pattern, source)));
         }
         "case_pattern" | "list_pattern" | "tuple_pattern" | "splat_pattern" | "as_pattern"
         | "union_pattern" | "class_pattern" | "keyword_pattern" | "dict_pattern" => {
@@ -284,7 +289,7 @@ fn bind_pattern(pattern: Node, source: &str, names: &mut ModuleNames) {
 fn bind_target(target: Node, source: &str, names: &mut ModuleNames) {
     match target.kind() {
         "identifier" => {
-            names.names.insert(text(target, source).to_string());
+            names.names.insert(identifier(text(target, source)));
         }
         "pattern_list"
         | "tuple_pattern"
@@ -310,7 +315,7 @@ fn bind_target(target: Node, source: &str, names: &mut ModuleNames) {
 fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
     match target.kind() {
         "identifier" => {
-            names.names.remove(text(target, source));
+            names.names.remove(&identifier(text(target, source)));
         }
         "expression_list" | "tuple" | "list" | "parenthesized_expression" | "as_pattern_target" => {
             let mut cursor = target.walk();
@@ -323,8 +328,8 @@ fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
 }
 
 /// A module name without the whitespace, comments and line continuations
-/// between its tokens: a `dotted_name`'s identifiers joined by `.`, after
-/// the dots of a relative import's prefix.
+/// between its tokens: a `dotted_name`'s identifiers, each normalized,
+/// joined by `.`, after the dots of a relative import's prefix.
 fn module_name(node: Node, source: &str) -> String {
     let mut out = String::new();
     let mut dotted = None;
@@ -342,18 +347,27 @@ fn module_name(node: Node, source: &str) -> String {
             }
         }
         "dotted_name" => dotted = Some(node),
-        _ => return text(node, source).to_string(),
+        _ => return identifier(text(node, source)),
     }
     if let Some(dotted) = dotted {
         let mut cursor = dotted.walk();
-        let identifiers: Vec<&str> = dotted
+        let identifiers: Vec<String> = dotted
             .named_children(&mut cursor)
             .filter(|c| c.kind() == "identifier")
-            .map(|c| text(c, source))
+            .map(|c| identifier(text(c, source)))
             .collect();
         out.push_str(&identifiers.join("."));
     }
     out
+}
+
+/// An identifier as Python compares it: NFKC-normalized (PEP 3131).
+fn identifier(written: &str) -> String {
+    if written.is_ascii() {
+        written.to_string()
+    } else {
+        written.nfkc().collect()
+    }
 }
 
 fn field_children<'t>(node: Node<'t>, field: &str) -> Vec<Node<'t>> {

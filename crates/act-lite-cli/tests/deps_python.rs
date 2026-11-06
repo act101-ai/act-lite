@@ -788,6 +788,57 @@ fn a_module_name_is_resolved_without_its_spaces_and_line_continuations() {
     );
 }
 
+/// `pkg/__init__.py` binds `K` written with U+212A KELVIN SIGN, `pkg/K.py`
+/// has `import consumer`, and `consumer.py` has `from pkg import K`.
+fn kelvin_sign_package() -> tempfile::TempDir {
+    let ws = tempfile::tempdir().unwrap();
+    fs::create_dir(ws.path().join(".git")).unwrap();
+    write(ws.path(), "pkg/__init__.py", "\u{212A} = 1\n");
+    write(ws.path(), "pkg/K.py", "import consumer\n");
+    write(ws.path(), "consumer.py", "from pkg import K\n");
+    ws
+}
+
+#[test]
+fn a_name_bound_in_the_package_file_is_compared_after_nfkc_normalization() {
+    let ws = kelvin_sign_package();
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "consumer.py", "pkg.K"),
+        resolved(&["pkg/__init__.py"])
+    );
+    assert_eq!(
+        edges(&graph),
+        pairs(&[
+            ("consumer.py", "pkg/__init__.py"),
+            ("pkg/K.py", "consumer.py")
+        ])
+    );
+    assert_eq!(cycles(ws.path()), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn a_module_name_is_probed_after_nfkc_normalization() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pkg/__init__.py", "");
+    write(ws.path(), "pkg/sub.py", "v = 1\n");
+    // U+FF50 FULLWIDTH SMALL P and U+FF56 FULLWIDTH SMALL V.
+    write(
+        ws.path(),
+        "main.py",
+        "import \u{FF50}kg.sub\nfrom pkg.sub import \u{FF56}\n",
+    );
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "\u{FF50}kg.sub"),
+        resolved(&["pkg/sub.py"])
+    );
+    assert_eq!(
+        outcome(&graph, "main.py", "pkg.sub.\u{FF56}"),
+        resolved(&["pkg/sub.py"])
+    );
+}
+
 /// `pkg/__init__.py` is a symlink to `target`; `pkg/n.py` has `import main`
 /// and `other/n.py` is empty; `main.py` holds `main`.
 #[cfg(unix)]

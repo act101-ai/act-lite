@@ -443,6 +443,25 @@ fn a_python_module_file_before_the_last_segment_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_python_name_bound_with_a_kelvin_sign_beats_a_submodule_and_gives_no_cycle() {
+    let ws = workspace();
+    // U+212A KELVIN SIGN is `K` after NFKC normalization.
+    write(ws.path(), "pkg/__init__.py", "\u{212A} = 1\n");
+    write(ws.path(), "pkg/K.py", "import consumer\n");
+    write(ws.path(), "consumer.py", "from pkg import K\n");
+    let v = graph(ws.path(), &[]);
+    assert_eq!(
+        edges(&v),
+        pairs(&[
+            ("consumer.py", "pkg/__init__.py"),
+            ("pkg/K.py", "consumer.py")
+        ])
+    );
+    let cycles = analyze(ws.path(), "cycles", &[]);
+    assert_eq!(cycles["findings"], json!([]));
+}
+
+#[test]
 fn a_python_package_with_a_symlinked_initializer_finds_its_submodule_in_its_own_directory() {
     let ws = workspace();
     write(ws.path(), "other/__init__.py", "");

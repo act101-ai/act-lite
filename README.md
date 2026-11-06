@@ -966,7 +966,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   workspace root, and `src/` when it is a directory. A module name is
   resolved as its identifiers joined by `.`, without the whitespace and line
   continuations between them (`import pkg . sub` resolves `pkg.sub`); the
-  `specifier` keeps the written text. `a.b.c` exists under a
+  `specifier` keeps the written text. Identifiers are compared, and module
+  files probed, after NFKC normalization, as Python reads them (PEP 3131):
+  the names a module binds and unbinds, the segments of a module name and
+  the `n` of `from X import n`. `K = 1` written with the Kelvin sign
+  (U+212A) binds `K`, so `from pkg import K` targets that `pkg/__init__.py`,
+  not `pkg/K.py`; `import ｐkg` (fullwidth `ｐ`) probes `pkg`. `a.b.c` exists under a
   root as `a/b/c/__init__.py`, else `a/b/c.py`; a directory without
   `__init__.py` is a namespace package (it exists, with no file). The name is
   found segment by segment, as Python imports it: each segment before the last
