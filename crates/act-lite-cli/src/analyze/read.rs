@@ -2,13 +2,15 @@
 //! the removal of embedded test code, one file at a time.
 
 use super::classify::open_no_follow;
-use super::discovery::{Candidate, Skip};
+use super::discovery::{Candidate, Includes, Skip, left_out};
 use super::embedded::{blank, test_regions};
-use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile};
+use super::envelope::{AnalyzeError, ExcludedEntry, ParseFailure, SkipKind, SkippedFile, rel_path};
 use act_lite_core::CompactRange;
 use act_lite_parser::{Grammar, SourceFile};
+use std::fmt;
 use std::fs;
 use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 use tree_sitter::Node;
 
@@ -20,6 +22,16 @@ pub const MAX_FILE_BYTES: u64 = act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES;
 pub struct Parsed {
     pub rel: String,
     pub source: SourceFile,
+    /// The original text of each test region that was blanked, in location
+    /// order; empty when tests are included.
+    pub removed: Vec<RemovedRegion>,
+}
+
+/// A blanked test region and the text it held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedRegion {
+    pub range: CompactRange,
+    pub text: String,
 }
 
 /// The result of reading one file.
@@ -42,6 +54,7 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
     };
     let mut source = parse(file, content)?;
     let mut test_exclusions = Vec::new();
+    let mut removed = Vec::new();
     if !include_tests {
         let found = test_regions(&source);
         if found.whole_file {
@@ -59,6 +72,14 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
                     range: Some(region.range.clone()),
                 })
                 .collect();
+            removed = found
+                .regions
+                .iter()
+                .map(|region| RemovedRegion {
+                    range: region.range.clone(),
+                    text: source.content()[region.bytes.clone()].to_string(),
+                })
+                .collect();
             source = parse(file, blank(source.content(), &found.regions))?;
         }
     }
@@ -73,6 +94,7 @@ pub fn read_file(file: &Candidate, include_tests: bool) -> Result<ReadResult, An
         parsed: Parsed {
             rel: file.rel.clone(),
             source,
+            removed,
         },
         parse_failures,
         test_exclusions,
@@ -283,14 +305,20 @@ fn skip(file: &Candidate, kind: SkipKind, reason: String) -> Skip {
 /// says why not. A symlink is not followed, and a file that is not regular is
 /// not read.
 fn read_content(file: &Candidate) -> Result<String, Skip> {
-    let unreadable = |reason: String| skip(file, SkipKind::Unreadable, reason);
-    let linked = fs::symlink_metadata(&file.path)
-        .map_err(|err| unreadable(format!("cannot read file: {err}")))?;
+    read_text(&file.path).map_err(|(kind, reason)| skip(file, kind, reason))
+}
+
+/// The text of the regular file at `path`, bounded as [`read_content`] says,
+/// or the kind and reason of the failure.
+fn read_text(path: &Path) -> Result<String, (SkipKind, String)> {
+    let unreadable = |reason: String| (SkipKind::Unreadable, reason);
+    let linked =
+        fs::symlink_metadata(path).map_err(|err| unreadable(format!("cannot read file: {err}")))?;
     if !linked.is_file() {
         return Err(unreadable("not a regular file".to_string()));
     }
     let handle =
-        open_no_follow(&file.path).map_err(|err| unreadable(format!("cannot read file: {err}")))?;
+        open_no_follow(path).map_err(|err| unreadable(format!("cannot read file: {err}")))?;
     let meta = handle
         .metadata()
         .map_err(|err| unreadable(format!("cannot stat file: {err}")))?;
@@ -298,8 +326,7 @@ fn read_content(file: &Candidate) -> Result<String, Skip> {
         return Err(unreadable("not a regular file".to_string()));
     }
     let too_big = |len: u64| {
-        skip(
-            file,
+        (
             SkipKind::SizeLimit,
             format!("exceeds size cap: {len} bytes > cap of {MAX_FILE_BYTES} bytes"),
         )
@@ -315,13 +342,232 @@ fn read_content(file: &Candidate) -> Result<String, Skip> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(too_big(bytes.len() as u64));
     }
-    String::from_utf8(bytes).map_err(|_| {
-        skip(
-            file,
-            SkipKind::NotUtf8,
-            "content is not valid UTF-8".to_string(),
-        )
-    })
+    String::from_utf8(bytes)
+        .map_err(|_| (SkipKind::NotUtf8, "content is not valid UTF-8".to_string()))
+}
+
+/// Why a support read or listing failed. Each variant but `Cancelled` holds
+/// the workspace-relative path as asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupportError {
+    NotFound(String),
+    /// The path and the cause.
+    Unreadable(String, String),
+    TooLarge(String),
+    NotUtf8(String),
+    /// Outside the workspace, or left out by discovery's directory and
+    /// ignore steps under the request's includes.
+    Refused(String),
+    /// A whole-file test (`#![cfg(test)]`) read while tests are excluded.
+    TestFile(String),
+    Cancelled,
+}
+
+impl fmt::Display for SupportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SupportError::NotFound(path) => write!(f, "{path}: not found"),
+            SupportError::Unreadable(path, cause) => write!(f, "{path}: {cause}"),
+            SupportError::TooLarge(path) => {
+                write!(f, "{path}: larger than {MAX_FILE_BYTES} bytes")
+            }
+            SupportError::NotUtf8(path) => write!(f, "{path}: content is not valid UTF-8"),
+            SupportError::Refused(path) => {
+                write!(f, "{path}: outside the workspace or left out by discovery")
+            }
+            SupportError::TestFile(path) => write!(f, "{path}: excluded as tests"),
+            SupportError::Cancelled => f.write_str("analysis cancelled"),
+        }
+    }
+}
+
+/// What a directory entry is; a symlink is not followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+    Symlink,
+}
+
+/// Where a symlink points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymlinkTarget {
+    /// An existing entry inside the workspace, workspace-relative.
+    Inside(String),
+    /// An existing entry outside the workspace.
+    Outside,
+    /// Nothing: the target does not exist or cannot be resolved.
+    Broken,
+}
+
+/// One entry of a listed directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    /// The name as it is on disk, compared byte for byte.
+    pub name: String,
+    pub kind: EntryKind,
+    /// For a symlink, where it points; `None` for any other entry.
+    pub target: Option<SymlinkTarget>,
+}
+
+/// Reads files that an analysis needs but does not analyze: source files for
+/// their declarations, and configuration files. Every read stays inside the
+/// workspace, has the bounds of an analyzed read, and adds nothing to the
+/// result's evidence.
+pub struct SupportReader {
+    root: PathBuf,
+    canonical_root: Option<PathBuf>,
+    includes: Includes,
+    cancel: CancellationToken,
+}
+
+impl SupportReader {
+    /// A reader for the workspace `root` under the request's `includes`.
+    pub fn new(root: &Path, includes: &Includes, cancel: &CancellationToken) -> SupportReader {
+        SupportReader {
+            root: root.to_path_buf(),
+            canonical_root: root.canonicalize().ok(),
+            includes: *includes,
+            cancel: cancel.clone(),
+        }
+    }
+
+    /// The request's includes, which every read and listing applies.
+    pub fn includes(&self) -> &Includes {
+        &self.includes
+    }
+
+    /// Reads a source file and parses it with `grammar`, whatever its
+    /// extension, blanking its test regions as an analyzed read does. A file
+    /// below a pruned directory is refused.
+    pub fn source(&self, rel: &str, grammar: Grammar) -> Result<Parsed, SupportError> {
+        let (path, written) = self.resolve(rel, true)?;
+        let file = Candidate {
+            path,
+            rel: written,
+            grammar,
+        };
+        match read_file(&file, self.includes.tests) {
+            Ok(ReadResult::Parsed { parsed, .. }) => Ok(parsed),
+            Ok(ReadResult::Skipped(skip)) => Err(skip_error(rel, skip.file.kind, skip.file.reason)),
+            Ok(ReadResult::TestFile(_)) => Err(SupportError::TestFile(rel.to_string())),
+            Err(err) => Err(SupportError::Unreadable(rel.to_string(), err.to_string())),
+        }
+    }
+
+    /// Reads a configuration file as text. A file below a pruned directory is
+    /// refused.
+    pub fn text(&self, rel: &str) -> Result<String, SupportError> {
+        let (path, _) = self.resolve(rel, true)?;
+        read_text(&path).map_err(|(kind, reason)| skip_error(rel, kind, reason))
+    }
+
+    /// Lists a directory, also below a pruned directory (names and kinds only;
+    /// no file is read), in byte order of name.
+    pub fn list_dir(&self, rel: &str) -> Result<Vec<DirEntry>, SupportError> {
+        let (path, _) = self.resolve(rel, false)?;
+        let entries = fs::read_dir(&path)
+            .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
+        let mut out = Vec::new();
+        for entry in entries {
+            let entry =
+                entry.map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
+            // A name that is not UTF-8 cannot be matched byte for byte by a
+            // probe written in UTF-8; listing it lossily would let `\u{FFFD}`
+            // match it. Discovery skips such names too.
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let file_type = entry
+                .file_type()
+                .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
+            let (kind, target) = if file_type.is_symlink() {
+                (EntryKind::Symlink, Some(self.target(&entry.path())))
+            } else if file_type.is_dir() {
+                (EntryKind::Dir, None)
+            } else if file_type.is_file() {
+                (EntryKind::File, None)
+            } else {
+                // A FIFO, socket or device is never a source file or input.
+                continue;
+            };
+            out.push(DirEntry { name, kind, target });
+        }
+        out.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
+        Ok(out)
+    }
+
+    /// The canonical path of `rel` and its written form, after the cancel
+    /// check; refused when it leaves the workspace, or, with `unpruned`, when
+    /// it lies below a pruned directory.
+    fn resolve(&self, rel: &str, unpruned: bool) -> Result<(PathBuf, String), SupportError> {
+        if self.cancel.is_cancelled() {
+            return Err(SupportError::Cancelled);
+        }
+        let refused = || SupportError::Refused(rel.to_string());
+        let mut depth = 0usize;
+        for part in Path::new(rel).components() {
+            match part {
+                Component::Normal(_) => depth += 1,
+                Component::CurDir => {}
+                Component::ParentDir if depth > 0 => depth -= 1,
+                _ => return Err(refused()),
+            }
+        }
+        let joined = self.root.join(rel);
+        let Ok(path) = joined.canonicalize() else {
+            return Err(SupportError::NotFound(rel.to_string()));
+        };
+        let Some(inside) = self
+            .canonical_root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+        else {
+            return Err(refused());
+        };
+        if unpruned {
+            let out = left_out(
+                &self.root,
+                inside,
+                path.is_dir(),
+                &self.includes,
+                &self.cancel,
+            )
+            .map_err(|_| SupportError::Cancelled)?;
+            if out {
+                return Err(refused());
+            }
+        }
+        let written = rel_path(&self.root, &self.root.join(inside), path.is_dir())
+            .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
+        Ok((path, written))
+    }
+
+    /// Where the symlink at `path` points.
+    fn target(&self, path: &Path) -> SymlinkTarget {
+        let Ok(target) = path.canonicalize() else {
+            return SymlinkTarget::Broken;
+        };
+        let inside = self
+            .canonical_root
+            .as_ref()
+            .and_then(|root| target.strip_prefix(root).ok());
+        match inside
+            .and_then(|rel| rel_path(&self.root, &self.root.join(rel), target.is_dir()).ok())
+        {
+            Some(rel) => SymlinkTarget::Inside(rel),
+            None => SymlinkTarget::Outside,
+        }
+    }
+}
+
+/// The support error for a read that failed with a skip of `kind`.
+fn skip_error(rel: &str, kind: SkipKind, reason: String) -> SupportError {
+    match kind {
+        SkipKind::SizeLimit => SupportError::TooLarge(rel.to_string()),
+        SkipKind::NotUtf8 => SupportError::NotUtf8(rel.to_string()),
+        _ => SupportError::Unreadable(rel.to_string(), reason),
+    }
 }
 
 fn parse(file: &Candidate, content: String) -> Result<SourceFile, AnalyzeError> {

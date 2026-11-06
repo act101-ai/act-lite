@@ -7,6 +7,7 @@
 pub mod compact_declaration;
 #[cfg(test)]
 mod coverage;
+pub mod deps;
 pub mod error;
 pub mod function_model;
 pub mod grammar;

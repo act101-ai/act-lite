@@ -264,6 +264,7 @@ impl Analyzer for ClonesAnalyzer {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: details.as_object().cloned(),
+            failed_inputs: None,
         })
     }
 }
@@ -1015,6 +1016,7 @@ mod tests {
             files: vec![Parsed {
                 rel: "a.py".to_string(),
                 source,
+                removed: Vec::new(),
             }],
             cancel: cancel.clone(),
         };

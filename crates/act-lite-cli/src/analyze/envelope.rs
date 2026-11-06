@@ -355,6 +355,10 @@ pub struct IncompleteCounts {
     pub parse_failures: u64,
     pub unresolved: u64,
     pub limits_hit: u64,
+    /// The resolution inputs that could not be read or parsed; present only
+    /// for the analyzers that read resolution inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_inputs: Option<u64>,
 }
 
 /// The evidence the analysis is missing.
@@ -425,6 +429,7 @@ impl Incomplete {
                 },
                 &mut truncated,
             ),
+            failed_inputs: None,
         };
         Incomplete {
             skipped_files,
@@ -438,7 +443,12 @@ impl Incomplete {
 
     /// True when no evidence is missing: every count is 0.
     pub fn is_complete(&self) -> bool {
-        self.counts == IncompleteCounts::default()
+        let c = &self.counts;
+        c.skipped_files == 0
+            && c.parse_failures == 0
+            && c.unresolved == 0
+            && c.limits_hit == 0
+            && c.failed_inputs.unwrap_or(0) == 0
     }
 }
 
@@ -692,6 +702,9 @@ pub struct EmptyScope {
 pub enum AnalyzeError {
     /// A named path does not exist; holds the not-found message.
     NotFound(String),
+    /// A request parameter is invalid for reasons the other variants do not
+    /// name; holds the message both transports show.
+    InvalidRequest(String),
     /// A named path is outside the workspace root; holds the path.
     OutsideRoot(String),
     /// A `focus` path is not at or below a requested path; holds the path.
@@ -727,7 +740,9 @@ impl AnalyzeError {
 impl std::fmt::Display for AnalyzeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AnalyzeError::NotFound(message) => f.write_str(message),
+            AnalyzeError::NotFound(message) | AnalyzeError::InvalidRequest(message) => {
+                f.write_str(message)
+            }
             AnalyzeError::OutsideRoot(path) => {
                 write!(f, "path must be inside the workspace root: {path}")
             }
@@ -1717,6 +1732,13 @@ mod tests {
 
     #[test]
     fn error_messages() {
+        let invalid =
+            AnalyzeError::InvalidRequest("direction must be one of in, out, both, got up".into());
+        assert!(invalid.is_invalid_params());
+        assert_eq!(
+            invalid.to_string(),
+            "direction must be one of in, out, both, got up"
+        );
         let not_found = AnalyzeError::NotFound("The path 'x.rs' does not exist.".into());
         assert_eq!(not_found.to_string(), "The path 'x.rs' does not exist.");
         assert!(not_found.is_invalid_params());
