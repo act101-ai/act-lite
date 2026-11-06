@@ -5,29 +5,29 @@
 (function_definition
   (signature
     [(identifier) @name
-     (call_expression . [(identifier) (field_expression) (operator)] @name)
-     (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-     (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-     (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-     (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-     (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-     (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))
-     (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))])) @definition.function
+     (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)
+     (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))
+     (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))
+     (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+     (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+     (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+     (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))))
+     (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))))])) @definition.function
 (macro_definition
   (signature
-    (call_expression . [(identifier) (field_expression) (operator)] @name))) @definition.function
+    (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))) @definition.function
 
 ; Short-form functions: a call, or a typed or where call, on the left side
 (assignment
   .
-  [(call_expression . [(identifier) (field_expression) (operator)] @name)
-   (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-   (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))
-   (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-   (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-   (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name)))
-   (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))
-   (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator)] @name))))]) @definition.function
+  [(call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)
+   (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))
+   (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))
+   (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+   (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+   (where_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name)))
+   (where_expression . (where_expression . (typed_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))))
+   (where_expression . (typed_expression . (where_expression . (call_expression . [(identifier) (field_expression) (operator) (parenthesized_expression) (parametrized_type_expression)] @name))))]) @definition.function
 
 ; Types: the name is the first identifier of the type head
 (struct_definition

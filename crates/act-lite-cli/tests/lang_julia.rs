@@ -357,6 +357,19 @@ fn nested_signature_wrappers_are_named_by_the_callee() {
 }
 
 #[test]
+fn callable_objects_and_parametric_constructors_are_named_by_the_callee() {
+    let source = "function (f::Foo)(x)\n    x\nend\n(g::Bar)(x) = x\nBaz{T}(x::T) where {T} = x\nfunction Qux{T}(x::T) where {T}\n    x\nend\n";
+    let expected = pair_set(&[
+        ("function", "(f::Foo)"),
+        ("function", "(g::Bar)"),
+        ("function", "Baz{T}"),
+        ("function", "Qux{T}"),
+    ]);
+    assert_eq!(skeleton_pairs(source), expected);
+    assert_eq!(symbol_pairs(source), expected);
+}
+
+#[test]
 fn a_function_without_methods_is_a_function() {
     let source = "function f end\n";
     assert_eq!(skeleton_pairs(source), pair_set(&[("function", "f")]));

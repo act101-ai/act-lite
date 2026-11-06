@@ -241,6 +241,16 @@ fn julia_nested_signature_wrappers_are_candidates() {
 }
 
 #[test]
+fn julia_callable_objects_and_parametric_constructors_are_candidates() {
+    let ws = workspace(&[(
+        "c.jl",
+        "Foo{T}(x::T) where {T} = x\nfunction (f::Bar)(x)\n    x\nend\n",
+    )]);
+    assert_found(ws.path(), "c.jl", "Foo{T}", 1, 4, "Foo{T} 1:1-1:7");
+    assert_found(ws.path(), "c.jl", "(f::Bar)", 2, 10, "(f::Bar) 2:10-2:18");
+}
+
+#[test]
 fn zig_extern_and_struct_literal_declarations_are_candidates() {
     let ws = workspace(&[(
         "x.zig",
