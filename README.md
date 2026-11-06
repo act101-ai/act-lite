@@ -1529,7 +1529,8 @@ and adds nine skills: eight that you invoke and one shared skill.
   cycles that involve it, as a report with no edit.
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
-  them, and the largest duplicated code, as a report with no edit.
+  them, the largest duplicated code, the dependency cycles and the most coupled
+  files, as a report with no edit.
 - `map-repo` maps a repository for orientation: its languages and size, the
   files where complexity concentrates, and how those files connect to the rest,
   as a report with no edit.
