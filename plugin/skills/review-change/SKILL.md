@@ -108,10 +108,15 @@ below. Never stash, reset, check out or commit.
    - (b) touches a resolution input or a discovery input: a file named
      `package.json`, `go.mod` or `Cargo.toml`, any `*.json` file (a `tsconfig`
      `extends` target can have any name), `.gitignore`, `.git/info/exclude`,
-     `pyvenv.cfg` or `CACHEDIR.TAG`; or
+     `pyvenv.cfg` or `CACHEDIR.TAG`;
    - (c) changes a `.rs` file that contains a module declaration (`mod
      <name>;` or `mod <name> {`, also inside a macro invocation) or a
-     `#[path` attribute, before or after the change (the Rust module tree).
+     `#[path` attribute, before or after the change (the Rust module tree); or
+   - (d) modifies a Python `__init__.py` file. Its bound names decide whether
+     `from pkg import n` in an unchanged file resolves to `pkg/__init__.py` or
+     to the submodule `pkg/n.py`, so a change to them can create a cycle with
+     no changed member. (A module file `x.py` has no submodules, so its
+     bindings cannot redirect an edge to another file.)
 
    Otherwise keep each cycle that has a changed file among its `members`. When
    `members_total` is more than 20 and no shown member is a changed file, keep
@@ -121,9 +126,9 @@ below. Never stash, reset, check out or commit.
      an edge that did not exist before. An edge appears only when a
      relationship of a changed file changes (that file is then a member of the
      cycle), or when an unchanged relationship resolves differently, which
-     happens only in (a), (b) or (c). The kept set can also hold older cycles.
-     The report does not claim that each cycle is new: comparing with the base
-     needs an analysis of a second checkout.
+     happens only in (a), (b), (c) or (d). The kept set can also hold older
+     cycles. The report does not claim that each cycle is new: comparing with
+     the base needs an analysis of a second checkout.
 
 5. **Report.** Write the report below from the kept findings and classes and
    from each result's `status`, `complete`, `coverage`, `excluded`,
@@ -143,8 +148,8 @@ Scope: <n> changed files; patterns <status>, complete <bool>; clones <status>, c
 | Dependent | Depth | Reaches | Through |
 A dependent is a file that imports a focus file, directly or through other files. It is exposed to a change in the focus file. This is not proof that it will break, and a file that is not listed is not proof that it is safe: relationships that act-lite does not model (see the README) are not followed.
 ### Cycles that involve the change
-<all cycles kept, because the change <adds, deletes or renames a file | touches a resolution or discovery input | changes a Rust file with a module declaration>> | <n> cycles with a changed file>.
-- <members_total> files: <path as a → b → … → a>; changed members: <file>, …
+<all cycles kept, because the change <adds, deletes or renames a file | touches a resolution or discovery input | changes a Rust file with a module declaration | modifies a Python __init__.py file>> | <n> cycles with a changed file>.
+- <members_total> files: <path as <file> → <to> → …>[ (path of <path_total> steps, <n> shown)]; members: <file>, …[ (members not all shown)]; changed members: <file>, …
 ### Not analyzed
 Unsupported languages, excluded counts (tests, generated, vendored, ignored), skipped files, parse failures.
 ### Limits
@@ -169,10 +174,16 @@ A clone class shows that code has the same syntax tree, apart from formatting, c
   line, word for word. With no finding, write "No dependent." If step 4a was
   skipped, name the deleted files instead of the table.
 - **Cycles that involve the change:** the reason that all cycles were kept
-  (the case of (a), (b) or (c) that applies), else "<n> cycles with a changed
-  file". One line per kept cycle, in result order: `members_total`, the
-  `members` as a path `a → b → … → a`, and the changed members. A cycle
-  marked "members not all shown" ends its line with that mark. The section
+  (the case of (a), (b), (c) or (d) that applies), else "<n> cycles with a
+  changed file". One line per kept cycle, in result order: `members_total`;
+  the `path` steps, from the cycle's `file` back to it, written as
+  `<file> → <to>` steps (the first step's `file`, then each step's `to`), with
+  "(path of <path_total> steps, <n> shown)" when `path_total` is more than the
+  <n> steps shown; the `members`, listed separately, with "(members not all
+  shown)" when `members_total` is more than the members listed (this includes
+  each cycle marked "members not all shown" in step 4b); and the changed
+  members. The `members` are sorted by path, not in traversal order: never
+  write them as a path. The section
   says that the cycles are those that involve the change, not only those that
   it creates. With no kept cycle, write "No cycle involves the change."
 - **Not analyzed:** from each result, the `coverage.languages` entries with

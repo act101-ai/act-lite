@@ -713,7 +713,10 @@ fn with_tree<'a, R>(
 
 /// Reads every module file of the tree that is `file` or whose directory
 /// `file` lies below, so that every module on a path to `file` is known;
-/// the first module of `file`, when the tree reaches it.
+/// the first module of `file`, when the tree reaches it. A `#[path]` child
+/// need not lie below its parent's directory, so when that pass does not
+/// reach `file`, every module of the tree is read and `file` looked up
+/// again.
 fn reach(cx: &mut ResolveCx<'_>, tree: &mut Tree, file: &str) -> Option<usize> {
     let mut idx = 0;
     while idx < tree.modules.len() {
@@ -721,6 +724,14 @@ fn reach(cx: &mut ResolveCx<'_>, tree: &mut Tree, file: &str) -> Option<usize> {
         if !module.expanded && (module.file == file || below(file, &module.dir)) {
             expand(cx, tree, idx);
         }
+        idx += 1;
+    }
+    if let Some(&found) = tree.files.get(file) {
+        return Some(found);
+    }
+    let mut idx = 0;
+    while idx < tree.modules.len() {
+        expand(cx, tree, idx);
         idx += 1;
     }
     tree.files.get(file).copied()

@@ -907,6 +907,48 @@ fn rust_forms_resolve_as_documented() {
     assert_eq!(unresolved(&v), []);
 }
 
+#[test]
+fn a_path_attribute_outside_the_parent_directory_gives_its_use_edge() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "#[path = \"../shared.rs\"]\nmod shared;\npub struct X;\n",
+    );
+    write(root, "shared.rs", "use crate::X;\n");
+    for args in [
+        &["--limit", "1000"][..],
+        &["--limit", "1000", "shared.rs"][..],
+    ] {
+        let v = graph(root, args);
+        assert_eq!(
+            kinds(edge(&v, "shared.rs", "src/lib.rs")),
+            ["use"],
+            "{args:?}"
+        );
+        assert_eq!(reason_of(&v, "shared.rs"), Vec::<String>::new(), "{args:?}");
+    }
+}
+
+#[test]
+fn a_main_that_is_a_directory_resolves_to_its_index() {
+    let ws = workspace();
+    let root = ws.path();
+    write(root, "pkg/package.json", r#"{"main":"lib"}"#);
+    write(root, "pkg/lib/index.js", "");
+    write(root, "pkg/index.js", "");
+    write(root, "a.js", "import './pkg';\n");
+    let v = graph(root, &["--limit", "1000"]);
+    assert_eq!(kinds(edge(&v, "a.js", "pkg/lib/index.js")), ["import"]);
+    assert_eq!(unresolved(&v), []);
+}
+
 // ---- unsupported scopes, shape, determinism, evidence, artifacts ----
 
 /// The four tools with the arguments that make them run on `ts`.

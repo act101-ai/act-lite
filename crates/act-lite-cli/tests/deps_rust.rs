@@ -783,3 +783,43 @@ fn toml_strings_are_unescaped() {
         resolved(&["src/root.rs"])
     );
 }
+
+/// The graph of `paths` only.
+fn graph_of(root: &Path, paths: &[&str]) -> DepGraph {
+    let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+    let cancel = CancellationToken::new();
+    let includes = Includes::default();
+    let request = Request::new(root, &paths, &[], &[], includes, 100).unwrap();
+    let ctx = RunContext {
+        root: root.to_path_buf(),
+        discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
+        support: SupportReader::new(root, &includes, &cancel),
+    };
+    let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
+    DepGraph::build_with(&mut reader, &ctx, &[&RustResolver], &cancel).unwrap()
+}
+
+#[test]
+fn a_path_attribute_outside_the_parent_directory_is_reached_in_any_order() {
+    for shared in ["shared.rs", "tools/shared.rs"] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        package(root, ".", "app", "");
+        write(
+            root,
+            "src/lib.rs",
+            &format!("#[path = \"../{shared}\"]\nmod shared;\nmod a;\npub struct X;\n"),
+        );
+        write(root, "src/a.rs", "use crate::X;\n");
+        write(root, shared, "use crate::X;\n");
+        for scope in [&[][..], &[shared][..], &["src/a.rs", shared][..]] {
+            let graph = graph_of(root, scope);
+            assert_eq!(
+                outcome(&graph, shared, "crate::X"),
+                resolved(&["src/lib.rs"]),
+                "{shared} in {scope:?}"
+            );
+            assert_eq!(kinds_of(&graph, shared, "src/lib.rs"), ["use"]);
+        }
+    }
+}
