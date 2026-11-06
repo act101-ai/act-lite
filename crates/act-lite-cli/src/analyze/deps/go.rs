@@ -4,7 +4,7 @@
 
 use super::{Family, INVALID_LITERAL, InputKind, Outcome, Probe, ResolveCx, Resolver, join};
 use crate::analyze::read::EntryKind;
-use act_lite_parser::deps::Relationship;
+use act_lite_parser::deps::{Relationship, go_value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -105,9 +105,14 @@ impl Resolver for GoResolver {
                 }
                 _ => continue,
             };
+            // The package is at its own path, symlinks resolved; so is the
+            // module directory it must belong to.
+            let Probe::Dir(owner) = cx.probe_file(dir) else {
+                continue;
+            };
             if ignored(&package)
                 || vendored(cx, &package)
-                || nearest_module(cx, &package).as_deref() != Some(dir)
+                || nearest_module(cx, &package) != Some(owner)
             {
                 continue;
             }
@@ -255,33 +260,34 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
 fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
     let mut module = None;
     let mut replaces = Vec::new();
-    let mut block: Option<&str> = None;
+    let mut block: Option<String> = None;
     for line in text.lines() {
-        let line = line.split("//").next().unwrap_or("");
-        let words: Vec<&str> = line.split_whitespace().collect();
-        let (verb, args) = match (block, words.split_first()) {
+        let Some(words) = tokens(line) else {
+            continue;
+        };
+        let (verb, args) = match (block.as_deref(), words.split_first()) {
             (_, None) => continue,
-            (Some(_), Some((&")", _))) => {
+            (Some(_), Some((first, _))) if first == ")" => {
                 block = None;
                 continue;
             }
             (Some(verb), Some(_)) => (verb, &words[..]),
-            (None, Some((&verb, args))) if args == ["("] => {
-                block = Some(verb);
+            (None, Some((verb, args))) if args == ["("] => {
+                block = Some(verb.clone());
                 continue;
             }
-            (None, Some((&verb, args))) => (verb, args),
+            (None, Some((verb, args))) => (verb.as_str(), args),
         };
         match verb {
             "module" => {
-                module = module.or(args.first().map(|path| unquote(path).to_string()));
+                module = module.or(args.first().cloned());
             }
             "replace" => {
-                let Some(arrow) = args.iter().position(|a| *a == "=>") else {
+                let Some(arrow) = args.iter().position(|a| a == "=>") else {
                     continue;
                 };
                 if let (Some(old), Some(new)) = (args.first(), args.get(arrow + 1)) {
-                    replaces.push((unquote(old).to_string(), unquote(new).to_string()));
+                    replaces.push((old.clone(), new.clone()));
                 }
             }
             _ => {}
@@ -290,8 +296,62 @@ fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
     module.map(|module| (module, replaces))
 }
 
-fn unquote(word: &str) -> &str {
-    word.trim_matches(['"', '`'])
+/// The tokens of one `go.mod` line, as Go's modfile reads them: `//` outside
+/// a string starts a comment; `(`, `)`, `[`, `]`, `{`, `}` and `,` are tokens
+/// of their own; a string is one token, its value (an interpreted `"…"`
+/// string decoded by Go's escapes, a raw `` `…` `` string as written); any
+/// other run of characters up to a space, one of those characters or `//`
+/// is a token. `None` when a string is not closed or does not decode.
+fn tokens(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut rest = line;
+    loop {
+        rest = rest.trim_start();
+        let Some(first) = rest.chars().next() else {
+            return Some(words);
+        };
+        if rest.starts_with("//") {
+            return Some(words);
+        }
+        let end = match first {
+            '(' | ')' | '[' | ']' | '{' | '}' | ',' => {
+                words.push(first.to_string());
+                1
+            }
+            '"' => {
+                let mut chars = rest.char_indices().skip(1);
+                let close = loop {
+                    match chars.next()? {
+                        (_, '\\') => {
+                            chars.next()?;
+                        }
+                        (at, '"') => break at,
+                        _ => {}
+                    }
+                };
+                words.push(go_value(&rest[1..close]).ok()?);
+                close + 1
+            }
+            '`' => {
+                let close = rest[1..].find('`')? + 1;
+                words.push(rest[1..close].to_string());
+                close + 1
+            }
+            _ => {
+                let end = rest
+                    .char_indices()
+                    .find(|&(at, c)| {
+                        c.is_whitespace()
+                            || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | ',')
+                            || rest[at..].starts_with("//")
+                    })
+                    .map_or(rest.len(), |(at, _)| at);
+                words.push(rest[..end].to_string());
+                end
+            }
+        };
+        rest = &rest[end..];
+    }
 }
 
 /// The files of the package in `dir`: the `.go` files that are not test

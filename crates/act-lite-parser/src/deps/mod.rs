@@ -250,7 +250,7 @@ fn js_code(chars: &mut std::str::Chars) -> Result<u32, InvalidLiteral> {
 /// The value of a Go interpreted string whose text without quotes is
 /// `inner`: `\xHH` and octal `\OOO` (bytes), `\uHHHH`, `\UHHHHHHHH` and the
 /// single-character escapes; the bytes must be UTF-8.
-fn go_value(inner: &str) -> LiteralValue {
+pub fn go_value(inner: &str) -> LiteralValue {
     let mut out = Vec::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {

@@ -993,7 +993,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `pyproject.toml`, `requirements*.txt` or `setup.cfg` in the file's directory
   or an ancestor), else `unresolved`.
 - **Go.** The module map is the set of `go.mod` files in the workspace (not in
-  directories named `testdata` or starting with `_` or `.`). An import path
+  directories named `testdata` or starting with `_` or `.`). A `go.mod` is
+  read as the go command reads it: a quoted string (interpreted `"…"`,
+  decoded by Go's escapes, or raw `` `…` ``) is one word, and `//` starts a
+  comment only outside a string, in a single-line directive and in a
+  `replace ( … )` block; `replace example.com/lib => "./local lib"` replaces
+  with the directory `./local lib`. An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
   directory. A `replace` in the importing file's `go.mod`, with or without a
@@ -1001,7 +1006,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   modules that declare the same path are never candidates. A relative path
   (`.`, `..`, or one starting with `./` or `../`) inside the workspace makes its directory the only directory of that module
   path; a relative path outside the workspace, or a module path with a
-  version, makes an import under the replaced path `external`. When exactly one such directory exists, belongs to that module and
+  version, makes an import under the replaced path `external`. A replacement
+  directory is compared with the module that owns a package at its own path,
+  symlinks inside the workspace resolved, as package files are: `./alias`, a
+  symlink to `actual`, gives the files of `actual`; a directory whose symlink
+  leads outside the workspace is outside it. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
   each such file in it. Two are `unresolved` (`ambiguous import: <module
   paths>`); none is `unresolved` (`no Go package files for <I> in the
@@ -1016,7 +1025,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `<dir>/x/mod.rs`, where `<dir>` is the module file's directory when the file
   is a crate root, a `mod.rs` or a `#[path]` file, else that directory plus the
   file's stem; `#[path = "p"]` replaces the probe (comments inside the
-  attribute are skipped). A raw identifier `r#name` is the identifier
+  attribute are skipped). An absolute `#[path]` is `unresolved` (`absolute
+  path is not resolved: <path>`); one that leaves the workspace is
+  `external`. The same holds for each `mod x;` inside an inline module with
+  such a `#[path]` (`#[path = "/outside"] mod inline { mod x; }`), at any
+  depth: the inline module has no directory, and none is probed. A raw identifier `r#name` is the identifier
   `name`: `mod r#type;` probes `type.rs`, then `type/mod.rs`, and `use`
   segments, `extern crate` names, declared names and attribute names
   compare without `r#`; the relationship's target keeps the written

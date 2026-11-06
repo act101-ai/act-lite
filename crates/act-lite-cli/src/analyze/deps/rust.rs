@@ -123,9 +123,20 @@ struct Module {
     names: Result<Names, String>,
     /// The module's file has been read; always true for an inline module.
     expanded: bool,
-    /// The `#[path]` literal of the module, or of an inline module around
-    /// it, does not decode, so its directory is unknown.
-    invalid_path: bool,
+    /// Why the module's directory is unknown: the `#[path]` literal of the
+    /// module, or of an inline module around it, does not decode or is
+    /// absolute (`Missing`), or leaves the workspace (`Outside`).
+    unknown_dir: Option<UnknownDir>,
+}
+
+/// An inline module's directory that no probe may read.
+#[derive(Clone)]
+enum UnknownDir {
+    /// The `mod` declarations inside are unresolved with this reason.
+    Missing(String),
+    /// The directory is outside the workspace: the declarations inside are
+    /// external, as a direct module's `#[path]` that leaves it.
+    Outside,
 }
 
 /// The module tree of one crate root, or of a file that no root reaches.
@@ -1013,7 +1024,7 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
         inline: Vec::new(),
         names: Ok(Arc::default()),
         expanded: false,
-        invalid_path: false,
+        unknown_dir: None,
     });
     let idx = tree.modules.len() - 1;
     tree.files.entry(file.to_string()).or_default().push(idx);
@@ -1032,12 +1043,23 @@ fn inline_count(inline: &[InlineModule]) -> usize {
 fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
     for module in inline {
         let parent = &tree.modules[idx];
-        let invalid_path = parent.invalid_path || matches!(module.path_attribute, Some(Err(_)));
         let written = match &module.path_attribute {
             Some(Ok(path)) => path,
             _ => &module.name,
         };
-        let dir = lexical(&parent.dir, written).unwrap_or_else(|| join(&parent.dir, written));
+        let dir = lexical(&parent.dir, written).filter(|_| !is_absolute(written));
+        let rejected = match &module.path_attribute {
+            Some(Err(_)) => Some(UnknownDir::Missing(INVALID_LITERAL.to_string())),
+            Some(Ok(path)) if is_absolute(path) => Some(UnknownDir::Missing(format!(
+                "absolute path is not resolved: {path}"
+            ))),
+            Some(Ok(_)) if dir.is_none() => Some(UnknownDir::Outside),
+            _ => None,
+        };
+        let unknown_dir = parent.unknown_dir.clone().or(rejected);
+        // A rejected path builds no directory; the module keeps its
+        // parent's, which no probe reads.
+        let dir = dir.unwrap_or_else(|| parent.dir.clone());
         let file = parent.file.clone();
         tree.modules.push(Module {
             file,
@@ -1048,7 +1070,7 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
             inline: Vec::new(),
             names: Ok(Arc::new((module.names.names, module.names.glob))),
             expanded: true,
-            invalid_path,
+            unknown_dir,
         });
         let added = tree.modules.len() - 1;
         tree.modules[idx]
@@ -1136,8 +1158,10 @@ fn probe_mod(
     path_attribute: Option<&LiteralValue>,
     detached: bool,
 ) -> ModTarget {
-    if module.invalid_path {
-        return ModTarget::Missing(INVALID_LITERAL.to_string());
+    match &module.unknown_dir {
+        Some(UnknownDir::Missing(reason)) => return ModTarget::Missing(reason.clone()),
+        Some(UnknownDir::Outside) => return ModTarget::Outside,
+        None => {}
     }
     if let Some(written) = path_attribute {
         let Ok(written) = written else {
