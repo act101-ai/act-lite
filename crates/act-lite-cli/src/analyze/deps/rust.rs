@@ -27,8 +27,8 @@ use crate::analyze::envelope::LimitHit;
 use crate::analyze::read::{Parsed, RemovedRegion};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{
-    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, extract,
-    module_names,
+    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind,
+    UseBinding, extract, module_names,
 };
 use act_lite_parser::{Grammar, SourceFile};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -195,6 +195,9 @@ struct RustState {
     /// What each module file read gives, shared by every tree and module
     /// that loads it; the `Err` is the reason it could not be read.
     summaries: HashMap<String, Arc<Result<ModuleFile, String>>>,
+    /// For each package directory, the crate names of each of its
+    /// dependency entries, in entry order.
+    dependency_names: HashMap<String, Arc<Vec<Vec<String>>>>,
 }
 
 impl Resolver for RustResolver {
@@ -306,9 +309,21 @@ fn outcome_in(
                 }
             }
         }
-        _ => use_path(cx, &rel.specifier, &rel.range, package, tree, is_lib, m),
+        _ => use_path(
+            cx,
+            &rel.specifier,
+            &rel.range,
+            package,
+            tree,
+            is_lib,
+            m,
+            &[],
+        ),
     }
 }
+
+/// A `use` binding already being followed: its declaration and name.
+type Followed = (CompactRange, Option<String>);
 
 /// A block-local scope around a `use`: the anonymous module of a block, or
 /// an inline module inside a body.
@@ -374,10 +389,14 @@ fn local_walk(names: &ModuleNames, segments: &[&str], i: usize, file: &str) -> O
 
 /// Rule 2: the first segment picks the start modules, then `walk` follows
 /// the rest from each. A `use` in a body at `range` sees the block-local
-/// scopes around it first, as rustc: an inline module or item of an
-/// enclosing block; `self` is the innermost inline module of the body,
-/// never a block, and each `super` goes out one such module, then on from
-/// `m`; an inline module of the body hides the blocks and module around it.
+/// scopes around it first, as rustc: an inline module, item or `use`
+/// binding of an enclosing block; `self` is the innermost inline module of
+/// the body, never a block, and each `super` goes out one such module, then
+/// on from `m`; an inline module of the body hides the blocks and module
+/// around it. A binding is followed through its path, from its own
+/// declaration, never through a binding in `followed`; a glob of a scope
+/// passed on the way adds the path through the glob, as a further target.
+#[allow(clippy::too_many_arguments)]
 fn use_path(
     cx: &mut ResolveCx<'_>,
     path: &str,
@@ -386,6 +405,7 @@ fn use_path(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
+    followed: &[Followed],
 ) -> Outcome {
     let (global, path) = match path.strip_prefix("::") {
         Some(rest) => (true, rest),
@@ -436,6 +456,8 @@ fn use_path(
     // The innermost inline module of the body ends the search: then only
     // the crates and its own declared names apply.
     let mut barrier = None;
+    let mut globs: Vec<&UseBinding> = Vec::new();
+    let mut found = None;
     for scope in scopes.iter().rev() {
         let inner: Vec<&InlineModule> = scope
             .names
@@ -444,25 +466,110 @@ fn use_path(
             .filter(|c| c.name == first)
             .collect();
         if !inner.is_empty() {
-            return combine(
+            found = Some(combine(
                 inner
                     .iter()
                     .map(|c| local_walk(&c.names, &segments, 1, &file))
                     .collect(),
+            ));
+            break;
+        }
+        let open = |b: &&UseBinding| !followed.iter().any(|(r, n)| *r == b.range && *n == b.name);
+        let bound: Vec<&UseBinding> = scope
+            .names
+            .uses
+            .iter()
+            .filter(|b| b.name.as_deref() == Some(first))
+            .filter(open)
+            .collect();
+        if !bound.is_empty() {
+            let outcomes = bound
+                .iter()
+                .map(|b| {
+                    let path = std::iter::once(b.path.as_str())
+                        .chain(segments[1..].iter().copied())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    through(cx, b, &path, package, tree, is_lib, m, followed)
+                })
+                .collect();
+            found = Some(combine(outcomes));
+            break;
+        }
+        if !scope.named && scope.names.names.contains(first) {
+            found = Some(Outcome::Resolved(vec![file.clone()]));
+            break;
+        }
+        if !scope.names.names.contains(first) {
+            globs.extend(
+                scope
+                    .names
+                    .uses
+                    .iter()
+                    .filter(|b| b.name.is_none())
+                    .filter(open),
             );
         }
         if scope.named {
             barrier = Some(scope.names);
             break;
         }
-        if scope.names.names.contains(first) {
-            return Outcome::Resolved(vec![file]);
-        }
     }
+    let outcome = match found {
+        Some(outcome) => outcome,
+        None => outer_path(
+            cx, &segments, global, barrier, package, tree, is_lib, m, &file,
+        ),
+    };
+    if globs.is_empty() {
+        return outcome;
+    }
+    let mut outcomes = vec![outcome];
+    for glob in globs {
+        let path = format!("{}::{}", glob.path, segments.join("::"));
+        outcomes.push(through(cx, glob, &path, package, tree, is_lib, m, followed));
+    }
+    combine(outcomes)
+}
+
+/// Resolves `path`, written through the binding `b`, from the declaration
+/// of `b`, with `b` followed.
+#[allow(clippy::too_many_arguments)]
+fn through(
+    cx: &mut ResolveCx<'_>,
+    b: &UseBinding,
+    path: &str,
+    package: Option<&Manifest>,
+    tree: &mut Tree,
+    is_lib: Option<bool>,
+    m: usize,
+    followed: &[Followed],
+) -> Outcome {
+    let mut followed = followed.to_vec();
+    followed.push((b.range.clone(), b.name.clone()));
+    use_path(cx, path, &b.range, package, tree, is_lib, m, &followed)
+}
+
+/// Rule 2 after the block-local scopes: a child module of `m` (unless an
+/// inline module of the body, `barrier`, ends the search), a crate, else a
+/// name declared by `barrier` or by `m`.
+#[allow(clippy::too_many_arguments)]
+fn outer_path(
+    cx: &mut ResolveCx<'_>,
+    segments: &[&str],
+    global: bool,
+    barrier: Option<&ModuleNames>,
+    package: Option<&Manifest>,
+    tree: &mut Tree,
+    is_lib: Option<bool>,
+    m: usize,
+    file: &str,
+) -> Outcome {
+    let first = segments[0];
     if !global && barrier.is_none() {
         let children = children(&tree.modules[m], first);
         if !children.is_empty() {
-            return follow(cx, tree, &children, &segments, 1);
+            return follow(cx, tree, &children, segments, 1);
         }
     }
     match crate_start(cx, package, is_lib, first) {
@@ -477,7 +584,7 @@ fn use_path(
             }
             let outcomes = roots
                 .iter()
-                .map(|root| with_tree(cx, root, false, |cx, lib| walk(cx, lib, 0, &segments, 1)))
+                .map(|root| with_tree(cx, root, false, |cx, lib| walk(cx, lib, 0, segments, 1)))
                 .collect();
             combine(outcomes)
         }
@@ -490,7 +597,7 @@ fn use_path(
                 (None, Err(_)) => false,
             };
             if declared {
-                return Outcome::Resolved(vec![file]);
+                return Outcome::Resolved(vec![file.to_string()]);
             }
             Outcome::Unresolved(format!(
                 "first path segment is not a module, crate or dependency: {first}"
@@ -596,13 +703,16 @@ fn crate_start(
         {
             return Some(CrateStart::Libs(vec![root]));
         }
+        let names = dependency_names(cx, package);
         let entries: Vec<&Dependency> = package
             .dependencies
             .iter()
-            .filter(|d| d.key.replace('-', "_") == name)
+            .zip(names.iter())
+            .filter(|(_, names)| names.iter().any(|n| n == name))
+            .map(|(d, _)| d)
             .collect();
         if !entries.is_empty() {
-            return Some(dependency_start(cx, package, &entries));
+            return Some(dependency_start(cx, package, &entries, name));
         }
     }
     BUILTIN_CRATES
@@ -610,21 +720,54 @@ fn crate_start(
         .then_some(CrateStart::External)
 }
 
-/// Where the entries of one dependency name start: the lib roots of the
-/// workspace crates they name, unless two of them share a lib name; else
-/// outside the workspace.
+/// The crate name of each dependency entry of `package`, as Cargo exposes
+/// it: the key with `-` replaced by `_` when the entry renames its package
+/// (`package = "…"`, also through the workspace entry it inherits) or names
+/// no workspace crate; else the lib name of each workspace crate it names.
+fn dependency_names(cx: &mut ResolveCx<'_>, package: &Manifest) -> Arc<Vec<Vec<String>>> {
+    if let Some(known) = cx.cache::<RustState>().dependency_names.get(&package.dir) {
+        return Arc::clone(known);
+    }
+    let names: Vec<Vec<String>> = package
+        .dependencies
+        .iter()
+        .map(|entry| {
+            let key = vec![entry.key.replace('-', "_")];
+            match dependency_crates(cx, package, entry) {
+                Ok((found, false)) => {
+                    let libs: Vec<String> = found.iter().filter_map(|c| c.lib_name()).collect();
+                    if libs.is_empty() { key } else { libs }
+                }
+                _ => key,
+            }
+        })
+        .collect();
+    let names = Arc::new(names);
+    cx.cache::<RustState>()
+        .dependency_names
+        .insert(package.dir.clone(), Arc::clone(&names));
+    names
+}
+
+/// Where the entries of the dependency name `name` start: the lib roots of
+/// the workspace crates they name by it, unless two of them share a lib
+/// name; else outside the workspace.
 fn dependency_start(
     cx: &mut ResolveCx<'_>,
     package: &Manifest,
     entries: &[&Dependency],
+    name: &str,
 ) -> CrateStart {
     let mut crates: BTreeMap<String, Arc<Manifest>> = BTreeMap::new();
     let mut first = None;
     for entry in entries {
         match dependency_crates(cx, package, entry) {
-            Ok(found) => {
+            Ok((found, renamed)) => {
                 for manifest in found {
-                    crates.insert(manifest.dir.clone(), manifest);
+                    let lib = manifest.lib_name();
+                    if renamed || lib.is_none() || lib.as_deref() == Some(name) {
+                        crates.insert(manifest.dir.clone(), manifest);
+                    }
                 }
             }
             Err(CrateStart::Unresolved(reason)) => {
@@ -667,13 +810,14 @@ fn dependency_start(
 }
 
 /// The workspace crates that one dependency entry names: the crate at its
-/// path, or the crates whose `[package] name` is its package name. The
-/// `Err` is `External` or `Unresolved`.
+/// path, or the crates whose `[package] name` is its package name; and
+/// whether the entry renames its package. The `Err` is `External` or
+/// `Unresolved`.
 fn dependency_crates(
     cx: &mut ResolveCx<'_>,
     package: &Manifest,
     entry: &Dependency,
-) -> Result<Vec<Arc<Manifest>>, CrateStart> {
+) -> Result<(Vec<Arc<Manifest>>, bool), CrateStart> {
     let mut entry = entry.clone();
     let mut base = package.dir.clone();
     if entry.workspace
@@ -687,6 +831,7 @@ fn dependency_crates(
         entry.package = entry.package.or_else(|| shared.package.clone());
         base = root.dir.clone();
     }
+    let renamed = entry.package.is_some();
     if let Some(path) = &entry.path {
         if is_absolute(path) {
             return Err(CrateStart::Unresolved(format!(
@@ -709,7 +854,7 @@ fn dependency_crates(
             }
         };
         return match read_manifest(cx, &join(&dir, "Cargo.toml")) {
-            Ok(manifest) => Ok(vec![manifest]),
+            Ok(manifest) => Ok((vec![manifest], renamed)),
             Err(reason) => Err(CrateStart::Unresolved(reason)),
         };
     }
@@ -719,7 +864,7 @@ fn dependency_crates(
         .filter(|c| c.package.as_ref() == Some(name))
         .collect();
     if !found.is_empty() {
-        return Ok(found);
+        return Ok((found, renamed));
     }
     match cx.workspace_skipped().first() {
         Some(skip) => Err(CrateStart::Unresolved(format!(

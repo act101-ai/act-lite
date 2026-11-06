@@ -898,7 +898,7 @@ fn duplicates_are_decided_on_lib_names() {
     write(
         root,
         "app/src/lib.rs",
-        "use shared::Item;\nuse foo_bar::Z;\n",
+        "use one::Item;\nuse two::Item as Second;\nuse shared::Item as Third;\nuse foo_bar::Z;\n",
     );
     package(root, "one", "shared", "\n[lib]\nname = \"one\"\n");
     write(root, "one/src/lib.rs", "pub struct Item;\n");
@@ -910,8 +910,17 @@ fn duplicates_are_decided_on_lib_names() {
     write(root, "foo_bar/src/lib.rs", "pub struct Z;\n");
     let graph = graph(root);
     assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "one::Item"),
+        resolved(&["one/src/lib.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "two::Item"),
+        resolved(&["two/src/lib.rs"])
+    );
+    assert_eq!(
         outcome(&graph, "app/src/lib.rs", "shared::Item"),
-        resolved(&["one/src/lib.rs", "two/src/lib.rs"])
+        unresolved("first path segment is not a module, crate or dependency: shared"),
+        "a dependency is named by the lib name of its crate"
     );
     assert_eq!(
         outcome(&graph, "app/src/lib.rs", "foo_bar::Z"),
@@ -1635,5 +1644,198 @@ fn super_and_nested_blocks_follow_the_block_local_scopes() {
         kinds_of(&graph, "src/lib.rs", "src/deep.rs"),
         ["module"],
         "no `use` reaches the module file `deep`"
+    );
+}
+
+#[test]
+fn a_use_in_a_body_follows_a_use_binding_of_the_body() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nmod b;\nfn f() {\n    use crate::b as a;\n    use a::Thing;\n}\n",
+    );
+    write(root, "src/a.rs", "use crate::f;\npub struct Thing;\n");
+    write(root, "src/b.rs", "pub struct Thing;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "a::Thing"),
+        resolved(&["src/b.rs"]),
+        "`a` is the binding of `crate::b` in the body"
+    );
+    assert_eq!(kinds_of(&graph, "src/lib.rs", "src/a.rs"), ["module"]);
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/b.rs"),
+        ["module", "use"]
+    );
+}
+
+#[test]
+fn use_bindings_of_a_body_reach_its_whole_block_nested_blocks_and_inline_modules() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod b;\n",
+            "mod c;\n",
+            "fn f() {\n",
+            "    use a::Early;\n",
+            "    use crate::b as a;\n",
+            "    {\n",
+            "        use a::Nested;\n",
+            "    }\n",
+            "    mod inner {\n",
+            "        use crate::c as a;\n",
+            "        use a::Inside;\n",
+            "        fn g() {\n",
+            "            use a::Deep;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "fn h() {\n",
+            "    use crate::c::*;\n",
+            "    use sub::G;\n",
+            "    use a::Thing;\n",
+            "}\n",
+            "fn k() {\n",
+            "    use b;\n",
+            "    use b::Again;\n",
+            "}\n",
+            "fn l() {\n",
+            "    use p as q;\n",
+            "    use q as p;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        "pub struct Early;\npub struct Nested;\npub struct Again;\n",
+    );
+    write(
+        root,
+        "src/c.rs",
+        "pub mod sub {\n    pub struct G;\n}\npub struct Inside;\npub struct Deep;\n",
+    );
+    let graph = graph(root);
+    let of = |spec| outcome(&graph, "src/lib.rs", spec);
+    assert_eq!(
+        of("a::Early"),
+        resolved(&["src/b.rs"]),
+        "a binding is seen in its whole block, also before it"
+    );
+    assert_eq!(
+        of("a::Nested"),
+        resolved(&["src/b.rs"]),
+        "a nested block sees the bindings of the blocks around it"
+    );
+    assert_eq!(
+        of("a::Inside"),
+        resolved(&["src/c.rs"]),
+        "a binding of an inline module in a body"
+    );
+    assert_eq!(
+        of("a::Deep"),
+        resolved(&["src/c.rs"]),
+        "a body inside the inline module sees its bindings"
+    );
+    assert_eq!(
+        of("sub::G"),
+        resolved(&["src/c.rs"]),
+        "through the glob of the body"
+    );
+    assert_eq!(of("a::Thing"), resolved(&["src/a.rs"]));
+    assert_eq!(
+        of("b::Again"),
+        resolved(&["src/b.rs"]),
+        "`use b;` binds `b` to the module `b` around the body"
+    );
+    assert_eq!(
+        of("q"),
+        unresolved("first path segment is not a module, crate or dependency: q"),
+        "a binding is not followed through itself"
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/a.rs"),
+        ["module", "use"]
+    );
+}
+
+#[test]
+fn a_dependency_is_named_by_its_lib_name_or_its_rename() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, "foo", "foo", "\n[lib]\nname = \"bar\"\n");
+    write(root, "foo/src/lib.rs", "pub struct Thing;\n");
+    package(
+        root,
+        "app",
+        "app",
+        "\n[dependencies]\nfoo = { path = \"../foo\" }\n",
+    );
+    write(
+        root,
+        "app/src/lib.rs",
+        "use bar::Thing;\nuse foo::Thing as Other;\nextern crate bar;\nextern crate foo;\n",
+    );
+    package(
+        root,
+        "renamed",
+        "renamed",
+        "\n[dependencies]\nbaz = { package = \"foo\", path = \"../foo\" }\n",
+    );
+    write(
+        root,
+        "renamed/src/lib.rs",
+        "use baz::Thing;\nuse bar::Thing as Other;\n",
+    );
+    package(
+        root,
+        "byname",
+        "byname",
+        "\n[dependencies]\nfoo = \"0.1\"\n",
+    );
+    write(
+        root,
+        "byname/src/lib.rs",
+        "use bar::Thing;\nuse foo::Thing as Other;\n",
+    );
+    let graph = graph(root);
+    let lib = resolved(&["foo/src/lib.rs"]);
+    let missing = |name: &str| {
+        unresolved(&format!(
+            "first path segment is not a module, crate or dependency: {name}"
+        ))
+    };
+    assert_eq!(outcome(&graph, "app/src/lib.rs", "bar::Thing"), lib);
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "foo::Thing"),
+        missing("foo")
+    );
+    assert_eq!(outcome(&graph, "app/src/lib.rs", "bar"), lib);
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "foo"),
+        unresolved("foo is not a crate or dependency")
+    );
+    assert_eq!(outcome(&graph, "renamed/src/lib.rs", "baz::Thing"), lib);
+    assert_eq!(
+        outcome(&graph, "renamed/src/lib.rs", "bar::Thing"),
+        missing("bar")
+    );
+    assert_eq!(
+        outcome(&graph, "byname/src/lib.rs", "bar::Thing"),
+        lib,
+        "a workspace crate named by its package name"
+    );
+    assert_eq!(
+        outcome(&graph, "byname/src/lib.rs", "foo::Thing"),
+        missing("foo")
     );
 }

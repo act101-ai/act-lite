@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{
     self, BlockModule, InlineModule, InvalidLiteral, LiteralValue, ModuleNames, Relationship,
-    RelationshipKind,
+    RelationshipKind, UseBinding,
 };
 use act_lite_parser::{Grammar, SourceFile};
 
@@ -574,6 +574,7 @@ fn python_names_bound_at_top_level() {
         glob: false,
         inline: vec![],
         blocks: vec![],
+        uses: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -788,12 +789,15 @@ mod outl;
                         glob: false,
                         inline: vec![],
                         blocks: vec![],
+                        uses: vec![],
                     },
                 }],
                 blocks: vec![],
+                uses: vec![],
             },
         }],
         blocks: vec![],
+        uses: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -834,6 +838,7 @@ impl S {
         glob: false,
         inline,
         blocks,
+        uses: vec![],
     };
     let block = |at: &str, names| BlockModule {
         range: range(at),
@@ -844,26 +849,71 @@ impl S {
         vec![],
         vec![block(
             "1:8-15:2",
-            names_of(
-                &["L", "inner"],
-                vec![InlineModule {
-                    name: "inner".to_string(),
-                    range: range("4:5-9:6"),
-                    path_attribute: None,
-                    names: names_of(
-                        &["I", "g"],
-                        vec![],
-                        vec![block("6:16-8:10", names_of(&["C"], vec![], vec![]))],
-                    ),
+            ModuleNames {
+                uses: vec![UseBinding {
+                    name: Some("B".to_string()),
+                    path: "a::B".to_string(),
+                    range: range("2:5-2:14"),
                 }],
-                vec![block("11:9-13:10", names_of(&["h"], vec![], vec![]))],
-            ),
+                ..names_of(
+                    &["L", "inner"],
+                    vec![InlineModule {
+                        name: "inner".to_string(),
+                        range: range("4:5-9:6"),
+                        path_attribute: None,
+                        names: names_of(
+                            &["I", "g"],
+                            vec![],
+                            vec![block("6:16-8:10", names_of(&["C"], vec![], vec![]))],
+                        ),
+                    }],
+                    vec![block("11:9-13:10", names_of(&["h"], vec![], vec![]))],
+                )
+            },
         )],
     );
     assert_eq!(
         deps::module_names(&file),
         expected,
-        "a `use` in a block declares nothing; a block without items gives its inner blocks"
+        "a `use` in a block declares no name but a binding; a block without items gives its inner blocks"
+    );
+}
+
+#[test]
+fn the_use_leaves_of_a_body_are_bindings_of_their_scope() {
+    let file = parse(
+        Grammar::Rust,
+        "use top::T;\nfn f() {\n    use a::{b::C, d as E, f as _};\n    use g::*;\n    mod inner {\n        use crate::h as r#I;\n    }\n}\n",
+    );
+    let binding = |name: Option<&str>, path: &str, at: &str| UseBinding {
+        name: name.map(str::to_string),
+        path: path.to_string(),
+        range: range(at),
+    };
+    let module = deps::module_names(&file);
+    assert_eq!(module.uses, [], "a module outside a body keeps no bindings");
+    let [block] = module.blocks.as_slice() else {
+        panic!("one block: {module:?}");
+    };
+    assert_eq!(block.names.names, names(&["inner"]));
+    assert_eq!(
+        block.names.uses,
+        [
+            binding(Some("C"), "a::b::C", "3:5-3:35"),
+            binding(Some("E"), "a::d", "3:5-3:35"),
+            binding(None, "g", "4:5-4:14"),
+        ]
+    );
+    let inner = &block.names.inline[0].names;
+    assert_eq!(
+        inner.names,
+        names(&["I"]),
+        "a module declares its `use` leaves"
+    );
+    assert_eq!(
+        inner.uses,
+        [binding(Some("I"), "crate::h", "6:9-6:29")],
+        "an inline module in a body keeps its bindings"
     );
 }
 
