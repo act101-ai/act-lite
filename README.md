@@ -1512,7 +1512,7 @@ the reverse; a user with both binaries sees one set of secrets per project.
 ## Claude Code plugin
 
 The `plugin/` directory is a Claude Code plugin that registers the MCP server
-and adds eight skills: seven that you invoke and one shared skill.
+and adds nine skills: eight that you invoke and one shared skill.
 
 - `define-work` turns a request into an approved design before code is
   written: repo recon, one question at a time, three fresh reads of the
@@ -1529,6 +1529,9 @@ and adds eight skills: seven that you invoke and one shared skill.
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
   them, and the largest duplicated code, as a report with no edit.
+- `map-repo` maps a repository for orientation: its languages and size, the
+  files where complexity concentrates, and how those files connect to the rest,
+  as a report with no edit.
 
 `work-graph` is a shared skill, not one you invoke. It defines the work-graph
 format that `plan-work` writes and `execute-work` runs, and holds the script
