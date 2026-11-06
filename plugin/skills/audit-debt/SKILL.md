@@ -84,7 +84,7 @@ Ranking: <details.formula>.
 | File | Fan-in | Fan-out | Instability | Unresolved |
 Instability = fan_out / (fan_in + fan_out). Fan-in counts only files in <scope>.
 ### Coverage and limits
-Unsupported languages and rules (<not_applicable>), exclusions, skipped files, parse failures, truncation.
+Unsupported languages and rules (<not_applicable>), exclusions, skipped files, parse failures, regions not analyzed (<file>:<range>: <reason>), truncation.
 A clone class shows that code has the same syntax tree, apart from formatting, comments and, for renamed clones, identifier names and literal values. It does not show that the members behave the same, that they can share one function, or that extracting them is safe.
 ```
 
@@ -110,9 +110,15 @@ A clone class shows that code has the same syntax tree, apart from formatting, c
 - **Coverage and limits:** the `coverage.languages` entries with
   `supported: false`; `details.not_applicable` of the patterns results; the
   `excluded.counts`; the `incomplete.skipped_files` and
-  `incomplete.parse_failures`; any empty-scope message from step 5; each
-  truncation (`total` against what is shown); then the sentence above. A
-  result with `complete: false` can miss findings in that evidence; say so.
+  `incomplete.parse_failures`; the `details.regions_not_analyzed` entries
+  of the `analyze_hotspots`, `analyze_patterns` and `analyze_clones` results,
+  each entry (`file`, `range`, `reason`) once, and each
+  `details.regions_not_analyzed_total` that is more than the entries listed;
+  any empty-scope message from step 5; each truncation (`total` against what
+  is shown); then the sentence above. A result with `complete: false` can
+  miss findings in that evidence; say so. In component files (`.vue`,
+  `.svelte`, `.astro`), only script regions are analyzed: the template and
+  style regions are not, so no finding comes from them.
 - **Dependency cycles:** `total` and `details.cyclic_files` of the step-4a
   result, then one line per finding, in result order: `members_total` and
   `edges_total`; the `path` steps, from the cycle's `file` back to it, written
