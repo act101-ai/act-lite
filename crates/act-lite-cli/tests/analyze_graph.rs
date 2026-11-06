@@ -1,4 +1,6 @@
-//! Acceptance tests of the `graph` analyzer, run through the library runner.
+//! Acceptance tests of the `graph` analyzer, run through the built binary
+//! (`act-lite --workspace <dir> analyze graph ...`); the traversal and the
+//! cancellation checks that need a token run on the library.
 //! Every workspace is synthetic and built in a temporary directory; expected
 //! edges, depths and limits come from the fixture sources and the traversal
 //! rules, not from the analyzer's output.
@@ -73,6 +75,35 @@ const EDGES: [(&str, &str); 8] = [
     ("src/view.tsx", "src/style.css"),
 ];
 
+/// Runs the binary as `act-lite --workspace <root> analyze <name> <args>` with
+/// an empty configuration directory. Exit 0 gives the parsed stdout; exit 1
+/// gives the message of the error frame, after the frame is checked.
+fn binary(root: &Path, name: &str, args: &[String]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", name])
+        .args(args)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    match out.status.code() {
+        Some(0) => Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value")),
+        Some(1) => {
+            assert!(out.stdout.is_empty(), "stdout of an error");
+            let v: Value = serde_json::from_str(&stderr).expect("stderr is one JSON value");
+            let message = v["error"]["message"].as_str().unwrap().to_string();
+            let frame = json!({"error": {"message": message, "chain": []}});
+            assert_eq!(stderr, format!("{frame}\n"));
+            Err(message)
+        }
+        code => panic!("exit status {code:?}: {stderr}"),
+    }
+}
+
 /// Runs the `graph` analysis and returns the envelope, or the error text.
 fn graph(
     root: &Path,
@@ -81,15 +112,18 @@ fn graph(
     direction: Option<&str>,
     max_depth: Option<u32>,
 ) -> Result<Value, String> {
-    let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
-    let focus: Vec<String> = focus.iter().map(|s| s.to_string()).collect();
-    let request = Request::new(root, &paths, &[], &[], Includes::default(), 1000)
-        .map_err(|e| e.to_string())?;
-    let analyzer =
-        GraphAnalyzer::new(&request, &focus, direction, max_depth).map_err(|e| e.to_string())?;
-    let envelope =
-        run(&analyzer, &request, &CancellationToken::new()).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(envelope).unwrap())
+    let mut args: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
+    for f in focus {
+        args.extend(["--focus".to_string(), f.to_string()]);
+    }
+    if let Some(d) = direction {
+        args.extend(["--direction".to_string(), d.to_string()]);
+    }
+    if let Some(n) = max_depth {
+        args.extend(["--max-depth".to_string(), n.to_string()]);
+    }
+    args.extend(["--limit".to_string(), "1000".to_string()]);
+    binary(root, "graph", &args)
 }
 
 fn ok(result: Result<Value, String>) -> Value {
@@ -295,18 +329,6 @@ fn request_errors_in_their_order() {
         "direction needs a focus path"
     );
     assert_eq!(
-        err(graph(root, &[], &["src/a.ts"], Some("up"), None)),
-        "direction must be one of in, out, both, got up"
-    );
-    assert_eq!(
-        err(graph(root, &[], &[], Some("up"), Some(0))),
-        "max_depth must be between 1 and 1000, got 0"
-    );
-    assert_eq!(
-        err(graph(root, &[], &[], Some("up"), Some(2))),
-        "direction must be one of in, out, both, got up"
-    );
-    assert_eq!(
         err(graph(root, &[], &[], Some("in"), Some(2))),
         "max_depth needs a focus path"
     );
@@ -317,6 +339,29 @@ fn request_errors_in_their_order() {
     assert_eq!(
         err(graph(root, &["src/lib"], &["src/a.ts"], None, None)),
         "focus path is not inside the requested paths: src/a.ts"
+    );
+}
+
+/// The command line accepts only `in`, `out` and `both`, so the texts for any
+/// other value come from the checked constructor, in their precedence.
+#[test]
+fn a_direction_value_error_follows_the_max_depth_range_error() {
+    let ws = tempfile::tempdir().unwrap();
+    ts(ws.path());
+    let request = Request::new(ws.path(), &[], &[], &[], Includes::default(), 100).unwrap();
+    let message = |focus: &[&str], direction: &str, max_depth: Option<u32>| {
+        let focus: Vec<String> = focus.iter().map(|s| s.to_string()).collect();
+        match GraphAnalyzer::new(&request, &focus, Some(direction), max_depth) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("an error"),
+        }
+    };
+    let wrong = "direction must be one of in, out, both, got up";
+    assert_eq!(message(&["src/a.ts"], "up", None), wrong);
+    assert_eq!(message(&[], "up", Some(2)), wrong);
+    assert_eq!(
+        message(&[], "up", Some(0)),
+        "max_depth must be between 1 and 1000, got 0"
     );
 }
 
@@ -587,10 +632,12 @@ fn a_cancelled_token_stops_the_traversal_before_its_sort() {
 fn the_limit_cuts_findings_but_not_the_file_count() {
     let ws = tempfile::tempdir().unwrap();
     ts(ws.path());
-    let request = Request::new(ws.path(), &[], &[], &[], Includes::default(), 3).unwrap();
-    let analyzer = GraphAnalyzer::new(&request, &[], None, None).unwrap();
-    let envelope = run(&analyzer, &request, &CancellationToken::new()).unwrap();
-    let v = serde_json::to_value(envelope).unwrap();
+    let v = binary(
+        ws.path(),
+        "graph",
+        &["--limit".to_string(), "3".to_string()],
+    )
+    .unwrap();
     assert_eq!(
         numbered(&v),
         (1..=3).map(|n| (n, Value::Null)).collect::<Vec<_>>()
