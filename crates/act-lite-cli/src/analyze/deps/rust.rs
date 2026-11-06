@@ -51,6 +51,11 @@ const DEPENDENCY_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build
 /// are not expanded and the analysis reports the limit.
 const MAX_MODULE_INSTANCES: usize = 10_000;
 
+/// The most lookups through block-local bindings and globs of one
+/// relationship: past it, the relationship keeps the targets found so far
+/// and the analysis reports the limit.
+const MAX_USE_LOOKUPS: usize = 10_000;
+
 /// The directories whose `*.rs` files are example, bench and test roots.
 const ROOT_GROUPS: [&str; 3] = ["examples", "benches", "tests"];
 
@@ -225,6 +230,7 @@ impl Resolver for RustResolver {
         // of the first tree.
         let mut targets: Option<BTreeSet<String>> = None;
         let mut first = None;
+        let mut lookups = 0;
         for (owner, (root, is_lib)) in trees_of(cx, file, package.as_ref()) {
             // Each module of the file in this tree resolves it; the targets
             // are combined as across trees.
@@ -232,7 +238,17 @@ impl Resolver for RustResolver {
                 let instances = tree.files[file].clone();
                 let outcomes = instances
                     .into_iter()
-                    .map(|start| outcome_in(cx, rel, Some(&owner), tree, Some(is_lib), start))
+                    .map(|start| {
+                        outcome_in(
+                            cx,
+                            rel,
+                            Some(&owner),
+                            tree,
+                            Some(is_lib),
+                            start,
+                            &mut lookups,
+                        )
+                    })
                     .collect();
                 combine(outcomes)
             });
@@ -252,7 +268,7 @@ impl Resolver for RustResolver {
         first.unwrap_or_else(|| {
             with_tree(cx, file, true, |cx, tree| {
                 expand(cx, tree, 0);
-                outcome_in(cx, rel, package.as_deref(), tree, None, 0)
+                outcome_in(cx, rel, package.as_deref(), tree, None, 0, &mut lookups)
             })
         })
     }
@@ -280,7 +296,8 @@ fn package_of(cx: &mut ResolveCx<'_>, file: &str) -> Result<Option<Arc<Manifest>
 
 /// The outcome of a `mod`, `use` or `extern crate` relationship whose file
 /// is the module `start` of `tree`; `is_lib` tells whether the tree's root
-/// is the lib root.
+/// is the lib root. `lookups` counts the relationship's lookups through
+/// block-local bindings and globs, across its trees.
 fn outcome_in(
     cx: &mut ResolveCx<'_>,
     rel: &Relationship,
@@ -288,6 +305,7 @@ fn outcome_in(
     tree: &mut Tree,
     is_lib: Option<bool>,
     start: usize,
+    lookups: &mut usize,
 ) -> Outcome {
     let m = innermost(tree, start, &rel.range);
     match rel.kind {
@@ -324,7 +342,16 @@ fn outcome_in(
             tree,
             is_lib,
             m,
-            &mut Lookup::default(),
+            &mut Lookup {
+                followed: Vec::new(),
+                origin: None,
+                outcomes: Vec::new(),
+                glob_index: HashMap::new(),
+                taken: HashMap::new(),
+                spent: lookups,
+                file: tree.modules[start].file.clone(),
+                spec: rel.specifier.clone(),
+            },
         ),
     }
 }
@@ -332,23 +359,62 @@ fn outcome_in(
 /// A `use` binding already being followed: its declaration and name.
 type Followed = (CompactRange, Option<String>);
 
-/// One relationship's lookup through the block-local `use` bindings of a
-/// body: the bindings on the current branch, and what the whole lookup
-/// tried, so that each glob lookup runs once and each binding is followed
-/// once per glob lookup.
-#[derive(Default)]
-struct Lookup {
+/// The position of a declaration, as a key.
+type At = (u32, u32, u32, u32);
+
+fn at(range: &CompactRange) -> At {
+    (
+        range.start_line(),
+        range.start_col(),
+        range.end_line(),
+        range.end_col(),
+    )
+}
+
+/// One relationship's lookup through the block-local `use` bindings and
+/// globs of a body, in one module of a tree: the bindings on the current
+/// branch, and each lookup state tried (a binding or glob with the full
+/// path it is applied to), so that each state is resolved once.
+struct Lookup<'a> {
     /// The bindings followed on the current branch.
     followed: Vec<Followed>,
-    /// The glob lookup of the current branch, as an index into `globs`;
-    /// then no further glob applies.
+    /// The glob lookup of the current branch, as an index into
+    /// `outcomes`; then no further glob applies.
     origin: Option<usize>,
-    /// Each glob lookup tried: the declaration of the glob, the path
-    /// through it, and its outcome once known.
-    globs: Vec<(CompactRange, String, Option<Outcome>)>,
-    /// Each binding followed, with its path, and the glob lookup it was
-    /// followed in.
-    taken: Vec<(Followed, String, Option<usize>)>,
+    /// The outcome of each lookup state tried, once known.
+    outcomes: Vec<Option<Outcome>>,
+    /// The index in `outcomes` of each glob lookup tried: by the
+    /// declaration of the glob and the path through it.
+    glob_index: HashMap<(At, String), usize>,
+    /// The index in `outcomes` of each binding followed: by the binding,
+    /// the path through it, and the glob lookup it was followed in.
+    taken: HashMap<(At, Option<String>, String, Option<usize>), usize>,
+    /// The lookups of the relationship so far, up to `MAX_USE_LOOKUPS`.
+    spent: &'a mut usize,
+    /// The file of the relationship, for the limit.
+    file: String,
+    /// The path of the `use`, for the limit.
+    spec: String,
+}
+
+impl Lookup<'_> {
+    /// Counts one lookup; `false` when the relationship has reached
+    /// `MAX_USE_LOOKUPS`, which the analysis then reports.
+    fn spend(&mut self, cx: &mut ResolveCx<'_>) -> bool {
+        if *self.spent >= MAX_USE_LOOKUPS {
+            cx.limit_hit(LimitHit {
+                limit: "rust_use_lookups".to_string(),
+                value: MAX_USE_LOOKUPS as u64,
+                detail: format!(
+                    "the use {} in {} reached {MAX_USE_LOOKUPS} lookups through block-local bindings and globs; its other lookups were not followed",
+                    self.spec, self.file
+                ),
+            });
+            return false;
+        }
+        *self.spent += 1;
+        true
+    }
 }
 
 /// A block-local scope around a `use`: the anonymous module of a block, or
@@ -444,7 +510,7 @@ fn use_path(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
-    lookup: &mut Lookup,
+    lookup: &mut Lookup<'_>,
 ) -> Outcome {
     let (global, path) = match path.strip_prefix("::") {
         Some(rest) => (true, rest),
@@ -559,7 +625,9 @@ fn use_path(
                 outcomes.extend(through(cx, b, &path, package, tree, is_lib, m, lookup));
             }
             found = Some(if outcomes.is_empty() {
-                Outcome::Unresolved(format!("the binding {first} was followed before"))
+                Outcome::Unresolved(format!(
+                    "the lookups through block-local bindings and globs reached {MAX_USE_LOOKUPS}"
+                ))
             } else {
                 combine(outcomes)
             });
@@ -604,8 +672,8 @@ fn use_path(
 }
 
 /// Resolves `path`, written through the binding `b`, from the declaration
-/// of `b`, with `b` followed; `None` after a cancel, or when `b` was
-/// followed before in the same glob lookup.
+/// of `b`, with `b` followed; `b` with `path` is resolved once in each
+/// glob lookup. `None` after a cancel, or past `MAX_USE_LOOKUPS`.
 #[allow(clippy::too_many_arguments)]
 fn through(
     cx: &mut ResolveCx<'_>,
@@ -615,29 +683,36 @@ fn through(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
-    lookup: &mut Lookup,
+    lookup: &mut Lookup<'_>,
 ) -> Option<Outcome> {
     if cx.cancelled() {
         return None;
     }
     let key = (
-        (b.range.clone(), b.name.clone()),
-        b.path.clone(),
+        at(&b.range),
+        b.name.clone(),
+        path.to_string(),
         lookup.origin,
     );
-    if lookup.taken.contains(&key) {
+    if let Some(&index) = lookup.taken.get(&key) {
+        return lookup.outcomes[index].clone();
+    }
+    if !lookup.spend(cx) {
         return None;
     }
-    lookup.taken.push(key);
+    let index = lookup.outcomes.len();
+    lookup.outcomes.push(None);
+    lookup.taken.insert(key, index);
     lookup.followed.push((b.range.clone(), b.name.clone()));
     let outcome = use_path(cx, path, &b.range, package, tree, is_lib, m, lookup);
     lookup.followed.pop();
+    lookup.outcomes[index] = Some(outcome.clone());
     Some(outcome)
 }
 
 /// Resolves `path`, written through the glob `glob`, from the declaration
 /// of `glob`, where no further glob applies; each such lookup runs once.
-/// `None` after a cancel.
+/// `None` after a cancel, or past `MAX_USE_LOOKUPS`.
 #[allow(clippy::too_many_arguments)]
 fn through_glob(
     cx: &mut ResolveCx<'_>,
@@ -647,26 +722,22 @@ fn through_glob(
     tree: &mut Tree,
     is_lib: Option<bool>,
     m: usize,
-    lookup: &mut Lookup,
+    lookup: &mut Lookup<'_>,
 ) -> Option<Outcome> {
-    if let Some((_, _, outcome)) = lookup
-        .globs
-        .iter()
-        .find(|(range, p, _)| *range == glob.range && p == path)
-    {
-        return outcome.clone();
+    let key = (at(&glob.range), path.to_string());
+    if let Some(&index) = lookup.glob_index.get(&key) {
+        return lookup.outcomes[index].clone();
     }
-    if cx.cancelled() {
+    if cx.cancelled() || !lookup.spend(cx) {
         return None;
     }
-    let index = lookup.globs.len();
-    lookup
-        .globs
-        .push((glob.range.clone(), path.to_string(), None));
+    let index = lookup.outcomes.len();
+    lookup.outcomes.push(None);
+    lookup.glob_index.insert(key, index);
     let origin = lookup.origin.replace(index);
     let outcome = use_path(cx, path, &glob.range, package, tree, is_lib, m, lookup);
     lookup.origin = origin;
-    lookup.globs[index].2 = Some(outcome.clone());
+    lookup.outcomes[index] = Some(outcome.clone());
     Some(outcome)
 }
 
