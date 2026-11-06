@@ -113,7 +113,10 @@ below. Never stash, reset, check out or commit.
      `details.resolution_inputs` (for example a `tsconfig` `extends` target
      named `base.jsonc` or with no extension). When
      `details.resolution_inputs_total` is more than the entries shown, every
-     cycle is kept;
+     cycle is kept. A listed input that is a symbolic link is read through its
+     target, which the list does not name: when any listed input, or a
+     directory above it, is a tracked symbolic link (`git ls-files -s` mode
+     `120000`), every cycle is kept;
    - (c) changes a `.rs` file that contains a module declaration (`mod
      <name>;` or `mod <name> {`, also inside a macro invocation) or a
      `#[path` attribute, before or after the change (the Rust module tree); or
