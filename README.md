@@ -984,7 +984,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   directories named `testdata` or starting with `_` or `.`). An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
-  directory. When exactly one such directory exists, belongs to that module and
+  directory. A `replace` with a relative path in the importing file's
+  `go.mod`, with or without a version, makes its directory the only
+  directory of that module path: other workspace modules that declare the
+  same path are not candidates. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
   each such file in it. Two are `unresolved` (`ambiguous import: <module
   paths>`); none is `unresolved` (`no Go package files for <I> in the

@@ -52,9 +52,14 @@ impl Resolver for GoResolver {
         let own_path = own_dir.as_deref().map(|dir| join(dir, "go.mod"));
         let own = own_path.as_deref().and_then(|path| read_mod(cx, path));
         let modules = Arc::clone(&cx.cache::<GoState>().modules);
-        let replaces = own.iter().flat_map(|m| m.replaces.iter());
+        let replaces: Vec<&(String, String)> = own.iter().flat_map(|m| m.replaces.iter()).collect();
+        // A replaced module path has only its replacement directories as
+        // candidates, as the go command uses no other module of that path.
+        let kept = modules
+            .iter()
+            .filter(|(path, _)| !replaces.iter().any(|(old, _)| old == path));
         let mut candidates: Vec<(&str, &str)> = Vec::new();
-        for (path, dir) in modules.iter().chain(replaces) {
+        for (path, dir) in kept.chain(replaces.iter().copied()) {
             let under = import == path
                 || import
                     .strip_prefix(path.as_str())

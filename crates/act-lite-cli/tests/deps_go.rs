@@ -618,3 +618,41 @@ fn a_major_version_module_path() {
     assert_eq!(pairs(&graph), [edge("main.go", "p/p.go")]);
     assert!(reasons(&graph).is_empty());
 }
+
+#[test]
+fn a_replace_directive_replaces_the_workspace_modules_of_its_path() {
+    for replace in [
+        "replace example.com/lib => ../fork\n",
+        "replace example.com/lib v1.0.0 => ../fork\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "original/go.mod", "module example.com/lib\n");
+        write(root, "original/lib.go", "package lib\n");
+        write(root, "original/sub/s.go", "package sub\n");
+        write(root, "fork/go.mod", "module example.com/lib\n");
+        write(root, "fork/lib.go", "package lib\n");
+        write(root, "fork/sub/s.go", "package sub\n");
+        write(
+            root,
+            "app/go.mod",
+            &format!("module example.com/app\n\nrequire example.com/lib v1.0.0\n\n{replace}"),
+        );
+        write(
+            root,
+            "app/main.go",
+            "package main\n\nimport (\n\t\"example.com/lib\"\n\t\"example.com/lib/sub\"\n)\n",
+        );
+        let graph = graph(root);
+        assert_eq!(
+            outcome(&graph, "app/main.go", "example.com/lib"),
+            Outcome::Resolved(vec!["fork/lib.go".to_string()]),
+            "{replace}"
+        );
+        assert_eq!(
+            outcome(&graph, "app/main.go", "example.com/lib/sub"),
+            Outcome::Resolved(vec!["fork/sub/s.go".to_string()]),
+            "{replace}"
+        );
+    }
+}
