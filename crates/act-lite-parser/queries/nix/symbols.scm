@@ -22,11 +22,11 @@
 ; inherit a b; and inherit (s) a;
 (inherit
   attrs: (inherited_attrs
-    attr: (identifier) @name)) @definition.variable
+    attr: [(identifier) (string_expression)] @name)) @definition.variable
 
 (inherit_from
   attrs: (inherited_attrs
-    attr: (identifier) @name)) @definition.variable
+    attr: [(identifier) (string_expression)] @name)) @definition.variable
 
 ; Parameters, simple and formal
 (function_expression

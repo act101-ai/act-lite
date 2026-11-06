@@ -20,11 +20,11 @@
 ; library(x) and require(x)
 (call
   function: (identifier) @_call
-  arguments: (arguments . (argument value: (_) @name))
+  arguments: (arguments . (comment)* . (argument value: (_) @name))
   (#match? @_call "^(library|require)$")) @import
 
 ; source("f.R")
 (call
   function: (identifier) @_call
-  arguments: (arguments . (argument value: (_) @name))
+  arguments: (arguments . (comment)* . (argument value: (_) @name))
   (#eq? @_call "source")) @include

@@ -10,7 +10,7 @@
     {
       "name": "act-lite",
       "description": "AST-aware code queries and code-health analysis for AI agents across 40 languages: skeletons, symbols, repository outlines, definitions, references and callers, and structural patterns, hotspots and duplicated code, over MCP.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "Kage Martin",
         "url": "https://github.com/act101-ai"
