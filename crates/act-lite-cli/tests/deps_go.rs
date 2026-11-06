@@ -656,3 +656,91 @@ fn a_replace_directive_replaces_the_workspace_modules_of_its_path() {
         );
     }
 }
+
+#[test]
+fn a_replace_directive_outside_the_workspace_makes_its_path_external() {
+    for replace in [
+        "replace example.com/lib => ../../external-lib\n",
+        "replace example.com/lib v1.0.0 => ../../external-lib\n",
+        "replace example.com/lib => other.example/lib v1.2.3\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "lib/go.mod", "module example.com/lib\n");
+        write(root, "lib/lib.go", "package lib\n");
+        write(root, "lib/sub/s.go", "package sub\n");
+        write(
+            root,
+            "app/go.mod",
+            &format!("module example.com/app\n\nrequire example.com/lib v1.0.0\n\n{replace}"),
+        );
+        write(
+            root,
+            "app/main.go",
+            "package main\n\nimport (\n\t\"example.com/lib\"\n\t\"example.com/lib/sub\"\n)\n",
+        );
+        let graph = graph(root);
+        let outcomes: Vec<Outcome> = ["example.com/lib", "example.com/lib/sub"]
+            .iter()
+            .map(|import| outcome(&graph, "app/main.go", import))
+            .collect();
+        assert_eq!(
+            outcomes,
+            [Outcome::External, Outcome::External],
+            "{replace}"
+        );
+        assert!(pairs(&graph).is_empty(), "{replace}");
+    }
+}
+
+#[test]
+fn an_import_path_is_resolved_by_its_decoded_value() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "lib/go.mod", "module example.com/lib\n");
+    write(root, "lib/l.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"example.com/\\x6cib\"\n\t\"example.com/\\154ib\"\n\t\"example.com/\\u006cib\"\n\t\"example.com/\\U0000006cib\"\n\t`example.com/\\x6cib/raw`\n\t\"example.com/\\q\"\n\t\"example.com/\\xff\"\n)\n",
+    );
+    let graph = graph(root);
+    for import in [
+        "example.com/\\x6cib",
+        "example.com/\\154ib",
+        "example.com/\\u006cib",
+        "example.com/\\U0000006cib",
+    ] {
+        assert_eq!(
+            outcome(&graph, "main.go", import),
+            Outcome::Resolved(vec!["lib/l.go".to_string()]),
+            "{import}"
+        );
+    }
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/\\x6cib/raw"),
+        Outcome::External
+    );
+    for import in ["example.com/\\q", "example.com/\\xff"] {
+        assert_eq!(
+            outcome(&graph, "main.go", import),
+            Outcome::Unresolved("invalid string literal".to_string()),
+            "{import}"
+        );
+    }
+    let evidence: Vec<String> = graph.edges()[0]
+        .evidence
+        .iter()
+        .map(|e| e.specifier.clone())
+        .collect();
+    assert_eq!(
+        evidence,
+        [
+            "example.com/\\x6cib",
+            "example.com/\\154ib",
+            "example.com/\\u006cib",
+            "example.com/\\U0000006cib",
+        ]
+    );
+}

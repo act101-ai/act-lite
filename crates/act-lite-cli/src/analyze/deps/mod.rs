@@ -36,6 +36,10 @@ use tokio_util::sync::CancellationToken;
 
 /// The most relationships an edge lists in `evidence`.
 const MAX_EDGE_EVIDENCE: usize = 5;
+
+/// The reason of a relationship whose string literal does not decode.
+pub(crate) const INVALID_LITERAL: &str = "invalid string literal";
+
 /// The most entries of `details.resolution_inputs`.
 const MAX_RESOLUTION_INPUTS: usize = 100;
 /// The most symlinks one probe follows.

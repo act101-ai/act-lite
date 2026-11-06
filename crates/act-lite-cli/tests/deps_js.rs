@@ -811,3 +811,53 @@ fn a_package_json_in_a_virtual_environment_is_not_read() {
     );
     assert!(inputs(&graph).is_empty(), "{:?}", inputs(&graph));
 }
+
+#[test]
+fn a_string_literal_is_resolved_by_its_decoded_value() {
+    let ws = workspace(&[
+        ("src/a.js", ""),
+        ("src/plain.js", "import './a.js';\n"),
+        ("src/hex.js", "import './\\x61.js';\n"),
+        ("src/braced.js", "import \"./\\u{61}.js\";\n"),
+        ("src/unicode.ts", "import a = require('./\\u0061.js');\n"),
+        ("src/reexport.js", "export * from './\\x61.js';\n"),
+        ("src/require.js", "require('./\\x61.js');\n"),
+        ("src/dynamic.js", "import(`./\\x61.js`);\n"),
+        ("src/single.js", "require('./\\a.js');\n"),
+        ("src/continued.js", "import './\\\na.js';\n"),
+        ("src/bad_hex.js", "import './\\x6.js';\n"),
+        ("src/bad_code.js", "import './\\u{110000}.js';\n"),
+    ]);
+    let graph = build(ws.path());
+    for file in [
+        "src/plain.js",
+        "src/hex.js",
+        "src/braced.js",
+        "src/unicode.ts",
+        "src/reexport.js",
+        "src/require.js",
+        "src/dynamic.js",
+        "src/single.js",
+        "src/continued.js",
+    ] {
+        assert_eq!(outcome(&graph, file), resolved("src/a.js"), "{file}");
+    }
+    for file in ["src/bad_hex.js", "src/bad_code.js"] {
+        assert_eq!(
+            outcome(&graph, file),
+            unresolved("invalid string literal"),
+            "{file}"
+        );
+    }
+    let hex = edge_rows(&graph)
+        .into_iter()
+        .find(|row| row.0 == "src/hex.js")
+        .unwrap();
+    assert_eq!(hex.4, [(1, "./\\x61.js".to_string())]);
+    let reasons: Vec<(String, String)> = graph
+        .unresolved(&|_| true)
+        .into_iter()
+        .map(|u| (u.file, u.target))
+        .collect();
+    assert!(reasons.contains(&("src/bad_hex.js".to_string(), "./\\x6.js".to_string())));
+}

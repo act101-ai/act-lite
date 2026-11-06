@@ -9,7 +9,7 @@
 //! only as a Node built-in, a declared dependency or a `node_modules`
 //! directory; otherwise it is `unresolved`.
 
-use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver};
+use super::{Family, INVALID_LITERAL, InputKind, Outcome, Probe, ResolveCx, Resolver};
 use act_lite_parser::deps::Relationship;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -125,7 +125,9 @@ impl Resolver for JsResolver {
         if !rel.literal {
             return Outcome::Unresolved("specifier is not a string literal".to_string());
         }
-        let spec = rel.specifier.as_str();
+        let Ok(spec) = rel.value.as_deref() else {
+            return Outcome::Unresolved(INVALID_LITERAL.to_string());
+        };
         let dir = parent(file);
         if is_relative(spec) {
             let Some(path) = cx.normalize(dir, spec) else {

@@ -8,7 +8,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use act_lite_core::CompactRange;
-use act_lite_parser::deps::{self, InlineModule, ModuleNames, Relationship, RelationshipKind};
+use act_lite_parser::deps::{
+    self, InlineModule, InvalidLiteral, LiteralValue, ModuleNames, Relationship, RelationshipKind,
+};
 use act_lite_parser::{Grammar, SourceFile};
 
 use RelationshipKind::*;
@@ -39,6 +41,7 @@ fn rel(kind: RelationshipKind, specifier: &str, at: &str) -> Relationship {
     Relationship {
         kind,
         specifier: specifier.to_string(),
+        value: Ok(specifier.to_string()),
         literal: true,
         range: range(at),
         imported: None,
@@ -342,7 +345,7 @@ fn forms() -> Vec<(&'static str, Vec<Relationship>)> {
             vec![
                 rel(Module, "net", "1:1-1:9"),
                 Relationship {
-                    path_attribute: Some("other/place.rs".to_string()),
+                    path_attribute: Some(Ok("other/place.rs".to_string())),
                     ..rel(Module, "moved", "3:1-3:11")
                 },
                 Relationship {
@@ -436,12 +439,12 @@ fn a_path_attribute_inside_a_macro_applies_to_the_next_mod() {
     );
     let expected = vec![
         Relationship {
-            path_attribute: Some("other.rs".to_string()),
+            path_attribute: Some(Ok("other.rs".to_string())),
             in_macro: true,
             ..rel(Module, "x", "3:5-3:11")
         },
         Relationship {
-            path_attribute: Some("sys/unix.rs".to_string()),
+            path_attribute: Some(Ok("sys/unix.rs".to_string())),
             in_macro: true,
             ..rel(Module, "sys", "6:5-6:24")
         },
@@ -470,17 +473,17 @@ fn comments_inside_a_macro_keep_a_path_attribute() {
     );
     let expected = vec![
         Relationship {
-            path_attribute: Some("other.rs".to_string()),
+            path_attribute: Some(Ok("other.rs".to_string())),
             in_macro: true,
             ..rel(Module, "x", "2:37-2:43")
         },
         Relationship {
-            path_attribute: Some("y.rs".to_string()),
+            path_attribute: Some(Ok("y.rs".to_string())),
             in_macro: true,
             ..rel(Module, "y", "4:5-5:6")
         },
         Relationship {
-            path_attribute: Some("z.rs".to_string()),
+            path_attribute: Some(Ok("z.rs".to_string())),
             in_macro: true,
             ..rel(Module, "z", "8:5-8:11")
         },
@@ -770,7 +773,7 @@ mod outl;
         inline: vec![InlineModule {
             name: "inl".to_string(),
             range: range("16:1-21:2"),
-            path_attribute: Some("p.rs".to_string()),
+            path_attribute: Some(Ok("p.rs".to_string())),
             names: ModuleNames {
                 names: names(&["deeper", "g"]),
                 glob: false,
@@ -932,7 +935,7 @@ fn rust_raw_path_attributes_apply() {
     let relationships = deps::extract(&file);
     let attributes: Vec<Option<&str>> = relationships
         .iter()
-        .map(|r| r.path_attribute.as_deref())
+        .map(|r| r.path_attribute.as_ref().and_then(|p| p.as_deref().ok()))
         .collect();
     assert_eq!(attributes, [Some("z.rs"), Some("o.rs")]);
 }
@@ -955,7 +958,12 @@ w! {
     let relationships = deps::extract(&file);
     let attributes: Vec<(&str, Option<&str>)> = relationships
         .iter()
-        .map(|r| (r.specifier.as_str(), r.path_attribute.as_deref()))
+        .map(|r| {
+            (
+                r.specifier.as_str(),
+                r.path_attribute.as_ref().and_then(|p| p.as_deref().ok()),
+            )
+        })
         .collect();
     assert_eq!(
         attributes,
@@ -968,7 +976,8 @@ w! {
     assert_eq!(
         deps::module_names(&file).inline[0]
             .path_attribute
-            .as_deref(),
+            .as_ref()
+            .and_then(|p| p.as_deref().ok()),
         Some("inl")
     );
 }
@@ -995,4 +1004,157 @@ fn comments_inside_include_and_use_tokens_are_skipped() {
             (Use, "h::i", true),
         ]
     );
+}
+
+/// The written specifier and the decoded value of each relationship.
+fn values(grammar: Grammar, source: &str) -> Vec<(String, LiteralValue)> {
+    deps::extract(&parse(grammar, source))
+        .into_iter()
+        .map(|r| (r.specifier, r.value))
+        .collect()
+}
+
+fn ok(written: &str, value: &str) -> (String, LiteralValue) {
+    (written.to_string(), Ok(value.to_string()))
+}
+
+fn invalid(written: &str) -> (String, LiteralValue) {
+    (written.to_string(), Err(InvalidLiteral))
+}
+
+#[test]
+fn a_js_string_is_decoded_and_keeps_its_written_text() {
+    let source = concat!(
+        "import './a.js';\n",
+        "import './\\x61.js';\n",
+        "import \"./\\u{61}.js\";\n",
+        "export * from './\\u0061.js';\n",
+        "require('./\\a\\'\\\\.js');\n",
+        "import(`./\\x61.js`);\n",
+        "import './\\ud83d\\ude00.js';\n",
+        "import './\\\na.js';\n",
+        "import './\\0.js';\n",
+        "import './\\x6.js';\n",
+        "import './\\u{110000}.js';\n",
+        "import './\\ud800.js';\n",
+        "import './\\01.js';\n",
+    );
+    assert_eq!(
+        values(Grammar::JavaScript, source),
+        [
+            ok("./a.js", "./a.js"),
+            ok("./\\x61.js", "./a.js"),
+            ok("./\\u{61}.js", "./a.js"),
+            ok("./\\u0061.js", "./a.js"),
+            ok("./\\a\\'\\\\.js", "./a'\\.js"),
+            ok("./\\x61.js", "./a.js"),
+            ok("./\\ud83d\\ude00.js", "./\u{1f600}.js"),
+            ok("./\\\na.js", "./a.js"),
+            ok("./\\0.js", "./\0.js"),
+            invalid("./\\x6.js"),
+            invalid("./\\u{110000}.js"),
+            invalid("./\\ud800.js"),
+            invalid("./\\01.js"),
+        ]
+    );
+    assert_eq!(
+        values(Grammar::TypeScript, "import a = require('./\\x61');\n"),
+        [ok("./\\x61", "./a")]
+    );
+}
+
+#[test]
+fn a_go_interpreted_string_is_decoded_and_a_raw_string_is_not() {
+    let source = concat!(
+        "package main\n\nimport (\n",
+        "\t\"example.com/lib\"\n",
+        "\t\"example.com/\\x6cib\"\n",
+        "\t\"example.com/\\154ib\"\n",
+        "\t\"example.com/\\u006cib\"\n",
+        "\t\"example.com/\\U0000006cib\"\n",
+        "\t\"example.com/\\u00e9\\xc3\\xa9\"\n",
+        "\t`example.com/\\x6cib`\n",
+        "\t\"example.com/\\q\"\n",
+        "\t\"example.com/\\xff\"\n",
+        "\t\"example.com/\\400\"\n",
+        ")\n",
+    );
+    assert_eq!(
+        values(Grammar::Go, source),
+        [
+            ok("example.com/lib", "example.com/lib"),
+            ok("example.com/\\x6cib", "example.com/lib"),
+            ok("example.com/\\154ib", "example.com/lib"),
+            ok("example.com/\\u006cib", "example.com/lib"),
+            ok("example.com/\\U0000006cib", "example.com/lib"),
+            ok("example.com/\\u00e9\\xc3\\xa9", "example.com/\u{e9}\u{e9}"),
+            ok("example.com/\\x6cib", "example.com/\\x6cib"),
+            invalid("example.com/\\q"),
+            invalid("example.com/\\xff"),
+            invalid("example.com/\\400"),
+        ]
+    );
+}
+
+#[test]
+fn a_rust_string_is_decoded_and_a_raw_string_is_not() {
+    let source = concat!(
+        "const _: &[u8] = include!(\"d\\u{61}ta.txt\").as_ref();\n",
+        "const _: &[u8] = include_str!(\"d\\x61\\u{000061}ta.txt\").as_ref();\n",
+        "const _: &[u8] = include_bytes!(\"da\\\n    ta.txt\").as_ref();\n",
+        "const _: &[u8] = include!(r\"d\\u{61}ta.txt\").as_ref();\n",
+        "const _: &[u8] = include!(r#\"d\\x61ta.txt\"#).as_ref();\n",
+        "const _: &[u8] = include!(\"d\\qta.txt\").as_ref();\n",
+        "const _: &[u8] = include!(\"d\\x80ta.txt\").as_ref();\n",
+        "const _: &[u8] = include!(\"d\\u{d800}ta.txt\").as_ref();\n",
+    );
+    assert_eq!(
+        values(Grammar::Rust, source),
+        [
+            ok("d\\u{61}ta.txt", "data.txt"),
+            ok("d\\x61\\u{000061}ta.txt", "daata.txt"),
+            ok("da\\\n    ta.txt", "data.txt"),
+            ok("d\\u{61}ta.txt", "d\\u{61}ta.txt"),
+            ok("d\\x61ta.txt", "d\\x61ta.txt"),
+            invalid("d\\qta.txt"),
+            invalid("d\\x80ta.txt"),
+            invalid("d\\u{d800}ta.txt"),
+        ]
+    );
+}
+
+#[test]
+fn a_rust_path_attribute_is_decoded() {
+    let file = parse(
+        Grammar::Rust,
+        concat!(
+            "#[path = \"\\x6f.rs\"]\nmod x;\n",
+            "#[path = r\"\\x6f.rs\"]\nmod r;\n",
+            "#[path = \"\\q.rs\"]\nmod bad;\n",
+            "w! { #[path = \"\\u{70}.rs\"] mod y; #[path = \"\\q\"] mod z; }\n",
+            "#[path = \"\\x69n\"]\nmod inl {}\n",
+            "#[path = \"\\q\"]\nmod inl2 {}\n",
+        ),
+    );
+    let attributes: Vec<(String, Option<LiteralValue>)> = deps::extract(&file)
+        .into_iter()
+        .map(|r| (r.specifier, r.path_attribute))
+        .collect();
+    let some = |v: &str| Some(Ok(v.to_string()));
+    assert_eq!(
+        attributes,
+        [
+            ("x".to_string(), some("o.rs")),
+            ("r".to_string(), some("\\x6f.rs")),
+            ("bad".to_string(), Some(Err(InvalidLiteral))),
+            ("y".to_string(), some("p.rs")),
+            ("z".to_string(), Some(Err(InvalidLiteral))),
+        ]
+    );
+    let inline: Vec<Option<LiteralValue>> = deps::module_names(&file)
+        .inline
+        .into_iter()
+        .map(|m| m.path_attribute)
+        .collect();
+    assert_eq!(inline, [some("in"), Some(Err(InvalidLiteral))]);
 }

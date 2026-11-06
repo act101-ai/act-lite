@@ -1358,3 +1358,66 @@ fn a_cancelled_token_stops_the_module_expansion_from_read_files() {
         outcomes[1].1
     );
 }
+
+#[test]
+fn a_string_literal_is_resolved_by_its_decoded_value() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"lit\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "#[path = \"\\x6f.rs\"]\nmod x;\n",
+            "w! { #[path = \"\\u{70}.rs\"] mod y; }\n",
+            "#[path = \"\\x69n\"]\nmod inl { mod k; }\n",
+            "#[path = \"\\u{d800}.rs\"]\nmod bad;\n",
+            "#[path = \"\\q\"]\nmod inl2 { mod m; }\n",
+            "v! { #[path = \"\\q.rs\"] mod z; }\n",
+            "const A: &str = include_str!(\"d\\u{61}ta.txt\");\n",
+            "const B: &str = include_str!(\"da\\\n    ta.txt\");\n",
+            "const C: &str = include_str!(r\"d\\u{61}ta.txt\");\n",
+            "const D: &str = include_str!(\"d\\qta.txt\");\n",
+        ),
+    );
+    write(root, "src/o.rs", "");
+    write(root, "src/p.rs", "");
+    write(root, "src/in/k.rs", "");
+    write(root, "src/data.txt", "");
+    let graph = graph(root);
+    assert_eq!(outcome(&graph, "src/lib.rs", "x"), resolved(&["src/o.rs"]));
+    assert_eq!(outcome(&graph, "src/lib.rs", "y"), resolved(&["src/p.rs"]));
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "k"),
+        resolved(&["src/in/k.rs"])
+    );
+    for name in ["bad", "m", "z"] {
+        assert_eq!(
+            outcome(&graph, "src/lib.rs", name),
+            Outcome::Unresolved("invalid string literal".to_string()),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "d\\u{61}ta.txt"),
+        resolved(&["src/data.txt"])
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "da\\\n    ta.txt"),
+        resolved(&["src/data.txt"])
+    );
+    assert!(reasons(&graph).contains(&reason(
+        "src/lib.rs",
+        "d\\u{61}ta.txt",
+        "src/d\\u{61}ta.txt does not exist"
+    )));
+    assert!(reasons(&graph).contains(&reason(
+        "src/lib.rs",
+        "d\\qta.txt",
+        "invalid string literal"
+    )));
+}

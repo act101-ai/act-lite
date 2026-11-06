@@ -20,7 +20,8 @@ use act_lite_core::CompactRange;
 use tree_sitter::Node;
 
 use super::{
-    InlineModule, ModuleNames, Relationship, RelationshipKind, nodes, range_of, text, unquote,
+    InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, nodes, range_of,
+    rust_value, text, unquote,
 };
 use crate::{Grammar, Parser};
 
@@ -54,7 +55,7 @@ struct Leaf {
 /// A form read from a macro body.
 enum MacroItem {
     /// The name, the range and the `#[path]` value.
-    Mod(String, CompactRange, Option<String>),
+    Mod(String, CompactRange, Option<LiteralValue>),
     Use(Vec<Leaf>, CompactRange),
     Name(String),
 }
@@ -108,6 +109,7 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
 fn macro_relationships(item: MacroItem) -> Vec<Relationship> {
     let relationship = |kind, specifier: String, range: &CompactRange| Relationship {
         kind,
+        value: Ok(specifier.clone()),
         specifier,
         literal: true,
         range: range.clone(),
@@ -319,7 +321,7 @@ fn path_text(node: Node, source: &str) -> String {
 
 /// The value of a `#[path = "…"]` attribute among the attributes before an
 /// item.
-fn path_attribute(item: Node, source: &str) -> Option<String> {
+fn path_attribute(item: Node, source: &str) -> Option<LiteralValue> {
     let mut sibling = item.prev_sibling();
     while let Some(node) = sibling {
         match node.kind() {
@@ -327,7 +329,7 @@ fn path_attribute(item: Node, source: &str) -> Option<String> {
                 if let Some(attribute) = first_named(node)
                     && first_named(attribute).map(|p| unraw(text(p, source))) == Some("path")
                     && let Some(value) = attribute.child_by_field_name("value")
-                    && let Some(path) = string_value(value, source)
+                    && let Some((_, path)) = string_value(value, source)
                 {
                     return Some(path);
                 }
@@ -346,12 +348,18 @@ fn first_named(node: Node) -> Option<Node> {
     node.named_children(&mut cursor).find(|c| !is_comment(c))
 }
 
-fn string_value(node: Node, source: &str) -> Option<String> {
+/// The text without delimiters and the decoded value of a string literal;
+/// a raw string is its own value.
+fn string_value<'a>(node: Node, source: &'a str) -> Option<(&'a str, LiteralValue)> {
     let written = text(node, source);
     match node.kind() {
-        "string_literal" => Some(unquote(written).to_string()),
+        "string_literal" => {
+            let inner = unquote(written);
+            Some((inner, rust_value(inner)))
+        }
         "raw_string_literal" => {
-            Some(unquote(written.trim_start_matches('r').trim_matches('#')).to_string())
+            let inner = unquote(written.trim_start_matches('r').trim_matches('#'));
+            Some((inner, Ok(inner.to_string())))
         }
         _ => None,
     }
@@ -371,9 +379,12 @@ fn include(node: Node, source: &str) -> Option<Relationship> {
         .filter(|c| !is_comment(c))
         .collect();
     if let [only] = arguments.as_slice()
-        && let Some(value) = string_value(*only, source)
+        && let Some((inner, value)) = string_value(*only, source)
     {
-        return Some(Relationship::new(RelationshipKind::Include, &value, node));
+        return Some(Relationship {
+            value,
+            ..Relationship::new(RelationshipKind::Include, inner, node)
+        });
     }
     Some(Relationship {
         literal: false,
@@ -486,7 +497,7 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
 }
 
 /// The value of the attribute token tree `[path = "…"]`, comments skipped.
-fn path_in_attribute(attribute: Node, source: &str) -> Option<String> {
+fn path_in_attribute(attribute: Node, source: &str) -> Option<LiteralValue> {
     let mut cursor = attribute.walk();
     let tokens: Vec<Node> = attribute
         .children(&mut cursor)
@@ -498,7 +509,7 @@ fn path_in_attribute(attribute: Node, source: &str) -> Option<String> {
                 && unraw(text(*name, source)) == "path"
                 && equals.kind() == "=" =>
         {
-            string_value(*value, source)
+            string_value(*value, source).map(|(_, value)| value)
         }
         _ => None,
     }
