@@ -345,6 +345,30 @@ fn a_use_through_a_module_that_a_macro_declares() {
 }
 
 #[test]
+fn a_path_attribute_inside_a_macro_replaces_the_probe() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "cfg_x! {\n    #[path = \"other.rs\"]\n    mod x;\n}\nuse crate::x::Thing;\n",
+    );
+    write(root, "src/other.rs", "pub struct Thing;\n");
+    write(root, "src/x.rs", "pub struct Decoy;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "x"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "crate::x::Thing"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(pairs(&graph), [edge("src/lib.rs", "src/other.rs")]);
+}
+
+#[test]
 fn a_use_through_a_missing_module_file() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();
@@ -664,7 +688,7 @@ impl Resolver for Watching {
 }
 
 #[test]
-fn only_the_module_files_of_the_package_trees_are_read() {
+fn only_the_module_files_of_the_workspace_trees_are_read() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();
     package(root, ".", "app", "");
@@ -679,7 +703,8 @@ fn only_the_module_files_of_the_package_trees_are_read() {
     write(root, "tests/t.rs", &format!("mod helper;\n{marker}"));
     write(root, "tests/helper.rs", marker);
     // An analyzed file that no tree reaches is read for its own tree; the
-    // lib of a crate that `app` does not depend on is not read.
+    // lib of a crate that `app` does not depend on is read, because its
+    // tree could load a file of `app` through `#[path]`.
     write(root, "src/c.rs", marker);
     package(root, "other", "other", "");
     write(root, "other/src/lib.rs", marker);
@@ -699,6 +724,7 @@ fn only_the_module_files_of_the_package_trees_are_read() {
     assert_eq!(
         read,
         [
+            "other/src/lib.rs",
             "src/a.rs",
             "src/b.rs",
             "src/c.rs",
@@ -966,4 +992,69 @@ fn a_file_that_loads_itself_through_path_attributes_terminates() {
         resolved(&["src/a.rs"])
     );
     assert_eq!(outcome(&g, "src/b.rs", "again"), resolved(&["src/a.rs"]));
+}
+
+#[test]
+fn a_file_outside_its_package_is_resolved_in_the_tree_that_loads_it() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, "app", "app", "");
+    write(
+        root,
+        "app/src/lib.rs",
+        "#[path = \"../../shared/common.rs\"]\nmod common;\npub struct X;\n",
+    );
+    write(root, "shared/common.rs", "use crate::X;\n");
+    for scope in [&[][..], &["shared/common.rs"][..]] {
+        let graph = graph_of(root, scope);
+        assert_eq!(
+            outcome(&graph, "shared/common.rs", "crate::X"),
+            resolved(&["app/src/lib.rs"]),
+            "{scope:?}"
+        );
+        assert_eq!(
+            kinds_of(&graph, "shared/common.rs", "app/src/lib.rs"),
+            ["use"]
+        );
+    }
+}
+
+#[test]
+fn a_file_of_another_package_resolves_with_the_package_of_its_tree() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(
+        root,
+        "app",
+        "app",
+        "\n[dependencies]\ndep = { path = \"../dep\" }\n",
+    );
+    write(
+        root,
+        "app/src/lib.rs",
+        "#[path = \"../../shared/common.rs\"]\nmod common;\npub struct X;\n",
+    );
+    package(root, "dep", "dep", "");
+    write(root, "dep/src/lib.rs", "pub struct Y;\n");
+    package(root, "shared", "shared", "");
+    write(root, "shared/src/lib.rs", "pub struct S;\n");
+    write(
+        root,
+        "shared/common.rs",
+        "use crate::X;\nuse dep::Y;\nuse app::X as Z;\n",
+    );
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "shared/common.rs", "crate::X"),
+        resolved(&["app/src/lib.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "shared/common.rs", "dep::Y"),
+        resolved(&["dep/src/lib.rs"])
+    );
+    // The lib tree of `app` does not name its own lib.
+    assert_eq!(
+        outcome(&graph, "shared/common.rs", "app::X"),
+        unresolved("first path segment is not a module, crate or dependency: app")
+    );
 }

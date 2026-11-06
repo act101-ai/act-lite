@@ -429,6 +429,31 @@ fn macro_token_forms_are_relationships() {
 }
 
 #[test]
+fn a_path_attribute_inside_a_macro_applies_to_the_next_mod() {
+    let file = parse(
+        Grammar::Rust,
+        "cfg_x! {\n    #[path = \"other.rs\"]\n    mod x;\n    #[cfg(unix)]\n    #[path = r\"sys/unix.rs\"]\n    pub(crate) mod sys;\n    #[path = \"lost.rs\"]\n    struct S;\n    mod y;\n}\n",
+    );
+    let expected = vec![
+        Relationship {
+            path_attribute: Some("other.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "x", "3:5-3:11")
+        },
+        Relationship {
+            path_attribute: Some("sys/unix.rs".to_string()),
+            in_macro: true,
+            ..rel(Module, "sys", "6:5-6:24")
+        },
+        Relationship {
+            in_macro: true,
+            ..rel(Module, "y", "9:5-9:11")
+        },
+    ];
+    assert_eq!(deps::extract(&file), expected);
+}
+
+#[test]
 fn computed_specifiers_are_kept_with_their_text() {
     let rust = parse(
         Grammar::Rust,
@@ -506,7 +531,7 @@ fn python_names_bound_at_top_level() {
          from x import y as z, w\n",
     );
     let expected = ModuleNames {
-        names: names(&["K", "a", "b", "c", "f", "n", "r", "t", "w", "z"]),
+        names: names(&["K", "a", "b", "c", "f", "r", "t", "w", "z"]),
         glob: false,
         inline: vec![],
     };

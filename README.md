@@ -882,7 +882,7 @@ recovered tree.
 | Rust | `use` declaration, one per leaf path (`use a::{b, c::d}` gives `a::b` and `a::c::d`; `self` in a list gives the list's prefix; `use a::*` gives `a`; `use a::b as c` gives `a::b`) | `use` | the leaf path | the declaration |
 | Rust | `extern crate x;` | `extern_crate` | the name | the declaration |
 | Rust | `include!`, `include_str!`, `include_bytes!` | `include` | the string literal, or the argument's text when it is not a string literal (`unresolved`) | the invocation |
-| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above | from the first token (`pub`, `mod` or `use`) to the `;` |
+| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe | from the first token (`pub`, `mod` or `use`) to the `;` |
 
 The kinds are `dynamic_import`, `extern_crate`, `from_import`, `import`,
 `include`, `module`, `reexport`, `require`, `type_import` and `use`. A Python `from __future__ import …` is not a relationship.
@@ -958,7 +958,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   else the first under which it is a namespace package. `from X import n`
   targets `X`'s file when a top-level statement of it binds `n` (an
   annotation binds only with a value: `n: int = 1` binds, `n: int` does
-  not), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
+  not; `global n` does not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
   is `unresolved` outside a package (`relative import outside a package`) or
   above the top-level package (`relative import beyond the top-level
@@ -995,11 +995,15 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   item that the reached module's file declares (or the file has a glob `use`).
   A file is in a crate tree when that tree's modules reach it, through any
   `#[path]`, not by its directory: an example, bench or test root that loads
-  `src/shared.rs` has it in its tree. A file in several crate trees, or loaded
-  as several modules of one tree, resolves each relationship in every tree
-  and every module that loads it, in root order: it is `resolved` when any of
-  them resolves it, with one edge to each distinct target, and `unresolved`
-  only when none resolves it, with the reason of the first tree.
+  `src/shared.rs` has it in its tree. The trees of every workspace crate
+  count, not only those of the package of the file's nearest `Cargo.toml`,
+  and each tree resolves the file with its own package (lib name,
+  dependencies, `crate`). A file in several crate trees, or loaded as several
+  modules of one tree, resolves each relationship in every tree and every
+  module that loads it, in root order (the trees of the file's own package
+  first, then those of the other crates by directory): it is `resolved` when
+  any of them resolves it, with one edge to each distinct target, and
+  `unresolved` only when none resolves it, with the reason of the first tree.
   `include!` paths are relative to the declaring file. A `Cargo.toml` that
   cannot be read makes every relationship of its package `unresolved`.
 

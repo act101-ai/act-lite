@@ -6,7 +6,9 @@
 //! (`cfg_rt! { pub mod a; pub use a::B; }`) pass their items through, so at
 //! module level three token forms are read, each with an optional `pub` or
 //! `pub(…)`: `mod <name> ;`, `use <tree> ;` (the text is parsed again as a
-//! `use` declaration), and an item keyword followed by a name. A nested
+//! `use` declaration), and an item keyword followed by a name. A
+//! `# [ path = "…" ]` among the attributes directly before a `mod` form is
+//! its `#[path]` value. A nested
 //! token tree is read the same way when it is the body of a nested macro
 //! invocation (`name! { … }`).
 
@@ -47,7 +49,8 @@ struct Leaf {
 
 /// A form read from a macro body.
 enum MacroItem {
-    Mod(String, CompactRange),
+    /// The name, the range and the `#[path]` value.
+    Mod(String, CompactRange, Option<String>),
     Use(Vec<Leaf>, CompactRange),
     Name(String),
 }
@@ -109,7 +112,10 @@ fn macro_relationships(item: MacroItem) -> Vec<Relationship> {
         in_macro: true,
     };
     match item {
-        MacroItem::Mod(name, range) => vec![relationship(RelationshipKind::Module, name, &range)],
+        MacroItem::Mod(name, range, path_attribute) => vec![Relationship {
+            path_attribute,
+            ..relationship(RelationshipKind::Module, name, &range)
+        }],
         MacroItem::Use(leaves, range) => leaves
             .into_iter()
             .map(|leaf| relationship(RelationshipKind::Use, leaf.path, &range))
@@ -175,7 +181,7 @@ fn declared(container: Node, source: &str) -> ModuleNames {
                 }
                 for item in items {
                     match item {
-                        MacroItem::Mod(name, _) | MacroItem::Name(name) => {
+                        MacroItem::Mod(name, ..) | MacroItem::Name(name) => {
                             names.names.insert(name);
                         }
                         MacroItem::Use(leaves, _) => {
@@ -377,9 +383,23 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
         return;
     };
     let kind_at = |j: usize| tokens.get(j).map(|t| t.kind());
+    // The `#[path]` value among the attributes read since the last item.
+    let mut attribute_path = None;
     let mut i = 0;
     while i < tokens.len() {
         let token = tokens[i];
+        if token.kind() == "#"
+            && let Some(attribute) = tokens
+                .get(i + 1)
+                .filter(|t| t.kind() == "token_tree" && text(**t, source).starts_with('['))
+        {
+            if let Some(path) = path_in_attribute(*attribute, source) {
+                attribute_path = Some(path);
+            }
+            i += 2;
+            continue;
+        }
+        let path_attribute = attribute_path.take();
         let mut j = i;
         if token.kind() == "pub" {
             j += 1;
@@ -395,7 +415,11 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
             && kind_at(j + 2) == Some(";")
         {
             let name = text(tokens[j + 1], source).to_string();
-            items.push(MacroItem::Mod(name, span(token, tokens[j + 2])));
+            items.push(MacroItem::Mod(
+                name,
+                span(token, tokens[j + 2]),
+                path_attribute,
+            ));
             i = j + 3;
             continue;
         }
@@ -423,6 +447,22 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
             macro_items(token, source, items);
         }
         i += 1;
+    }
+}
+
+/// The value of the attribute token tree `[path = "…"]`.
+fn path_in_attribute(attribute: Node, source: &str) -> Option<String> {
+    let mut cursor = attribute.walk();
+    let tokens: Vec<Node> = attribute.children(&mut cursor).collect();
+    match tokens.as_slice() {
+        [_, name, equals, value, _]
+            if name.kind() == "identifier"
+                && text(*name, source) == "path"
+                && equals.kind() == "=" =>
+        {
+            string_value(*value, source)
+        }
+        _ => None,
     }
 }
 
