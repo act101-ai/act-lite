@@ -263,6 +263,39 @@ fn symbols_of(source: &str) -> Value {
 }
 
 #[test]
+fn quoted_inherited_names_are_declared_as_written() {
+    let source = "{ inherit (pkgs) \"hello\" world; inherit \"a-b\"; }\n";
+    let expected: BTreeSet<(String, String)> = [
+        ("variable", "\"hello\""),
+        ("variable", "world"),
+        ("variable", "\"a-b\""),
+    ]
+    .into_iter()
+    .map(|(k, n)| (k.to_string(), n.to_string()))
+    .collect();
+    let skeleton: BTreeSet<(String, String)> = items(&skeleton_of(source), "declarations")
+        .iter()
+        .map(|d| {
+            (
+                d["kind"].as_str().unwrap().to_string(),
+                d["name"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(skeleton, expected);
+    let symbols: BTreeSet<(String, String)> = items(&symbols_of(source), "symbols")
+        .iter()
+        .map(|s| {
+            (
+                s["kind"].as_str().unwrap().to_string(),
+                s["name"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(symbols, expected);
+}
+
+#[test]
 fn inherit_from_declares_each_name_with_the_inherit_range() {
     let skeleton = skeleton_of("{ inherit (s) a b; }\n");
     let found: BTreeSet<(String, String, String, String)> = items(&skeleton, "declarations")

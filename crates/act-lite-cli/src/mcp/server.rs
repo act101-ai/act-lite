@@ -291,7 +291,13 @@ impl ActLiteServer {
         let result = act_lite_parser::execute_skeleton(&source).map_err(|e| {
             McpError::internal_error(format!("Failed to execute skeleton query: {}", e), None)
         })?;
-        let json = serde_json::to_string(&compact_skeleton(&result))
+        let mut compact = compact_skeleton(&result);
+        if source.tree().root_node().has_error()
+            && let serde_json::Value::Object(ref mut map) = compact
+        {
+            map.insert("parse_error".to_string(), serde_json::Value::Bool(true));
+        }
+        let json = serde_json::to_string(&compact)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(success_with_hint(
             json,

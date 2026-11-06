@@ -51,14 +51,17 @@ pub async fn execute(
     match &args.query_type {
         // === Tree-sitter queries (no LSP needed) ===
         QueryType::Skeleton { file } => {
+            let file = &in_workspace(file, workspace);
             let source = load_source(file, workspace)?;
             let result = act_lite_parser::execute_skeleton(&source).with_context(|| {
                 format!("failed to execute skeleton query on {}", file.display())
             })?;
+            let result = with_parse_state(&result, &source);
             output(&result, format)?;
         }
 
         QueryType::Symbols { file } => {
+            let file = &in_workspace(file, workspace);
             let source = load_source(file, workspace)?;
             let result = act_lite_parser::execute_symbols(&source).with_context(|| {
                 format!("failed to execute symbols query on {}", file.display())
@@ -71,10 +74,12 @@ pub async fn execute(
             let file = file
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("--file is required for symbol query"))?;
+            let file = &in_workspace(file, workspace);
             let source = load_source(file, workspace)?;
             let result = act_lite_parser::execute_symbol(&source, name).with_context(|| {
                 format!("failed to find symbol '{}' in {}", name, file.display())
             })?;
+            let result = with_parse_state(&result, &source);
             output(&result, format)?;
         }
 
@@ -87,7 +92,7 @@ pub async fn execute(
             // The same resolver the MCP `definition` tool uses: the name is
             // matched across every same-grammar file under the workspace
             // root, and the candidates are ranked by the position.
-            let file = &validate_file_path(file, workspace)
+            let file = &validate_file_path(&in_workspace(file, workspace), workspace)
                 .with_context(|| format!("invalid path: {}", file.display()))?;
             let source = load_source(file, workspace)?;
             let root = resolve_workspace_root(workspace);
@@ -118,7 +123,7 @@ pub async fn execute(
             // fallback will actually be used.
             // A language server rejects a relative file URI, so the file is
             // loaded by its canonical path.
-            let file = &validate_file_path(file, workspace)
+            let file = &validate_file_path(&in_workspace(file, workspace), workspace)
                 .with_context(|| format!("invalid path: {}", file.display()))?;
             let source = load_source(file, workspace)?;
             let workspace_root = resolve_workspace_root(workspace);
@@ -181,7 +186,7 @@ pub async fn execute(
         // === LSP queries (fail if --disable-lsp was passed) ===
         QueryType::Callers { name, file } => {
             require_lsp(enable_lsp, "callers")?;
-            let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
+            let (pool, grammar, file) = create_lsp_pool(&in_workspace(file, workspace), workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callers").await?;
             let source = load_source(file, workspace)?;
@@ -202,7 +207,7 @@ pub async fn execute(
 
         QueryType::Callees { name, file } => {
             require_lsp(enable_lsp, "callees")?;
-            let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
+            let (pool, grammar, file) = create_lsp_pool(&in_workspace(file, workspace), workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callees").await?;
             let source = load_source(file, workspace)?;
@@ -223,7 +228,7 @@ pub async fn execute(
 
         QueryType::Implementations { name, file } => {
             require_lsp(enable_lsp, "implementations")?;
-            let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
+            let (pool, grammar, file) = create_lsp_pool(&in_workspace(file, workspace), workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "implementations").await?;
             let source = load_source(file, workspace)?;
@@ -368,6 +373,15 @@ fn load_source(file: &Path, workspace: Option<&Path>) -> Result<act_lite_parser:
 /// Get the grammar for a file: filename conventions first, then extension.
 fn grammar_for_file(file: &Path) -> Option<Grammar> {
     Grammar::from_path(file)
+}
+
+/// A query's file argument: with `--workspace`, a relative path resolves
+/// against the workspace root, not the current directory.
+fn in_workspace(file: &Path, workspace: Option<&Path>) -> PathBuf {
+    match workspace {
+        Some(_) if file.is_relative() => resolve_workspace_root(workspace).join(file),
+        _ => file.to_path_buf(),
+    }
 }
 
 /// Resolve the workspace root from the optional workspace path.

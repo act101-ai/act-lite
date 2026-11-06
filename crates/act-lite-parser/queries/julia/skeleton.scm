@@ -55,8 +55,15 @@
 (using_statement (selected_import . [(identifier) (scoped_identifier)] @name)) @import
 (import_statement (selected_import . [(identifier) (scoped_identifier)] @name)) @import
 
-; include("f.jl")
+; include("f.jl"), include(raw"f.jl")
 (call_expression
   . (identifier) @_call
-  . (argument_list . (string_literal) @name .)
+  . (argument_list . [(line_comment) (block_comment)]* . (string_literal) @name)
   (#eq? @_call "include")) @include
+(call_expression
+  . (identifier) @_call
+  . (argument_list
+      . [(line_comment) (block_comment)]*
+      . (prefixed_string_literal prefix: (identifier) @_prefix) @name)
+  (#eq? @_call "include")
+  (#eq? @_prefix "raw")) @include
