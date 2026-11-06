@@ -264,7 +264,7 @@ impl Analyzer for ClonesAnalyzer {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: details.as_object().cloned(),
-            input_failed: false,
+            failed_inputs: None,
         })
     }
 }

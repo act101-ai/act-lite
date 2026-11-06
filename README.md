@@ -509,14 +509,14 @@ present, in this order, including empty lists and zero counts:
 |---|---|
 | `analysis` | The analyzer name, for example `patterns`. |
 | `status` | `findings`, `no_findings`, `unsupported` or `incomplete` (below). |
-| `complete` | `true` if and only if every count in `incomplete.counts` is 0 and, for the dependency analyzers, no entry of `details.resolution_inputs` has an `error`. |
+| `complete` | `true` if and only if every count in `incomplete.counts` is 0. |
 | `findings` | The returned findings, in the order below, cut to `limit`. |
 | `total` | The number of findings before the cut. |
 | `limit` | The effective limit. |
 | `truncated` | `true` if and only if `total` is more than the length of `findings`. |
 | `coverage` | `analyzed_files`; `languages`, a list of `{ "language", "files", "supported" }`; `unrecognized_files`. |
 | `excluded` | `tests`, `generated`, `vendored`, `ignored` (lists of `{ "path", "range"? }`), `counts` (the same four keys), `truncated`. |
-| `incomplete` | `skipped_files`, `parse_failures`, `unresolved`, `limits_hit` (lists), `counts` (the same four keys), `truncated`. |
+| `incomplete` | `skipped_files`, `parse_failures`, `unresolved`, `limits_hit` (lists), `counts` (the same four keys, and `failed_inputs` for the dependency analyzers), `truncated`. |
 | `evidence` | `sources` (list of strings), `language_servers` (list). |
 
 An analyzer can add one more top-level key, `details` (an object), for
@@ -553,6 +553,9 @@ a result incomplete; they appear in `coverage.languages` with
   relationship that the analysis needs and could not resolve.
 - `limits_hit`: `{ "limit", "value", "detail" }`, an analysis bound (a
   request parameter) that stopped the analysis early.
+- `counts.failed_inputs` (dependency analyzers only, no list): the number of
+  resolution inputs that could not be read or parsed, over every input read,
+  also those past the entries listed in `details.resolution_inputs`.
 
 **Locations.** `file` and `path` are relative to the workspace root, with `/`
 separators and no leading `./`. A directory ends with `/`; the root is `"."`.
@@ -1126,9 +1129,9 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `details.resolution_inputs` (`{ "file", "kind" }`, at most 100, with
   `resolution_inputs_total`); one that cannot be read or parsed keeps its entry
   with an `error` key, and the relationships whose rule reads it are
-  `unresolved`, reason `<file> could not be read`. Such an input makes the
-  result incomplete by itself (`complete` is `false`), also when every
-  relationship resolves: a malformed `package.json` or `Cargo.toml` could
+  `unresolved`, reason `<file> could not be read`. Such an input counts in
+  `incomplete.counts.failed_inputs` and makes the result incomplete by itself
+  (`complete` is `false`), also when every relationship resolves: a malformed `package.json` or `Cargo.toml` could
   have declared a name that competes with another package or crate. A
   resolution input that is
   a symlink to a regular file inside the workspace is read through its target

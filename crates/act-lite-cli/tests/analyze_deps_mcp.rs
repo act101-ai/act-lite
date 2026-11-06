@@ -474,6 +474,7 @@ fn a_malformed_package_json_elsewhere_makes_the_result_incomplete_over_mcp() {
     let (v, _) = session.ok("analyze_cycles", json!({}));
     assert_eq!(v["complete"], false, "{v}");
     assert_eq!(v["status"], "incomplete");
+    assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1);
     assert_eq!(v, cli(root, "cycles", &[]));
 }
 

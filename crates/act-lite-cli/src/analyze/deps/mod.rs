@@ -781,9 +781,13 @@ impl DepGraph {
         &self.limits_hit
     }
 
-    /// Whether a resolution input could not be read or parsed.
-    pub fn input_failed(&self) -> bool {
-        self.inputs.values().any(|(_, error)| error.is_some())
+    /// The number of resolution inputs that could not be read or parsed,
+    /// over every input read, listed or not.
+    pub fn failed_inputs(&self) -> u64 {
+        self.inputs
+            .values()
+            .filter(|(_, error)| error.is_some())
+            .count() as u64
     }
 
     /// The files whose relationships were read.

@@ -157,7 +157,7 @@ impl Analyzer for CyclesAnalyzer {
             unresolved: graph.unresolved(&|u| u.kind != RelationshipKind::Module),
             limits_hit: graph.limits_hit().to_vec(),
             details: Some(details),
-            input_failed: graph.input_failed(),
+            failed_inputs: Some(graph.failed_inputs()),
         })
     }
 }

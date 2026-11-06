@@ -1521,7 +1521,8 @@ fn check_shape(name: &str, v: &Value, context: &str) {
             "skipped_files",
             "parse_failures",
             "unresolved",
-            "limits_hit"
+            "limits_hit",
+            "failed_inputs"
         ]),
         "{context}"
     );
@@ -2015,6 +2016,7 @@ fn a_malformed_go_mod_that_competes_for_a_module_path_leaves_the_import_unresolv
         let v = analyze(root, name, &[]);
         assert_eq!(v["complete"], false, "{name}: {v}");
         assert_eq!(failed_inputs(&v), vec!["bad/go.mod"], "{name}");
+        assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1, "{name}");
         assert_eq!(
             reason_of(&v, "main.go"),
             vec!["bad/go.mod could not be read".to_string()],
@@ -2038,10 +2040,12 @@ fn a_malformed_package_json_elsewhere_makes_a_resolved_result_incomplete() {
         assert_eq!(v["complete"], false, "{name}: {v}");
         assert_eq!(v["incomplete"]["unresolved"], json!([]), "{name}");
         assert_eq!(failed_inputs(&v), vec!["other/package.json"], "{name}");
+        assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1, "{name}");
     }
     let v = analyze(root, "impact", &["--focus", "packages/p/index.ts"]);
     assert_eq!(v["complete"], false, "{v}");
     assert_eq!(failed_inputs(&v), vec!["other/package.json"]);
+    assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1);
     assert_eq!(
         edges(&graph(root, &[])),
         pairs(&[("main.ts", "packages/p/index.ts")])
@@ -2064,5 +2068,41 @@ fn a_malformed_cargo_toml_elsewhere_makes_a_resolved_result_incomplete() {
     let v = graph(root, &[]);
     assert_eq!(v["complete"], false, "{v}");
     assert_eq!(failed_inputs(&v), vec!["other/Cargo.toml"]);
+    assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1);
     assert_eq!(edges(&v), pairs(&[("src/main.rs", "lib/src/lib.rs")]));
+}
+
+#[test]
+fn a_failed_input_past_the_listed_inputs_is_counted() {
+    let ws = workspace();
+    let root = ws.path();
+    write(root, "package.json", r#"{"dependencies":{"p":"1.0.0"}}"#);
+    for i in 0..100 {
+        write(
+            root,
+            &format!("a{i:03}/package.json"),
+            &format!(r#"{{"name":"a{i:03}"}}"#),
+        );
+    }
+    write(root, "packages/p/package.json", r#"{"name":"p"}"#);
+    write(root, "packages/p/index.ts", "");
+    write(root, "z/package.json", r#"{"name":"#);
+    write(root, "main.ts", "import 'p';\n");
+    let v = graph(root, &[]);
+    assert_eq!(v["details"]["resolution_inputs_total"], 103);
+    assert_eq!(failed_inputs(&v), Vec::<&str>::new());
+    assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1);
+    assert_eq!(v["complete"], false);
+    assert_eq!(v["incomplete"]["unresolved"], json!([]));
+}
+
+#[test]
+fn a_result_without_failed_inputs_counts_none() {
+    let ws = workspace();
+    acyclic(ws.path());
+    for name in ["graph", "cycles", "coupling"] {
+        let v = analyze(ws.path(), name, &[]);
+        assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 0, "{name}");
+        assert_eq!(v["complete"], true, "{name}");
+    }
 }
