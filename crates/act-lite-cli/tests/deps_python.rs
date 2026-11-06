@@ -213,6 +213,16 @@ fn a_loop_target_or_a_with_alias_in_the_package_file_beats_a_submodule() {
 }
 
 #[test]
+fn an_annotation_without_a_value_does_not_beat_a_submodule() {
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "pkg/__init__.py", "n: int\n");
+    write(ws.path(), "pkg/n.py", "");
+    write(ws.path(), "a.py", "from pkg import n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "a.py", "pkg.n"), resolved(&["pkg/n.py"]));
+}
+
+#[test]
 fn a_workspace_module_outside_the_roots_is_unresolved() {
     let ws = tempfile::tempdir().unwrap();
     write(

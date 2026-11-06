@@ -517,6 +517,17 @@ fn python_names_bound_at_top_level() {
 }
 
 #[test]
+fn python_annotation_without_a_value_binds_nothing() {
+    let file = parse(
+        Grammar::Python,
+        "n: int\n\
+         m: int = 1\n\
+         if True:\n    o: str\n    p: str = ''\n",
+    );
+    assert_eq!(deps::module_names(&file).names, names(&["m", "p"]));
+}
+
+#[test]
 fn python_loop_targets_and_with_aliases_bound_at_top_level() {
     let file = parse(
         Grammar::Python,

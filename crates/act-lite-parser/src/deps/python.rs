@@ -85,10 +85,14 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
             for child in statement.named_children(&mut cursor) {
                 let mut assignment = Some(child);
                 while let Some(a) = assignment.filter(|a| a.kind() == "assignment") {
-                    if let Some(left) = a.child_by_field_name("left") {
+                    // An annotation without a value (`n: int`) binds nothing.
+                    let right = a.child_by_field_name("right");
+                    if let Some(left) = a.child_by_field_name("left")
+                        && right.is_some()
+                    {
                         bind_target(left, source, names);
                     }
-                    assignment = a.child_by_field_name("right");
+                    assignment = right;
                 }
             }
         }
