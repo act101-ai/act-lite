@@ -31,13 +31,7 @@ impl SourceFile {
     /// cannot make this read a file outside `root`.
     pub fn load_within(path: impl AsRef<Path>, root: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let file = open_regular(path).map_err(ParserError::Io)?;
-        if !opened_inside(&file, root.as_ref()) {
-            return Err(ParserError::Io(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "path must be inside the workspace root",
-            )));
-        }
+        let file = open_regular_within(path, root.as_ref()).map_err(ParserError::Io)?;
         Self::record(Self::read(path, file)?)
     }
 
@@ -151,6 +145,20 @@ pub fn read_regular_text(path: &Path) -> io::Result<String> {
     let mut text = String::new();
     open_regular(path)?.read_to_string(&mut text)?;
     Ok(text)
+}
+
+/// Opens `path` for reading as [`SourceFile::load_within`] does: a FIFO is
+/// not waited on, and a file that is not regular, or whose opened handle
+/// lies outside the canonical `root`, is refused.
+pub fn open_regular_within(path: &Path, root: &Path) -> io::Result<File> {
+    let file = open_regular(path)?;
+    if !opened_inside(&file, root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "path must be inside the workspace root",
+        ));
+    }
+    Ok(file)
 }
 
 /// Opens `path` for reading. On unix a FIFO is not waited on. A handle that
@@ -425,6 +433,23 @@ mod tests {
         assert!(SourceFile::load_within(dir.path().join("out.rs"), &root).is_err());
         assert!(SourceFile::load_within(root.join("in.rs"), &root).is_ok());
         assert!(SourceFile::load_within(root.join("alias.rs"), &root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_within_refuses_a_fifo_and_an_outside_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir(&root).unwrap();
+        let fifo = root.join("pipe.rs");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(open_regular_within(&fifo, &root).is_err());
+        std::fs::write(dir.path().join("out.rs"), "fn outside() {}\n").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("out.rs"), root.join("link.rs")).unwrap();
+        assert!(open_regular_within(&root.join("link.rs"), &root).is_err());
+        std::fs::write(root.join("a.rs"), "fn inside() {}\n").unwrap();
+        assert!(open_regular_within(&root.join("a.rs"), &root).is_ok());
     }
 
     #[test]

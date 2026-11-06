@@ -601,8 +601,8 @@ pub fn execute_repo_outline(
             break;
         }
 
-        // Count lines
-        let line_count = match std::fs::File::open(path) {
+        // Count lines, from the file the root check opened.
+        let line_count = match act_lite_parser::open_regular_within(path, &canonical_root) {
             Ok(f) => std::io::BufReader::new(f).lines().count(),
             Err(_) => 0,
         };
