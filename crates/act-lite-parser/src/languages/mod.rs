@@ -1,5 +1,6 @@
 //! Language-specific implementations.
 
+pub mod astro;
 pub mod bash;
 pub mod c;
 pub mod cmake;
@@ -33,14 +34,17 @@ pub mod rust;
 pub mod scala;
 pub mod scss;
 pub mod sql;
+pub mod svelte;
 pub mod swift;
 pub mod toml;
 pub mod tsx;
 pub mod typescript;
+pub mod vue;
 pub mod xml;
 pub mod yaml;
 pub mod zig;
 
+pub use astro::AstroSupport;
 pub use bash::BashSupport;
 pub use c::CSupport;
 pub use cmake::CMakeSupport;
@@ -74,10 +78,12 @@ pub use rust::RustSupport;
 pub use scala::ScalaSupport;
 pub use scss::ScssSupport;
 pub use sql::SqlSupport;
+pub use svelte::SvelteSupport;
 pub use swift::SwiftSupport;
 pub use toml::TomlSupport;
 pub use tsx::TsxSupport;
 pub use typescript::TypeScriptSupport;
+pub use vue::VueSupport;
 pub use xml::XmlSupport;
 pub use yaml::YamlSupport;
 pub use zig::ZigSupport;

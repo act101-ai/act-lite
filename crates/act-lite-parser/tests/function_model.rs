@@ -41,10 +41,13 @@ fn is_data(grammar: Grammar) -> bool {
     matches!(grammar.category(), LanguageCategory::Data)
 }
 
+/// The supported languages with a row of their own in the function-construct
+/// table: every language that is not `Data`, except the component entries,
+/// whose functions are measured by the row of their script's language.
 fn supported() -> Vec<Grammar> {
     Grammar::all()
         .into_iter()
-        .filter(|g| !is_data(*g))
+        .filter(|g| !is_data(*g) && !g.is_component())
         .collect()
 }
 
@@ -512,7 +515,7 @@ fn node_kinds_are_the_table_kinds_and_exist_in_the_grammar() {
 }
 
 #[test]
-fn twenty_three_languages_are_supported() {
+fn twenty_three_languages_and_the_three_component_entries_are_supported() {
     let names: Vec<&str> = supported().iter().map(|g| g.name()).collect();
     assert_eq!(names.len(), 23, "{names:?}");
     for grammar in Grammar::all() {
@@ -521,6 +524,33 @@ fn twenty_three_languages_are_supported() {
             !is_data(grammar),
             "{grammar:?}"
         );
+    }
+    for grammar in [Grammar::Vue, Grammar::Svelte, Grammar::Astro] {
+        assert!(function_model::supports(grammar), "{grammar:?}");
+        assert!(
+            function_model::node_kinds(grammar).is_empty(),
+            "{grammar:?}"
+        );
+    }
+}
+
+#[test]
+fn component_files_yield_no_function_of_their_own() {
+    for (grammar, source) in [
+        (
+            Grammar::Vue,
+            "<script setup lang=\"ts\">\nfunction f(a: number) { if (a) { return 1; } return 0; }\n</script>\n",
+        ),
+        (
+            Grammar::Svelte,
+            "<script>\nfunction f(a) { if (a) { return 1; } return 0; }\n</script>\n",
+        ),
+        (
+            Grammar::Astro,
+            "---\nfunction f(a) { if (a) { return 1; } return 0; }\n---\n<p/>\n",
+        ),
+    ] {
+        assert!(functions(grammar, source).is_empty(), "{grammar:?}");
     }
 }
 

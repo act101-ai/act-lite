@@ -49,9 +49,11 @@ pub struct Function {
 }
 
 /// Whether the function model covers the grammar: every grammar that is not
-/// a `Data` format.
+/// a `Data` format. A component entry has no row of its own: its functions
+/// are those of its script regions, measured by their languages' rows.
 pub fn supports(grammar: Grammar) -> bool {
-    !matches!(grammar.category(), LanguageCategory::Data) && table::row(grammar).is_some()
+    !matches!(grammar.category(), LanguageCategory::Data)
+        && (table::row(grammar).is_some() || grammar.is_component())
 }
 
 /// The named node kinds the model reads for a grammar; empty for a grammar
