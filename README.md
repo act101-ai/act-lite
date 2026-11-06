@@ -961,9 +961,10 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   such as `case n:` or `case [_, n]:`, and the names its case bodies bind;
   an annotation binds only with a value: `n: int = 1` binds, `n: int` does
   not; `n += 1` and `type n = …` bind; `n := …` binds wherever the module
-  runs it, also in a condition, a call argument, a comprehension, a default
-  value, a decorator or a base class, but not in a `def`, `lambda` or
-  `class` body; `except … as n` does not bind, as `n` is deleted at the end
+  runs it, also in a condition, a call argument, a list, set or dict
+  comprehension, a default value, a decorator or a base class, but not in a
+  `def`, `lambda` or `class` body or a generator expression (its body runs
+  only when it is iterated); `except … as n` does not bind, as `n` is deleted at the end
   of the handler; a module-level `del n` unbinds, a `del` inside a block
   does not; a `del` runs its targets from left to right, and a `:=` in a
   target binds: `del items[(n := 0)]` binds `n`, `del items[(n := 0)], n`
