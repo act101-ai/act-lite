@@ -632,6 +632,35 @@ fn an_out_of_line_test_module_follows_include_tests() {
 }
 
 #[test]
+fn an_inline_test_module_keeps_its_module_files_in_the_tree() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "pub struct A;\n#[cfg(test)]\nmod checks {\n    mod helper;\n}\n",
+    );
+    write(root, "src/checks/helper.rs", "use crate::A;\n");
+    let v = graph(root, &["--limit", "1000"]);
+    assert_eq!(edges(&v), pairs(&[("src/checks/helper.rs", "src/lib.rs")]));
+    assert_eq!(unresolved(&v), []);
+    let v = graph(root, &["--limit", "1000", "--include-tests"]);
+    assert_eq!(
+        kinds(edge(&v, "src/lib.rs", "src/checks/helper.rs")),
+        ["module"]
+    );
+    assert_eq!(
+        kinds(edge(&v, "src/checks/helper.rs", "src/lib.rs")),
+        ["use"]
+    );
+}
+
+#[test]
 fn an_undeclared_bare_specifier_is_unresolved_until_it_is_declared() {
     let ws = ts_workspace();
     write(ws.path(), "src/c.ts", "import lodash from 'lodash';\n");

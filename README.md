@@ -1045,9 +1045,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   existence check of `node_modules/<package>/` in directories that discovery
   prunes (metadata only; nothing in them is read).
 - *Removed Rust test regions*: the text of a removed test region is read only
-  for its `mod` declarations, which build the module tree (so a `src/tests.rs`
-  that `#[cfg(test)] mod tests;` loads is reached). It is never analyzed or
-  reported.
+  for its `mod` declarations and inline modules, at any depth, with their
+  `#[path]` attributes and the `mod` forms of module-level macros, which
+  build the module tree (so a `src/tests.rs` that `#[cfg(test)] mod tests;`
+  loads is reached, and so is a `src/checks/helper.rs` that
+  `#[cfg(test)] mod checks { mod helper; }` loads). It is never analyzed, and
+  none of its relationships is reported.
 
 Nothing else is read, and nothing is written.
 
