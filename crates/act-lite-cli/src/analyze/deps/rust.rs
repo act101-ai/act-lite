@@ -117,6 +117,12 @@ struct Module {
     attr_dir: String,
     /// Each `mod` of the module, by name.
     children: Vec<(String, Child)>,
+    /// Each `mod x;` in a body of the module, by declaration range: it is
+    /// in the body's scope, not a child of the module.
+    local: Vec<(CompactRange, Child)>,
+    /// For a module file that a `mod x;` in a body of its parent loads, the
+    /// range of that declaration in the parent's file.
+    scope: Option<CompactRange>,
     /// The inline modules of the module and their ranges.
     inline: Vec<(CompactRange, usize)>,
     /// The declared names and whether a glob `use` is present; the `Err` is
@@ -286,10 +292,11 @@ fn outcome_in(
     let m = innermost(tree, start, &rel.range);
     match rel.kind {
         RelationshipKind::Module => {
-            let target = probe_mod(
+            let target = probe_any(
                 cx,
                 &tree.modules[m],
                 unraw(&rel.specifier),
+                &rel.range,
                 rel.path_attribute.as_ref(),
                 tree.detached,
             );
@@ -329,8 +336,8 @@ type Followed = (CompactRange, Option<String>);
 /// an inline module inside a body.
 struct Scope<'a> {
     names: &'a ModuleNames,
-    /// An inline module, not a block.
-    named: bool,
+    /// The inline module; `None` for a block.
+    module: Option<&'a InlineModule>,
 }
 
 /// The block-local scopes of the module's `blocks` that contain `range`,
@@ -341,7 +348,7 @@ fn block_scopes<'a>(blocks: &'a [BlockModule], range: &CompactRange) -> Vec<Scop
             .find(|b| contains(&b.range, range))
             .map(|b| Scope {
                 names: &b.names,
-                named: false,
+                module: None,
             })
     };
     let mut scopes = Vec::new();
@@ -355,31 +362,43 @@ fn block_scopes<'a>(blocks: &'a [BlockModule], range: &CompactRange) -> Vec<Scop
             .find(|m| contains(&m.range, range))
             .map(|m| Scope {
                 names: &m.names,
-                named: true,
+                module: Some(m),
             })
             .or_else(|| block(&names.blocks));
     }
     scopes
 }
 
-/// From a block-local module, follows `segments[i..]` while they name its
-/// inline modules; a remaining segment must be declared there, or the
+/// From a block-local module of a body of the module `m`, follows
+/// `segments[i..]` while they name its inline modules, or walks on from a
+/// `mod x;` of it; a remaining segment must be declared there, or the
 /// module must have a glob `use`. The target is the file of the body.
-fn local_walk(names: &ModuleNames, segments: &[&str], i: usize, file: &str) -> Outcome {
+fn local_walk(
+    cx: &mut ResolveCx<'_>,
+    tree: &mut Tree,
+    m: usize,
+    names: &ModuleNames,
+    segments: &[&str],
+    i: usize,
+) -> Outcome {
+    let file = tree.modules[m].file.clone();
     let Some(segment) = segments.get(i) else {
-        return Outcome::Resolved(vec![file.to_string()]);
+        return Outcome::Resolved(vec![file]);
     };
     let inner: Vec<&InlineModule> = names.inline.iter().filter(|m| m.name == *segment).collect();
     if !inner.is_empty() {
         return combine(
             inner
                 .iter()
-                .map(|m| local_walk(&m.names, segments, i + 1, file))
+                .map(|n| local_walk(cx, tree, m, &n.names, segments, i + 1))
                 .collect(),
         );
     }
+    if let Some(outcome) = local_file(cx, tree, m, names, segments, i) {
+        return outcome;
+    }
     if names.glob || names.names.contains(*segment) {
-        Outcome::Resolved(vec![file.to_string()])
+        Outcome::Resolved(vec![file])
     } else {
         Outcome::Unresolved(format!(
             "{segment} is neither a module nor an item of {file}"
@@ -426,7 +445,7 @@ fn use_path(
             let named: Vec<&ModuleNames> = scopes
                 .iter()
                 .rev()
-                .filter(|s| s.named)
+                .filter(|s| s.module.is_some())
                 .map(|s| s.names)
                 .collect();
             let mut at = 0;
@@ -435,7 +454,7 @@ fn use_path(
                 i += 1;
             }
             if let Some(names) = named.get(at) {
-                return local_walk(names, &segments, i, &file);
+                return local_walk(cx, tree, m, names, &segments, i);
             }
         }
         if tree.detached {
@@ -447,8 +466,27 @@ fn use_path(
                 let Some(parent) = tree.modules[k].parent else {
                     return Outcome::Unresolved("super goes above the crate root".to_string());
                 };
-                k = parent;
                 i += 1;
+                // A module file of a `mod x;` in a body goes out through the
+                // inline modules of the body around the declaration first.
+                if let Some(decl) = tree.modules[k].scope.clone() {
+                    let blocks = Arc::clone(&tree.modules[parent].blocks);
+                    let named: Vec<&ModuleNames> = block_scopes(&blocks, &decl)
+                        .into_iter()
+                        .rev()
+                        .filter(|s| s.module.is_some())
+                        .map(|s| s.names)
+                        .collect();
+                    let mut at = 0;
+                    while at < named.len() && segments.get(i) == Some(&"super") {
+                        at += 1;
+                        i += 1;
+                    }
+                    if let Some(names) = named.get(at) {
+                        return local_walk(cx, tree, parent, names, &segments, i);
+                    }
+                }
+                k = parent;
             }
         }
         return walk(cx, tree, k, &segments, i);
@@ -469,9 +507,13 @@ fn use_path(
             found = Some(combine(
                 inner
                     .iter()
-                    .map(|c| local_walk(&c.names, &segments, 1, &file))
+                    .map(|c| local_walk(cx, tree, m, &c.names, &segments, 1))
                     .collect(),
             ));
+            break;
+        }
+        if let Some(outcome) = local_file(cx, tree, m, scope.names, &segments, 0) {
+            found = Some(outcome);
             break;
         }
         let open = |b: &&UseBinding| !followed.iter().any(|(r, n)| *r == b.range && *n == b.name);
@@ -496,7 +538,7 @@ fn use_path(
             found = Some(combine(outcomes));
             break;
         }
-        if !scope.named && scope.names.names.contains(first) {
+        if scope.module.is_none() && scope.names.names.contains(first) {
             found = Some(Outcome::Resolved(vec![file.clone()]));
             break;
         }
@@ -510,7 +552,7 @@ fn use_path(
                     .filter(open),
             );
         }
-        if scope.named {
+        if scope.module.is_some() {
             barrier = Some(scope.names);
             break;
         }
@@ -548,6 +590,40 @@ fn through(
     let mut followed = followed.to_vec();
     followed.push((b.range.clone(), b.name.clone()));
     use_path(cx, path, &b.range, package, tree, is_lib, m, &followed)
+}
+
+/// When `segments[i]` names a `mod x;` of the block-local module `names` of
+/// a body of the module `m`, walks on from each module file it loads.
+fn local_file(
+    cx: &mut ResolveCx<'_>,
+    tree: &mut Tree,
+    m: usize,
+    names: &ModuleNames,
+    segments: &[&str],
+    i: usize,
+) -> Option<Outcome> {
+    let segment = segments.get(i)?;
+    let decls: Vec<&CompactRange> = names
+        .files
+        .iter()
+        .filter(|(name, _)| name == segment)
+        .map(|(_, range)| range)
+        .collect();
+    if decls.is_empty() {
+        return None;
+    }
+    let children: Vec<Child> = tree.modules[m]
+        .local
+        .iter()
+        .filter(|(range, _)| decls.contains(&range))
+        .map(|(_, child)| child.clone())
+        .collect();
+    if children.is_empty() {
+        return Some(Outcome::Unresolved(format!(
+            "module {segment} was not found"
+        )));
+    }
+    Some(follow(cx, tree, &children, segments, i + 1))
 }
 
 /// Rule 2 after the block-local scopes: a child module of `m` (unless an
@@ -1238,22 +1314,34 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
     for (name, range, path_attribute) in mods {
         let name = name.clone();
         let parent = innermost(tree, idx, range);
-        let target = probe_mod(
+        let local = in_body(&tree.modules[parent], range);
+        let target = probe_any(
             cx,
             &tree.modules[parent],
             &name,
+            range,
             path_attribute.as_ref(),
             tree.detached,
         );
         let child = match target {
             ModTarget::File(path, owns) => Child::Module(match ancestor(tree, parent, &path) {
                 Some(existing) => existing,
-                None => add_file(tree, &path, Some(parent), owns),
+                None => {
+                    let added = add_file(tree, &path, Some(parent), owns);
+                    if local {
+                        tree.modules[added].scope = Some(range.clone());
+                    }
+                    added
+                }
             }),
             ModTarget::Outside => Child::Outside,
             ModTarget::Missing(_) => Child::Missing,
         };
-        tree.modules[parent].children.push((name, child));
+        if local {
+            tree.modules[parent].local.push((range.clone(), child));
+        } else {
+            tree.modules[parent].children.push((name, child));
+        }
     }
 }
 
@@ -1284,6 +1372,8 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
         dir,
         attr_dir,
         children: Vec::new(),
+        local: Vec::new(),
+        scope: None,
         inline: Vec::new(),
         names: Ok(Arc::default()),
         blocks: Arc::default(),
@@ -1331,6 +1421,8 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
             attr_dir: dir.clone(),
             dir,
             children: Vec::new(),
+            local: Vec::new(),
+            scope: None,
             inline: Vec::new(),
             names: Ok(Arc::new((module.names.names, module.names.glob))),
             blocks: Arc::new(module.names.blocks),
@@ -1360,17 +1452,20 @@ type ModuleFile = (
 fn module_file(parsed: &Parsed) -> ModuleFile {
     let names = module_names(&parsed.source);
     let mut inline = names.inline;
+    let mut blocks = names.blocks;
     let mut mods = module_decls(&parsed.source);
     for region in &parsed.removed {
         let Some(file) = region_source(region) else {
             continue;
         };
-        inline.extend(module_names(&file).inline);
+        let region_names = module_names(&file);
+        inline.extend(region_names.inline);
+        blocks.extend(region_names.blocks);
         mods.extend(module_decls(&file));
     }
     (
         Arc::new((names.names, names.glob)),
-        Arc::new(names.blocks),
+        Arc::new(blocks),
         inline,
         mods,
     )
@@ -1436,23 +1531,7 @@ fn probe_mod(
         None => {}
     }
     if let Some(written) = path_attribute {
-        let Ok(written) = written else {
-            return ModTarget::Missing(INVALID_LITERAL.to_string());
-        };
-        if is_absolute(written) {
-            return ModTarget::Missing(format!("absolute path is not resolved: {written}"));
-        }
-        let Some(path) = cx.normalize(&module.attr_dir, written) else {
-            return ModTarget::Outside;
-        };
-        return match cx.probe_file(&path) {
-            Probe::File(found) => {
-                let owns = !detached || is_mod_rs(&found);
-                ModTarget::File(found, owns)
-            }
-            Probe::Outside => ModTarget::Outside,
-            _ => ModTarget::Missing(format!("{path} does not exist")),
-        };
+        return probe_path(cx, &module.attr_dir, written, detached);
     }
     let flat = join(&module.dir, &format!("{name}.rs"));
     let nested = join(&module.dir, &format!("{name}/mod.rs"));
@@ -1464,6 +1543,95 @@ fn probe_mod(
         }
     }
     ModTarget::Missing(format!("neither {flat} nor {nested} exists"))
+}
+
+/// The `#[path]` value `written` relative to `dir`.
+fn probe_path(
+    cx: &mut ResolveCx<'_>,
+    dir: &str,
+    written: &LiteralValue,
+    detached: bool,
+) -> ModTarget {
+    let Ok(written) = written else {
+        return ModTarget::Missing(INVALID_LITERAL.to_string());
+    };
+    if is_absolute(written) {
+        return ModTarget::Missing(format!("absolute path is not resolved: {written}"));
+    }
+    let Some(path) = cx.normalize(dir, written) else {
+        return ModTarget::Outside;
+    };
+    match cx.probe_file(&path) {
+        Probe::File(found) => {
+            let owns = !detached || is_mod_rs(&found);
+            ModTarget::File(found, owns)
+        }
+        Probe::Outside => ModTarget::Outside,
+        _ => ModTarget::Missing(format!("{path} does not exist")),
+    }
+}
+
+/// Whether `range` is inside a body of `module`.
+fn in_body(module: &Module, range: &CompactRange) -> bool {
+    module.blocks.iter().any(|b| contains(&b.range, range))
+}
+
+/// Rule 1 for the `mod x;` at `range` of `module`, in a body or not.
+fn probe_any(
+    cx: &mut ResolveCx<'_>,
+    module: &Module,
+    name: &str,
+    range: &CompactRange,
+    path_attribute: Option<&LiteralValue>,
+    detached: bool,
+) -> ModTarget {
+    if in_body(module, range) {
+        probe_block_mod(cx, module, range, path_attribute, detached)
+    } else {
+        probe_mod(cx, module, name, path_attribute, detached)
+    }
+}
+
+/// Rule 1 for a `mod x;` in a body of `module`, as rustc: only a `#[path]`
+/// value loads a file, relative to the directory that a `#[path]` of the
+/// module itself is relative to, with one directory for each inline module
+/// of the body around the declaration (its own `#[path]`, else its name).
+fn probe_block_mod(
+    cx: &mut ResolveCx<'_>,
+    module: &Module,
+    range: &CompactRange,
+    path_attribute: Option<&LiteralValue>,
+    detached: bool,
+) -> ModTarget {
+    match &module.unknown_dir {
+        Some(UnknownDir::Missing(reason)) => return ModTarget::Missing(reason.clone()),
+        Some(UnknownDir::Outside) => return ModTarget::Outside,
+        None => {}
+    }
+    let Some(written) = path_attribute else {
+        return ModTarget::Missing(
+            "a file module inside a block needs a #[path] attribute".to_string(),
+        );
+    };
+    let mut dir = module.attr_dir.clone();
+    for scope in block_scopes(&module.blocks, range) {
+        let Some(inline) = scope.module else {
+            continue;
+        };
+        let step = match &inline.path_attribute {
+            Some(Ok(path)) => path.as_str(),
+            Some(Err(_)) => return ModTarget::Missing(INVALID_LITERAL.to_string()),
+            None => inline.name.as_str(),
+        };
+        if is_absolute(step) {
+            return ModTarget::Missing(format!("absolute path is not resolved: {step}"));
+        }
+        let Some(next) = lexical(&dir, step) else {
+            return ModTarget::Outside;
+        };
+        dir = next;
+    }
+    probe_path(cx, &dir, written, detached)
 }
 
 /// Rule 4: the literal relative to the declaring file's directory.

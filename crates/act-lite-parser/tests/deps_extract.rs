@@ -575,6 +575,7 @@ fn python_names_bound_at_top_level() {
         inline: vec![],
         blocks: vec![],
         uses: vec![],
+        files: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -790,14 +791,17 @@ mod outl;
                         inline: vec![],
                         blocks: vec![],
                         uses: vec![],
+                        files: vec![],
                     },
                 }],
                 blocks: vec![],
                 uses: vec![],
+                files: vec![],
             },
         }],
         blocks: vec![],
         uses: vec![],
+        files: vec![],
     };
     assert_eq!(deps::module_names(&file), expected);
 
@@ -839,6 +843,7 @@ impl S {
         inline,
         blocks,
         uses: vec![],
+        files: vec![],
     };
     let block = |at: &str, names| BlockModule {
         range: range(at),
@@ -1306,4 +1311,72 @@ fn a_rust_path_attribute_is_decoded() {
         .map(|m| m.path_attribute)
         .collect();
     assert_eq!(inline, [some("in"), Some(Err(InvalidLiteral))]);
+}
+
+#[test]
+fn a_mod_declaration_in_a_body_is_a_file_module_of_its_scope() {
+    let file = parse(
+        Grammar::Rust,
+        "mod top;\nfn f() {\n    #[path = \"b.rs\"]\n    mod a;\n    mod inner {\n        mod c;\n    }\n}\n",
+    );
+    let module = deps::module_names(&file);
+    assert_eq!(
+        module.files,
+        [],
+        "a `mod x;` outside a body is no file module of a scope"
+    );
+    let [block] = module.blocks.as_slice() else {
+        panic!("one block: {module:?}");
+    };
+    assert_eq!(block.names.names, names(&["a", "inner"]));
+    assert_eq!(block.names.files, [("a".to_string(), range("4:5-4:11"))]);
+    let [inner] = block.names.inline.as_slice() else {
+        panic!("one inline module: {block:?}");
+    };
+    assert_eq!(inner.names.names, names(&["c"]));
+    assert_eq!(inner.names.files, [("c".to_string(), range("6:9-6:15"))]);
+}
+
+#[test]
+fn macro_token_forms_in_a_body_are_relationships_of_its_scope() {
+    let file = parse(
+        Grammar::Rust,
+        "fn f() {\n    m! { #[path = \"b.rs\"] pub mod a; use c::D; struct S; }\n    mod inner {\n        m! { mod e; }\n    }\n    let v = n![1];\n}\n",
+    );
+    let found: Vec<(String, String)> = deps::extract(&file)
+        .into_iter()
+        .map(|r| (r.kind.as_str().to_string(), r.specifier))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("module".to_string(), "a".to_string()),
+            ("use".to_string(), "c::D".to_string()),
+            ("module".to_string(), "e".to_string()),
+        ],
+        "a macro statement of a block is in item position; `n![1]` is not"
+    );
+    let module = deps::module_names(&file);
+    assert_eq!(
+        module.names,
+        names(&["f"]),
+        "the body's items are not the module's"
+    );
+    let [block] = module.blocks.as_slice() else {
+        panic!("one block: {module:?}");
+    };
+    assert_eq!(block.names.names, names(&["S", "a", "inner"]));
+    assert_eq!(block.names.files, [("a".to_string(), range("2:27-2:37"))]);
+    assert_eq!(
+        block.names.uses,
+        [UseBinding {
+            name: Some("D".to_string()),
+            path: "c::D".to_string(),
+            range: range("2:38-2:47"),
+        }]
+    );
+    let [inner] = block.names.inline.as_slice() else {
+        panic!("one inline module: {block:?}");
+    };
+    assert_eq!(inner.names.files, [("e".to_string(), range("4:14-4:20"))]);
 }

@@ -893,7 +893,7 @@ keep the written text. A literal that does not decode is `unresolved`, reason
 | Rust | `use` declaration, one per leaf path (`use a::{b, c::d}` gives `a::b` and `a::c::d`; `self` in a list gives the list's prefix; `use a::*` gives `a`; `use a::b as c` gives `a::b`) | `use` | the leaf path | the declaration |
 | Rust | `extern crate x;` | `extern_crate` | the name | the declaration |
 | Rust | `include!`, `include_str!`, `include_bytes!` | `include` | the string literal, or the argument's text when it is not a string literal (`unresolved`) | the invocation |
-| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens, and inside the `#[path …]` tokens, are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
+| Rust | `mod x;` and `use …;` token sequences inside a macro invocation in item position: at module level or as a statement of a block (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens, and inside the `#[path …]` tokens, are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
 
 The kinds are `dynamic_import`, `extern_crate`, `from_import`, `import`,
 `include`, `module`, `reexport`, `require`, `type_import` and `use`. A Python `from __future__ import …` is not a relationship.
@@ -1069,6 +1069,22 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   only its own names, the crates, and `crate`, `self` and `super` paths
   apply. A path that stays inside the body targets the file itself, which is
   a self-relationship: it is `resolved` and gives no edge.
+  A `mod x;` inside a body belongs to that body's scope, as an inline module
+  there does. rustc loads its file only through `#[path]`, so without one the
+  declaration is `unresolved` (`a file module inside a block needs a #[path]
+  attribute`). The `#[path]` is relative to the directory that a `#[path]`
+  outside the body would use, plus one directory for each inline module of
+  the body around the declaration (its own `#[path]`, else its name). The
+  declaration is a `module` relationship to the file, and the file is in the
+  crate tree, but `x` is not a child of the module around the body:
+  `crate::x` from elsewhere does not reach it, and a path inside the body
+  finds it first (`fn f() { #[path = "b.rs"] mod a; use a::Thing; }`
+  targets `b.rs`). In that file, `super` is the inline module of the body
+  around the declaration, else the module that holds the body; it does not
+  see the body's own items. The `mod`, `use` and item forms of a macro
+  invocation in a body belong to the body's scope in the same way
+  (`fn f() { cfg_x! { #[path = "b.rs"] mod a; } }`), never to the module
+  around it.
   A file is in a crate tree when that tree's modules reach it, through any
   `#[path]`, not by its directory: an example, bench or test root that loads
   `src/shared.rs` has it in its tree. The trees of every workspace crate
@@ -1120,7 +1136,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   prunes (metadata only; nothing in them is read).
 - *Removed Rust test regions*: the text of a removed test region is read only
   for its `mod` declarations and inline modules, at any depth, with their
-  `#[path]` attributes and the `mod` forms of module-level macros, which
+  `#[path]` attributes and the `mod` forms of item-position macros, which
   build the module tree (so a `src/tests.rs` that `#[cfg(test)] mod tests;`
   loads is reached, and so is a `src/checks/helper.rs` that
   `#[cfg(test)] mod checks { mod helper; }` loads). It is never analyzed, and

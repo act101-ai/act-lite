@@ -1839,3 +1839,278 @@ fn a_dependency_is_named_by_its_lib_name_or_its_rename() {
         missing("foo")
     );
 }
+
+/// The `module` outcomes of the declarations of `name` in `file`, in
+/// location order.
+fn module_outcomes(graph: &DepGraph, file: &str, name: &str) -> Vec<Outcome> {
+    graph
+        .relationships_of(file)
+        .iter()
+        .filter(|r| r.relationship.specifier == name && r.relationship.kind.as_str() == "module")
+        .map(|r| r.outcome.clone())
+        .collect()
+}
+
+#[test]
+fn a_file_module_in_a_body_is_not_a_child_of_the_module_around_the_body() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nmod c;\nfn f() {\n    #[path = \"b.rs\"]\n    mod a;\n}\n",
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        "use crate::c::Other;\npub struct Thing;\n",
+    );
+    write(
+        root,
+        "src/c.rs",
+        "use crate::a::Thing;\npub struct Other;\n",
+    );
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/c.rs", "crate::a::Thing"),
+        resolved(&["src/a.rs"]),
+        "the `mod a;` of the body is not the child `a` of the crate root"
+    );
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "a"),
+        [resolved(&["src/a.rs"]), resolved(&["src/b.rs"])],
+        "the declaration in the body is a `module` relationship to its file"
+    );
+    assert_eq!(
+        outcome(&graph, "src/b.rs", "crate::c::Other"),
+        resolved(&["src/c.rs"]),
+        "the file of the body module is in the tree"
+    );
+    assert_eq!(kinds_of(&graph, "src/lib.rs", "src/b.rs"), ["module"]);
+    assert_eq!(kinds_of(&graph, "src/c.rs", "src/a.rs"), ["use"]);
+}
+
+#[test]
+fn a_path_in_a_body_finds_a_file_module_of_the_body_first() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod c;\n",
+            "pub struct Root;\n",
+            "fn f() {\n",
+            "    #[path = \"b.rs\"]\n",
+            "    mod a;\n",
+            "    use a::Thing;\n",
+            "    {\n",
+            "        use a::sub::Deep;\n",
+            "    }\n",
+            "}\n",
+            "fn g() {\n",
+            "    mod inner {\n",
+            "        pub struct In;\n",
+            "        #[path = \"e.rs\"]\n",
+            "        pub mod e;\n",
+            "        use self::e::Item;\n",
+            "    }\n",
+            "    use inner::e::Item as Again;\n",
+            "}\n",
+            "fn h() {\n",
+            "    mod x;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        concat!(
+            "use crate::c::Other;\n",
+            "use super::Root;\n",
+            "use self::sub::Deep;\n",
+            "pub struct Thing;\n",
+            "pub mod sub;\n",
+        ),
+    );
+    write(root, "src/sub.rs", "pub struct Deep;\n");
+    write(root, "src/c.rs", "pub struct Other;\n");
+    write(
+        root,
+        "src/inner/e.rs",
+        "use super::In;\nuse super::super::Root;\npub struct Item;\n",
+    );
+    write(root, "src/x.rs", "use crate::Root;\npub struct X;\n");
+    let graph = graph(root);
+    let of = |file, spec| outcome(&graph, file, spec);
+    assert_eq!(
+        of("src/lib.rs", "a::Thing"),
+        resolved(&["src/b.rs"]),
+        "the body module `a` hides the child `a` of the crate root"
+    );
+    assert_eq!(
+        of("src/lib.rs", "a::sub::Deep"),
+        resolved(&["src/sub.rs"]),
+        "a nested block walks on through the file of the body module"
+    );
+    assert_eq!(of("src/b.rs", "crate::c::Other"), resolved(&["src/c.rs"]));
+    assert_eq!(
+        of("src/b.rs", "super::Root"),
+        resolved(&["src/lib.rs"]),
+        "super is the module that holds the body"
+    );
+    assert_eq!(
+        of("src/b.rs", "self::sub::Deep"),
+        resolved(&["src/sub.rs"]),
+        "a `#[path]` file owns its directory"
+    );
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "e"),
+        [resolved(&["src/inner/e.rs"])],
+        "an inline module of the body adds its directory"
+    );
+    assert_eq!(
+        of("src/lib.rs", "self::e::Item"),
+        resolved(&["src/inner/e.rs"])
+    );
+    assert_eq!(
+        of("src/lib.rs", "inner::e::Item"),
+        resolved(&["src/inner/e.rs"])
+    );
+    assert_eq!(
+        of("src/inner/e.rs", "super::In"),
+        resolved(&["src/lib.rs"]),
+        "super is the inline module of the body"
+    );
+    assert_eq!(
+        of("src/inner/e.rs", "super::super::Root"),
+        resolved(&["src/lib.rs"])
+    );
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "x"),
+        [unresolved(
+            "a file module inside a block needs a #[path] attribute"
+        )],
+        "rustc loads no file for `mod x;` in a block without `#[path]`"
+    );
+    assert_eq!(
+        of("src/x.rs", "crate::Root"),
+        unresolved("file is not reached from a crate root"),
+        "src/x.rs is not in the tree"
+    );
+}
+
+#[test]
+fn a_macro_in_a_body_declares_in_the_body_scope() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod c;\n",
+            "macro_rules! items { ($($i:item)*) => { $($i)* } }\n",
+            "fn f() {\n",
+            "    items! {\n",
+            "        #[path = \"b.rs\"]\n",
+            "        pub mod a;\n",
+            "        #[path = \"b.rs\"]\n",
+            "        mod bm;\n",
+            "        struct Hidden;\n",
+            "    }\n",
+            "    use bm::Thing;\n",
+            "}\n",
+            "fn g() {\n",
+            "    mod inner {\n",
+            "        items! {\n",
+            "            #[path = \"e.rs\"]\n",
+            "            pub(crate) mod e;\n",
+            "            use crate::c as k;\n",
+            "        }\n",
+            "        use self::e::Item;\n",
+            "        use k::Other;\n",
+            "    }\n",
+            "}\n",
+            "fn h() {\n",
+            "    items! { mod x; }\n",
+            "}\n",
+            "fn u() {\n",
+            "    items! { use crate::c as ca; }\n",
+            "    use ca::Other;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        "use crate::c::Other;\nuse super::f;\npub struct Thing;\n",
+    );
+    write(
+        root,
+        "src/c.rs",
+        "use crate::a::Thing;\nuse crate::Hidden;\npub struct Other;\n",
+    );
+    write(root, "src/inner/e.rs", "pub struct Item;\n");
+    write(root, "src/x.rs", "use crate::f;\npub struct X;\n");
+    let graph = graph(root);
+    let of = |file, spec| outcome(&graph, file, spec);
+    assert_eq!(
+        of("src/c.rs", "crate::a::Thing"),
+        resolved(&["src/a.rs"]),
+        "a `mod a;` of a macro in a body is not the child `a` of the crate root"
+    );
+    assert_eq!(
+        of("src/c.rs", "crate::Hidden"),
+        unresolved("Hidden is neither a module nor an item of src/lib.rs"),
+        "an item of a macro in a body is not an item of the module"
+    );
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "a"),
+        [resolved(&["src/a.rs"]), resolved(&["src/b.rs"])]
+    );
+    assert_eq!(
+        of("src/lib.rs", "bm::Thing"),
+        resolved(&["src/b.rs"]),
+        "a path in the body finds the macro's `mod` first"
+    );
+    assert_eq!(of("src/b.rs", "crate::c::Other"), resolved(&["src/c.rs"]));
+    assert_eq!(of("src/b.rs", "super::f"), resolved(&["src/lib.rs"]));
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "e"),
+        [resolved(&["src/inner/e.rs"])],
+        "a macro in an inline module of a body"
+    );
+    assert_eq!(
+        of("src/lib.rs", "self::e::Item"),
+        resolved(&["src/inner/e.rs"])
+    );
+    assert_eq!(
+        of("src/lib.rs", "k::Other"),
+        resolved(&["src/c.rs"]),
+        "a `use` of a macro binds in the inline module of the body"
+    );
+    assert_eq!(
+        of("src/lib.rs", "ca::Other"),
+        resolved(&["src/c.rs"]),
+        "a `use` of a macro binds in the body"
+    );
+    assert_eq!(
+        module_outcomes(&graph, "src/lib.rs", "x"),
+        [unresolved(
+            "a file module inside a block needs a #[path] attribute"
+        )]
+    );
+    assert_eq!(
+        of("src/x.rs", "crate::f"),
+        unresolved("file is not reached from a crate root"),
+        "src/x.rs is not in the tree"
+    );
+}
