@@ -919,3 +919,48 @@ fn a_symlinked_package_directory_resolves_to_the_files_of_its_target() {
         resolved(&["other/n.py"])
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_dependency_file_is_listed_at_its_own_path() {
+    let ws = tempfile::tempdir().unwrap();
+    write(
+        ws.path(),
+        "meta/pyproject.toml",
+        "[project]\ndependencies = [\"requests\"]\n",
+    );
+    write(ws.path(), "main.py", "import requests\n");
+    std::os::unix::fs::symlink("meta/pyproject.toml", ws.path().join("pyproject.toml")).unwrap();
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "requests"), Outcome::External);
+    assert_eq!(
+        graph.common_details()["resolution_inputs"],
+        json!([{"file": "pyproject.toml", "kind": "pyproject.toml"}])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_dependency_file_that_leaves_the_workspace_is_an_input_error() {
+    let outside = tempfile::tempdir().unwrap();
+    write(
+        outside.path(),
+        "pyproject.toml",
+        "[project]\ndependencies = [\"requests\"]\n",
+    );
+    let ws = tempfile::tempdir().unwrap();
+    write(ws.path(), "main.py", "import requests\n");
+    std::os::unix::fs::symlink(
+        outside.path().join("pyproject.toml"),
+        ws.path().join("pyproject.toml"),
+    )
+    .unwrap();
+    let graph = build(ws.path(), &[]);
+    assert_eq!(
+        outcome(&graph, "main.py", "requests"),
+        unresolved("pyproject.toml could not be read")
+    );
+    let inputs = &graph.common_details()["resolution_inputs"];
+    assert_eq!(inputs[0]["file"], "pyproject.toml");
+    assert!(inputs[0]["error"].is_string());
+}

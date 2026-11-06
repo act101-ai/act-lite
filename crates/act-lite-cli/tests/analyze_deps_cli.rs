@@ -1957,3 +1957,31 @@ fn sigint_ends_a_long_cycle_analysis_without_output() {
     assert_eq!(out.status.signal(), Some(2));
     assert!(out.stdout.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_json_names_its_workspace_package() {
+    let ws = workspace();
+    write(
+        ws.path(),
+        "package.json",
+        r#"{"dependencies":{"p":"1.0.0"}}"#,
+    );
+    write(ws.path(), "metadata/p.json", r#"{"name":"p"}"#);
+    write(ws.path(), "packages/p/index.ts", "");
+    write(ws.path(), "main.ts", "import 'p';\n");
+    std::os::unix::fs::symlink(
+        "../../metadata/p.json",
+        ws.path().join("packages/p/package.json"),
+    )
+    .unwrap();
+    let v = graph(ws.path(), &[]);
+    assert_eq!(edges(&v), pairs(&[("main.ts", "packages/p/index.ts")]));
+    let inputs: Vec<&str> = v["details"]["resolution_inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["file"].as_str().unwrap())
+        .collect();
+    assert!(inputs.contains(&"packages/p/package.json"), "{inputs:?}");
+}

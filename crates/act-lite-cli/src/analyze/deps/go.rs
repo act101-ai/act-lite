@@ -180,7 +180,7 @@ fn build_map(cx: &mut ResolveCx<'_>) {
         return;
     }
     let files: Vec<String> = cx
-        .workspace_files()
+        .workspace_inputs()
         .iter()
         .filter(|f| f.as_str() == "go.mod" || f.ends_with("/go.mod"))
         .cloned()
@@ -208,10 +208,7 @@ fn build_map(cx: &mut ResolveCx<'_>) {
 fn nearest_module(cx: &mut ResolveCx<'_>, dir: &str) -> Option<String> {
     let mut at = dir;
     loop {
-        if !ignored(at)
-            && !vendored(cx, at)
-            && matches!(cx.probe_file(&join(at, "go.mod")), Probe::File(_))
-        {
+        if !ignored(at) && !vendored(cx, at) && cx.has_input(&join(at, "go.mod")) {
             return Some(at.to_string());
         }
         if at.is_empty() {

@@ -217,7 +217,7 @@ fn probe_dir(cx: &mut ResolveCx<'_>, path: &str) -> Found {
         _ => return Found::None,
     };
     let manifest = join(&dir, "package.json");
-    if !cx.vendored(&manifest) && is_file(cx, &manifest) {
+    if !cx.vendored(&manifest) && cx.has_input(&manifest) {
         match package(cx, &manifest) {
             Ok(PackageInfo {
                 main: Some(main), ..
@@ -371,7 +371,7 @@ fn workspace_package(cx: &mut ResolveCx<'_>, name: &str, spec: &str) -> Option<O
 /// the package itself is probed as a directory, a subpath as a path.
 fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outcome {
     let manifest = join(dir, "package.json");
-    if !cx.vendored(&manifest) && is_file(cx, &manifest) {
+    if !cx.vendored(&manifest) && cx.has_input(&manifest) {
         match package(cx, &manifest) {
             Ok(info) if info.exports => {
                 return Outcome::Unresolved(format!(
@@ -401,7 +401,7 @@ fn in_package(cx: &mut ResolveCx<'_>, dir: &str, name: &str, spec: &str) -> Outc
 fn workspace_names<'c>(cx: &'c mut ResolveCx<'_>) -> &'c BTreeMap<String, Vec<String>> {
     if cx.cache::<JsCache>().names.is_none() {
         let mut manifests: Vec<String> = cx
-            .workspace_files()
+            .workspace_inputs()
             .iter()
             .filter(|f| f.rsplit('/').next() == Some("package.json"))
             .filter(|f| !f.split('/').any(|part| TEST_DIRS.contains(&part)))
@@ -430,7 +430,7 @@ fn manifests(cx: &mut ResolveCx<'_>, dir: &str) -> Result<Vec<(String, PackageIn
     let mut out = Vec::new();
     for ancestor in ancestors(dir) {
         let manifest = join(ancestor, "package.json");
-        if !cx.vendored(&manifest) && is_file(cx, &manifest) {
+        if !cx.vendored(&manifest) && cx.has_input(&manifest) {
             out.push((ancestor.to_string(), package(cx, &manifest)?));
         }
     }
@@ -456,7 +456,7 @@ fn nearest_config(cx: &mut ResolveCx<'_>, dir: &str) -> Option<String> {
     for ancestor in ancestors(dir) {
         for name in ["tsconfig.json", "jsconfig.json"] {
             let path = join(ancestor, name);
-            if is_file(cx, &path) {
+            if cx.has_input(&path) {
                 return Some(path);
             }
         }

@@ -2306,3 +2306,54 @@ fn a_binding_followed_with_different_suffixes_gives_each_target() {
     );
     assert_eq!(graph.limits_hit(), []);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_cargo_toml_is_a_crate_at_the_link_directory() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nshared = \"1\"\n",
+    );
+    write(root, "app/src/lib.rs", "use shared::Item;\n");
+    write(
+        root,
+        "meta/shared.toml",
+        "[package]\nname = \"shared\"\nversion = \"1.0.0\"\n",
+    );
+    write(
+        root,
+        "shared/src/lib.rs",
+        "mod item;\npub use item::Item;\n",
+    );
+    write(root, "shared/src/item.rs", "pub struct Item;\n");
+    std::os::unix::fs::symlink("../meta/shared.toml", root.join("shared/Cargo.toml")).unwrap();
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "shared::Item"),
+        resolved(&["shared/src/lib.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "shared/src/lib.rs", "item::Item"),
+        resolved(&["shared/src/item.rs"])
+    );
+    let listed = graph.common_details()["resolution_inputs"].clone();
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["file"] == "shared/Cargo.toml" && i["error"].is_null()),
+        "{listed}"
+    );
+    assert!(
+        !listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["file"] == "meta/shared.toml"),
+        "{listed}"
+    );
+}

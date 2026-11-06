@@ -280,7 +280,8 @@ impl Resolver for RustResolver {
 fn package_of(cx: &mut ResolveCx<'_>, file: &str) -> Result<Option<Arc<Manifest>>, String> {
     let mut at = dir_of(file);
     loop {
-        if let Probe::File(path) = cx.probe_file(&join(at, "Cargo.toml")) {
+        let path = join(at, "Cargo.toml");
+        if cx.has_input(&path) {
             if cx.vendored(&path) {
                 return Ok(None);
             }
@@ -1105,7 +1106,8 @@ fn dependency_crates(
 fn workspace_root(cx: &mut ResolveCx<'_>, dir: &str) -> Option<Arc<Manifest>> {
     let mut at = dir;
     loop {
-        if let Probe::File(path) = cx.probe_file(&join(at, "Cargo.toml"))
+        let path = join(at, "Cargo.toml");
+        if cx.has_input(&path)
             && !cx.vendored(&path)
             && let Ok(manifest) = read_manifest(cx, &path)
             && manifest.workspace
@@ -1126,7 +1128,7 @@ fn crates(cx: &mut ResolveCx<'_>) -> Vec<Arc<Manifest>> {
         return known.clone();
     }
     let files: Vec<String> = cx
-        .workspace_files()
+        .workspace_inputs()
         .iter()
         .filter(|f| f.as_str() == "Cargo.toml" || f.ends_with("/Cargo.toml"))
         .filter(|f| !dir_of(f).split('/').any(|part| TEST_DIRS.contains(&part)))

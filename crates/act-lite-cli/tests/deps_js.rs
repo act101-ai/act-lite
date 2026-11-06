@@ -861,3 +861,88 @@ fn a_string_literal_is_resolved_by_its_decoded_value() {
         .collect();
     assert!(reasons.contains(&("src/bad_hex.js".to_string(), "./\\x6.js".to_string())));
 }
+
+/// A workspace whose package `p` has its `package.json` as a symbolic link
+/// to `target`, which `link` names relative to `packages/p/`.
+#[cfg(unix)]
+fn linked_package(link: &str) -> tempfile::TempDir {
+    let ws = workspace(&[
+        ("package.json", r#"{"dependencies":{"p":"1.0.0"}}"#),
+        ("metadata/p.json", r#"{"name":"p"}"#),
+        ("packages/p/index.ts", ""),
+        ("main.ts", "import 'p';\n"),
+    ]);
+    std::os::unix::fs::symlink(link, ws.path().join("packages/p/package.json")).unwrap();
+    ws
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_json_inside_the_workspace_names_its_package() {
+    let ws = linked_package("../../metadata/p.json");
+    let graph = build(ws.path());
+    assert_eq!(outcome(&graph, "main.ts"), resolved("packages/p/index.ts"));
+    assert!(
+        inputs(&graph)
+            .iter()
+            .any(|i| i["file"] == "packages/p/package.json" && i["error"].is_null()),
+        "{:?}",
+        inputs(&graph)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_json_that_leaves_the_workspace_is_an_input_error() {
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "p.json", r#"{"name":"p"}"#);
+    let ws = linked_package(outside.path().join("p.json").to_str().unwrap());
+    let graph = build(ws.path());
+    assert_eq!(
+        outcome(&graph, "main.ts"),
+        unresolved("packages/p/package.json could not be read")
+    );
+    assert!(input_error(&graph, "packages/p/package.json").is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_package_json_to_a_directory_or_nothing_is_an_input_error() {
+    for link in ["../../metadata", "../../metadata/gone.json"] {
+        let ws = linked_package(link);
+        let graph = build(ws.path());
+        assert_eq!(
+            outcome(&graph, "main.ts"),
+            unresolved("packages/p/package.json could not be read"),
+            "{link}"
+        );
+        assert!(
+            input_error(&graph, "packages/p/package.json").is_some(),
+            "{link}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_tsconfig_that_leaves_the_workspace_is_an_input_error() {
+    let outside = tempfile::tempdir().unwrap();
+    write(
+        outside.path(),
+        "tsconfig.json",
+        r#"{"compilerOptions":{"baseUrl":".","paths":{"@lib/*":["src/lib/*"]}}}"#,
+    );
+    let ws = workspace(&[("src/lib/b.ts", ""), ("src/main.ts", "import '@lib/b';\n")]);
+    std::os::unix::fs::symlink(
+        outside.path().join("tsconfig.json"),
+        ws.path().join("tsconfig.json"),
+    )
+    .unwrap();
+    let graph = build(ws.path());
+    assert!(
+        matches!(outcome(&graph, "src/main.ts"), Outcome::Unresolved(_)),
+        "{:?}",
+        outcome(&graph, "src/main.ts")
+    );
+    assert!(input_error(&graph, "tsconfig.json").is_some());
+}
