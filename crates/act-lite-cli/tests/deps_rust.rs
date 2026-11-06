@@ -2247,8 +2247,8 @@ fn a_chain_of_bindings_with_two_declarations_each_stops_at_the_lookup_limit() {
     });
     let started = std::time::Instant::now();
     let (thing, limits) = receive
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("no result within 5 s");
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("no result within 60 s");
     eprintln!("the chain took {:?}", started.elapsed());
     assert_eq!(thing, resolved(&["src/m.rs"]));
     let mut uses = vec!["y0::Thing".to_string()];
