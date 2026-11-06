@@ -811,3 +811,213 @@ fn clones_focus_errors_over_mcp_match_the_cli() {
         );
     }
 }
+
+// ---- the dependency analyzers: graph, cycles, coupling, impact ----
+
+/// The `acyclic` workspace: a diamond of imports, `src/a.ts` → `src/b.ts` →
+/// `src/c.ts` and `src/d.ts` → `src/b.ts`, `src/c.ts`, with one external.
+fn acyclic(root: &Path) {
+    fs::create_dir_all(root.join(".git")).unwrap();
+    write(
+        root,
+        "src/a.ts",
+        "import { b } from './b';\nimport fs from 'node:fs';\n",
+    );
+    write(root, "src/b.ts", "import { c } from './c';\n");
+    write(root, "src/c.ts", "export const c = 1;\n");
+    write(root, "src/d.ts", "import './b';\nimport './c';\n");
+}
+
+/// The MCP tool of each dependency analyzer.
+const DEPENDENCY_TOOLS: [(&str, &str); 4] = [
+    ("graph", "graph"),
+    ("analyze_cycles", "cycles"),
+    ("analyze_coupling", "coupling"),
+    ("analyze_impact", "impact"),
+];
+
+impl Session {
+    /// A `tools/call` of `tool` that must succeed: its two text blocks, the
+    /// first parsed as JSON.
+    fn ok_tool(&mut self, tool: &str, arguments: Value) -> (Value, String) {
+        let reply = self.call_tool(tool, arguments.clone());
+        assert!(
+            reply.get("error").is_none() && reply["result"]["isError"] != true,
+            "{tool} {arguments} must succeed: {reply}"
+        );
+        let content = reply["result"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "{reply}");
+        let text = content[0]["text"].as_str().unwrap();
+        let json = serde_json::from_str(text).unwrap_or_else(|e| panic!("not JSON ({e}): {text}"));
+        (json, content[1]["text"].as_str().unwrap().to_string())
+    }
+
+    /// A `tools/call` of `tool` that must fail with `invalid_params`; returns
+    /// the message.
+    fn invalid(&mut self, tool: &str, arguments: Value) -> String {
+        let reply = self.call_tool(tool, arguments.clone());
+        let error = &reply["error"];
+        assert_eq!(error["code"], INVALID_PARAMS, "{tool} {arguments}: {reply}");
+        error["message"].as_str().unwrap().to_string()
+    }
+}
+
+#[test]
+fn dependency_tools_answer_over_mcp_as_the_cli() {
+    let ws = TempDir::new().unwrap();
+    acyclic(ws.path());
+    let mut session = Session::start(ws.path());
+    for ((tool, analysis), status) in DEPENDENCY_TOOLS
+        .into_iter()
+        .zip(["findings", "no_findings", "findings", "findings"])
+    {
+        let (arguments, args) = if tool == "analyze_impact" {
+            (json!({"focus": ["src/c.ts"]}), vec!["--focus", "src/c.ts"])
+        } else {
+            (json!({}), vec![])
+        };
+        let (v, _) = session.ok_tool(tool, arguments);
+        assert_eq!(v["analysis"], analysis, "{v}");
+        assert_eq!(v["status"], status, "{tool}: {v}");
+        assert_eq!(v, cli_of(ws.path(), analysis, &args), "{tool}");
+    }
+    let (v, _) = session.ok_tool(
+        "graph",
+        json!({"focus": "[\"src/b.ts\"]", "direction": "in", "max_depth": "2"}),
+    );
+    assert_eq!(
+        v,
+        cli_of(
+            ws.path(),
+            "graph",
+            &["--focus", "src/b.ts", "--direction", "in", "--max-depth", "2"]
+        )
+    );
+    assert_eq!(v["details"]["max_depth"], 2, "{v}");
+}
+
+#[test]
+fn dependency_request_errors_over_mcp_match_the_cli() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("ws");
+    acyclic(&root);
+    write(&root, "src/style.css", "a {}\n");
+    write(tmp.path(), "x.ts", "export const x = 1;\n");
+    let mut session = Session::start(&root);
+    for (tool, analyzer, arguments, args) in [
+        ("graph", "graph", json!({"max_depth": 2}), vec!["--max-depth", "2"]),
+        ("graph", "graph", json!({"max_depth": 0}), vec!["--max-depth", "0"]),
+        ("graph", "graph", json!({"max_depth": "1001"}), vec!["--max-depth", "1001"]),
+        ("graph", "graph", json!({"direction": "in"}), vec!["--direction", "in"]),
+        (
+            "graph",
+            "graph",
+            json!({"focus": ["src/style.css"], "direction": "out"}),
+            vec!["--focus", "src/style.css", "--direction", "out"],
+        ),
+        ("graph", "graph", json!({"focus": ["nope.ts"]}), vec!["--focus", "nope.ts"]),
+        ("graph", "graph", json!({"focus": ["../x.ts"]}), vec!["--focus", "../x.ts"]),
+        (
+            "graph",
+            "graph",
+            json!({"paths": ["src/a.ts"], "focus": ["src/c.ts"]}),
+            vec!["src/a.ts", "--focus", "src/c.ts"],
+        ),
+        ("analyze_impact", "impact", json!({}), vec![]),
+        (
+            "analyze_impact",
+            "impact",
+            json!({"focus": ["src/c.ts"], "max_depth": 1001}),
+            vec!["--focus", "src/c.ts", "--max-depth", "1001"],
+        ),
+        (
+            "analyze_impact",
+            "impact",
+            json!({"focus": ["nope.ts"]}),
+            vec!["--focus", "nope.ts"],
+        ),
+        (
+            "analyze_impact",
+            "impact",
+            json!({"focus": ["../x.ts"]}),
+            vec!["--focus", "../x.ts"],
+        ),
+        (
+            "analyze_impact",
+            "impact",
+            json!({"paths": ["src/a.ts"], "focus": ["src/c.ts"]}),
+            vec!["src/a.ts", "--focus", "src/c.ts"],
+        ),
+    ] {
+        assert_eq!(
+            session.invalid(tool, arguments.clone()),
+            cli_error_of(&root, analyzer, &args),
+            "{tool} {arguments}"
+        );
+    }
+}
+
+#[test]
+fn direction_errors_over_mcp_follow_the_precedence() {
+    let ws = TempDir::new().unwrap();
+    acyclic(ws.path());
+    let mut session = Session::start(ws.path());
+    let wrong = "direction must be one of in, out, both, got up";
+    assert_eq!(
+        session.invalid("graph", json!({"focus": ["src/c.ts"], "direction": "up"})),
+        wrong
+    );
+    assert_eq!(session.invalid("graph", json!({"direction": "up"})), wrong);
+    assert_eq!(
+        session.invalid("graph", json!({"max_depth": 0, "direction": "up"})),
+        "max_depth must be between 1 and 1000, got 0"
+    );
+}
+
+#[test]
+fn truncated_dependency_hint_names_focus_and_max_depth_only_with_a_focus() {
+    let ws = TempDir::new().unwrap();
+    acyclic(ws.path());
+    let mut session = Session::start(ws.path());
+    let narrowing = ["`paths`", "`include`", "`exclude`", "`limit`", "`focus`"];
+    let (v, hint) = session.ok_tool("graph", json!({"limit": 1}));
+    assert_eq!(v["truncated"], true, "{v}");
+    for word in narrowing {
+        assert!(hint.contains(word), "graph lacks {word}: {hint}");
+    }
+    assert!(!hint.contains("max_depth"), "{hint}");
+    for (tool, focus) in [("graph", "src/b.ts"), ("analyze_impact", "src/c.ts")] {
+        let (v, hint) = session.ok_tool(tool, json!({"limit": 1, "focus": [focus]}));
+        assert_eq!(v["truncated"], true, "{tool}: {v}");
+        for word in narrowing.into_iter().chain(["`max_depth`"]) {
+            assert!(hint.contains(word), "{tool} lacks {word}: {hint}");
+        }
+    }
+    let (v, hint) = session.ok_tool("graph", json!({}));
+    assert_eq!(v["truncated"], false, "{v}");
+    assert!(!hint.contains("max_depth"), "{hint}");
+    let (_, hint) = session.ok_tool("graph", json!({"focus": ["src/b.ts"]}));
+    assert!(hint.contains("max_depth"), "{hint}");
+}
+
+/// The statement every report of dependents carries.
+const IMPACT_STATEMENT: &str = "A dependent is a file that imports a focus file, directly or through other files. It is exposed to a change in the focus file. This is not proof that it will break, and a file that is not listed is not proof that it is safe: relationships that act-lite does not model (see the README) are not followed.";
+
+#[test]
+fn dependency_tool_descriptions_point_to_the_readme() {
+    let ws = TempDir::new().unwrap();
+    let mut session = Session::start(ws.path());
+    let reply = session.request("tools/list", json!({}));
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    for (tool, _) in DEPENDENCY_TOOLS {
+        let description = tools
+            .iter()
+            .find(|t| t["name"] == tool)
+            .and_then(|t| t["description"].as_str())
+            .unwrap_or_else(|| panic!("no {tool} in {reply}"));
+        assert!(description.contains("README"), "{tool}: {description}");
+        if tool == "analyze_impact" {
+            assert!(description.contains(IMPACT_STATEMENT), "{description}");
+        }
+    }
+}
