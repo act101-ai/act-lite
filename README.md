@@ -1006,7 +1006,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   modules that declare the same path are never candidates. A relative path
   (`.`, `..`, or one starting with `./` or `../`) inside the workspace makes its directory the only directory of that module
   path; a relative path outside the workspace, or a module path with a
-  version, makes an import under the replaced path `external`. When exactly one such directory exists, belongs to that module and
+  version, makes an import under the replaced path `external`. A replacement
+  directory is compared with the module that owns a package at its own path,
+  symlinks inside the workspace resolved, as package files are: `./alias`, a
+  symlink to `actual`, gives the files of `actual`; a directory whose symlink
+  leads outside the workspace is outside it. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
   each such file in it. Two are `unresolved` (`ambiguous import: <module
   paths>`); none is `unresolved` (`no Go package files for <I> in the

@@ -105,9 +105,14 @@ impl Resolver for GoResolver {
                 }
                 _ => continue,
             };
+            // The package is at its own path, symlinks resolved; so is the
+            // module directory it must belong to.
+            let Probe::Dir(owner) = cx.probe_file(dir) else {
+                continue;
+            };
             if ignored(&package)
                 || vendored(cx, &package)
-                || nearest_module(cx, &package).as_deref() != Some(dir)
+                || nearest_module(cx, &package) != Some(owner)
             {
                 continue;
             }

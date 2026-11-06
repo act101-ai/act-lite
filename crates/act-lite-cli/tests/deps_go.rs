@@ -874,3 +874,45 @@ fn a_quoted_module_path_is_read_by_its_value() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_replace_directory_is_compared_by_its_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    write(
+        &root,
+        "go.mod",
+        "module example.com/app\n\nreplace (\n\texample.com/lib => ./alias\n\texample.com/out => ./away\n)\n",
+    );
+    write(&root, "actual/go.mod", "module example.com/lib\n");
+    write(&root, "actual/lib.go", "package lib\n");
+    write(&root, "actual/sub/s.go", "package sub\n");
+    write(&root, "decoy/go.mod", "module example.com/lib\n");
+    write(&root, "decoy/lib.go", "package lib\n");
+    write(&root, "decoy/sub/s.go", "package sub\n");
+    write(&root, "near/go.mod", "module example.com/out\n");
+    write(&root, "near/o.go", "package out\n");
+    write(tmp.path(), "far/go.mod", "module example.com/out\n");
+    write(tmp.path(), "far/o.go", "package out\n");
+    std::os::unix::fs::symlink("actual", root.join("alias")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("far"), root.join("away")).unwrap();
+    write(
+        &root,
+        "main.go",
+        "package main\n\nimport (\n\t\"example.com/lib\"\n\t\"example.com/lib/sub\"\n\t\"example.com/out\"\n)\n",
+    );
+    let graph = graph(&root);
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib"),
+        Outcome::Resolved(vec!["actual/lib.go".to_string()])
+    );
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/lib/sub"),
+        Outcome::Resolved(vec!["actual/sub/s.go".to_string()])
+    );
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/out"),
+        Outcome::External
+    );
+}
