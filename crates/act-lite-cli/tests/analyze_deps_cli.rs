@@ -1041,6 +1041,32 @@ fn a_use_in_a_block_local_module_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_use_through_a_use_binding_in_a_body_gives_no_edge_and_no_cycle() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nmod b;\nfn f() {\n    use crate::b as a;\n    use a::Thing;\n}\n",
+    );
+    write(root, "src/a.rs", "use crate::f;\npub struct Thing;\n");
+    write(root, "src/b.rs", "pub struct Thing;\n");
+    let v = graph(root, &[]);
+    assert_eq!(kinds(edge(&v, "src/lib.rs", "src/a.rs")), ["module"]);
+    assert_eq!(kinds(edge(&v, "src/lib.rs", "src/b.rs")), ["module", "use"]);
+    assert_eq!(kinds(edge(&v, "src/a.rs", "src/lib.rs")), ["use"]);
+    assert_eq!(unresolved(&v), []);
+    let cycles = analyze(root, "cycles", &[]);
+    assert_eq!(cycles["findings"], json!([]));
+    assert_eq!(cycles["status"], "no_findings");
+}
+
+#[test]
 fn an_example_root_that_loads_a_source_file_gives_an_edge_from_its_tree() {
     let ws = workspace();
     let root = ws.path();

@@ -1637,3 +1637,124 @@ fn super_and_nested_blocks_follow_the_block_local_scopes() {
         "no `use` reaches the module file `deep`"
     );
 }
+
+#[test]
+fn a_use_in_a_body_follows_a_use_binding_of_the_body() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nmod b;\nfn f() {\n    use crate::b as a;\n    use a::Thing;\n}\n",
+    );
+    write(root, "src/a.rs", "use crate::f;\npub struct Thing;\n");
+    write(root, "src/b.rs", "pub struct Thing;\n");
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "a::Thing"),
+        resolved(&["src/b.rs"]),
+        "`a` is the binding of `crate::b` in the body"
+    );
+    assert_eq!(kinds_of(&graph, "src/lib.rs", "src/a.rs"), ["module"]);
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/b.rs"),
+        ["module", "use"]
+    );
+}
+
+#[test]
+fn use_bindings_of_a_body_reach_its_whole_block_nested_blocks_and_inline_modules() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod b;\n",
+            "mod c;\n",
+            "fn f() {\n",
+            "    use a::Early;\n",
+            "    use crate::b as a;\n",
+            "    {\n",
+            "        use a::Nested;\n",
+            "    }\n",
+            "    mod inner {\n",
+            "        use crate::c as a;\n",
+            "        use a::Inside;\n",
+            "        fn g() {\n",
+            "            use a::Deep;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+            "fn h() {\n",
+            "    use crate::c::*;\n",
+            "    use sub::G;\n",
+            "    use a::Thing;\n",
+            "}\n",
+            "fn k() {\n",
+            "    use b;\n",
+            "    use b::Again;\n",
+            "}\n",
+            "fn l() {\n",
+            "    use p as q;\n",
+            "    use q as p;\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        "pub struct Early;\npub struct Nested;\npub struct Again;\n",
+    );
+    write(
+        root,
+        "src/c.rs",
+        "pub mod sub {\n    pub struct G;\n}\npub struct Inside;\npub struct Deep;\n",
+    );
+    let graph = graph(root);
+    let of = |spec| outcome(&graph, "src/lib.rs", spec);
+    assert_eq!(
+        of("a::Early"),
+        resolved(&["src/b.rs"]),
+        "a binding is seen in its whole block, also before it"
+    );
+    assert_eq!(
+        of("a::Nested"),
+        resolved(&["src/b.rs"]),
+        "a nested block sees the bindings of the blocks around it"
+    );
+    assert_eq!(
+        of("a::Inside"),
+        resolved(&["src/c.rs"]),
+        "a binding of an inline module in a body"
+    );
+    assert_eq!(
+        of("a::Deep"),
+        resolved(&["src/c.rs"]),
+        "a body inside the inline module sees its bindings"
+    );
+    assert_eq!(
+        of("sub::G"),
+        resolved(&["src/c.rs"]),
+        "through the glob of the body"
+    );
+    assert_eq!(of("a::Thing"), resolved(&["src/a.rs"]));
+    assert_eq!(
+        of("b::Again"),
+        resolved(&["src/b.rs"]),
+        "`use b;` binds `b` to the module `b` around the body"
+    );
+    assert_eq!(
+        of("q"),
+        unresolved("first path segment is not a module, crate or dependency: q"),
+        "a binding is not followed through itself"
+    );
+    assert_eq!(
+        kinds_of(&graph, "src/lib.rs", "src/a.rs"),
+        ["module", "use"]
+    );
+}

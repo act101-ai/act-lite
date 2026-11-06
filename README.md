@@ -1049,7 +1049,14 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   item that the reached module's file declares (or the file has a glob `use`).
   A `use` inside a function, closure or other block body resolves as rustc
   does: an inline module or an item declared in that body, or in a block
-  around it, is found first (`fn f() { mod x { … } use x::Y; }`). Such an
+  around it, is found first (`fn f() { mod x { … } use x::Y; }`). A `use`
+  in such a body binds its leaves and aliases there, in the whole block and
+  the blocks inside it, also before the `use`: a path whose first segment is
+  such a binding resolves through the binding's path, from the binding's
+  `use` (`fn f() { use crate::b as a; use a::Thing; }` targets the file of
+  `b`). A name that the body's scopes do not declare is also resolved
+  through each glob `use` of those scopes (`use m::*;`), and the targets
+  are combined with those of the rest of the lookup. Such an
   inline module is not part of the crate's module tree. Inside it, `self` is
   that module and `super` is the module around it, which ends at the module
   that holds the body; directly in a body, `self` is the module that holds

@@ -21,8 +21,8 @@ use act_lite_core::CompactRange;
 use tree_sitter::Node;
 
 use super::{
-    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind, nodes,
-    range_of, rust_value, text, unquote,
+    BlockModule, InlineModule, LiteralValue, ModuleNames, Relationship, RelationshipKind,
+    UseBinding, nodes, range_of, rust_value, text, unquote,
 };
 use crate::{Grammar, Parser};
 
@@ -134,13 +134,14 @@ fn macro_relationships(item: MacroItem) -> Vec<Relationship> {
 /// The names declared at the module level of the file, its inline modules
 /// with their own names, and the blocks with items of each.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
-    declared(root, source, false)
+    declared(root, source, false, false)
 }
 
 /// The names that the items of `container` declare. In a block, only the
 /// items and inline modules count: a `use` there, an `extern crate` and a
-/// macro invocation declare nothing.
-fn declared(container: Node, source: &str, block: bool) -> ModuleNames {
+/// macro invocation declare nothing. In a body (`in_body`), the leaves of
+/// each `use` are also kept as bindings.
+fn declared(container: Node, source: &str, block: bool, in_body: bool) -> ModuleNames {
     let mut names = ModuleNames::default();
     let mut cursor = container.walk();
     for item in container.named_children(&mut cursor) {
@@ -162,8 +163,18 @@ fn declared(container: Node, source: &str, block: bool) -> ModuleNames {
                         name,
                         range: range_of(item),
                         path_attribute: path_attribute(item, source),
-                        names: declared(body, source, false),
+                        names: declared(body, source, false, in_body),
                     });
+                }
+            }
+            "use_declaration" if in_body => {
+                if let Some(argument) = item.child_by_field_name("argument") {
+                    for leaf in use_leaves(argument, source) {
+                        names.uses.extend(binding(&leaf, item));
+                        if !block {
+                            declare_leaf(&mut names, leaf);
+                        }
+                    }
                 }
             }
             _ if block => {}
@@ -222,8 +233,8 @@ fn blocks_in(node: Node, source: &str, found: &mut Vec<BlockModule>) {
         match child.kind() {
             "mod_item" => {}
             "block" => {
-                let names = declared(child, source, true);
-                if names.names.is_empty() {
+                let names = declared(child, source, true, true);
+                if names.names.is_empty() && names.uses.is_empty() {
                     found.extend(names.blocks);
                 } else {
                     found.push(BlockModule {
@@ -239,6 +250,22 @@ fn blocks_in(node: Node, source: &str, found: &mut Vec<BlockModule>) {
             }
         }
     }
+}
+
+/// The binding of a `use` leaf of the declaration `item`; `None` for
+/// `as _`, which binds no name.
+fn binding(leaf: &Leaf, item: Node) -> Option<UseBinding> {
+    let name = match (&leaf.alias, leaf.glob) {
+        (_, true) => None,
+        (Some(alias), _) if alias == "_" => return None,
+        (Some(alias), _) => Some(unraw(alias).to_string()),
+        (None, _) => Some(unraw(leaf.path.rsplit("::").next().unwrap_or(&leaf.path)).to_string()),
+    };
+    Some(UseBinding {
+        name,
+        path: leaf.path.clone(),
+        range: range_of(item),
+    })
 }
 
 fn declare_leaf(names: &mut ModuleNames, leaf: Leaf) {
