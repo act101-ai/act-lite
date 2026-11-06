@@ -477,6 +477,12 @@ impl SupportReader {
         for entry in entries {
             let entry =
                 entry.map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
+            // A name that is not UTF-8 cannot be matched byte for byte by a
+            // probe written in UTF-8; listing it lossily would let `\u{FFFD}`
+            // match it. Discovery skips such names too.
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
             let file_type = entry
                 .file_type()
                 .map_err(|err| SupportError::Unreadable(rel.to_string(), err.to_string()))?;
@@ -487,11 +493,7 @@ impl SupportReader {
             } else {
                 (EntryKind::File, None)
             };
-            out.push(DirEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                kind,
-                target,
-            });
+            out.push(DirEntry { name, kind, target });
         }
         out.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         Ok(out)

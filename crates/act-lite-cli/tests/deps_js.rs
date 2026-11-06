@@ -946,3 +946,18 @@ fn a_symlinked_tsconfig_that_leaves_the_workspace_is_an_input_error() {
     );
     assert!(input_error(&graph, "tsconfig.json").is_some());
 }
+
+/// A file name that is not UTF-8 is not listed for probes, so an import of
+/// its lossy spelling stays unresolved. Linux only: macOS refuses such names.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_utf8_file_name_does_not_match_its_lossy_spelling() {
+    use std::os::unix::ffi::OsStrExt;
+    let ws = workspace(&[("a.ts", "import './\u{FFFD}.ts';\n")]);
+    let bad = ws.path().join(std::ffi::OsStr::from_bytes(b"\xff.ts"));
+    fs::write(bad, "export {};\n").unwrap();
+    assert!(matches!(
+        outcome(&build(ws.path()), "a.ts"),
+        Outcome::Unresolved(_)
+    ));
+}
