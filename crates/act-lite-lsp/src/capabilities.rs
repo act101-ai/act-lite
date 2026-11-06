@@ -133,17 +133,24 @@ pub async fn sync_document(
     file: &Path,
     text: String,
 ) -> Result<DocumentReady> {
+    let (opened, ready) = open_with_text(client, file, text.clone()).await?;
+    if opened == DocumentOpen::Opened {
+        return Ok(ready);
+    }
+    let uri = path_to_uri(file)?;
+    client.record_text(&uri, &text).await;
+    send_full_text(client, uri, text).await?;
+    Ok(ready)
+}
+
+/// Sends an open document's full new text as a `didChange`.
+async fn send_full_text(client: &impl LspClientTrait, uri: Uri, text: String) -> Result<()> {
     use std::sync::atomic::{AtomicI32, Ordering};
     // ponytail: one process-wide counter keeps every document's versions
     // strictly increasing past the `didOpen` version 1, across clients and
     // calls; per-document counters only if a server ever objects to gaps.
     static NEXT_VERSION: AtomicI32 = AtomicI32::new(2);
 
-    let (opened, ready) = open_with_text(client, file, text.clone()).await?;
-    if opened == DocumentOpen::Opened {
-        return Ok(ready);
-    }
-    let uri = path_to_uri(file)?;
     client
         .notify::<lsp_types::notification::DidChangeTextDocument>(
             lsp_types::DidChangeTextDocumentParams {
@@ -158,8 +165,7 @@ pub async fn sync_document(
                 }],
             },
         )
-        .await?;
-    Ok(ready)
+        .await
 }
 
 /// Opens a document in the LSP server.
@@ -177,16 +183,25 @@ pub async fn open_document(client: &impl LspClientTrait, file: &Path) -> Result<
 }
 
 /// Opens `file` with `text` when the caller holds the checked text, else as
-/// [`open_document`] does.
+/// [`open_document`] does. A document that is already open and was last
+/// sent other text gets `text` as a `didChange`, so the query is answered
+/// against the text its position was taken from.
 async fn open_for_query(
     client: &impl LspClientTrait,
     file: &Path,
     text: Option<&str>,
 ) -> Result<DocumentReady> {
-    match text {
-        Some(text) => Ok(open_with_text(client, file, text.to_string()).await?.1),
-        None => open_document(client, file).await,
+    let Some(text) = text else {
+        return open_document(client, file).await;
+    };
+    let (opened, ready) = open_with_text(client, file, text.to_string()).await?;
+    if opened == DocumentOpen::AlreadyOpen {
+        let uri = path_to_uri(file)?;
+        if client.record_text(&uri, text).await {
+            send_full_text(client, uri, text.to_string()).await?;
+        }
     }
+    Ok(ready)
 }
 
 /// [`open_document`]'s body for a caller that already holds the text: the
@@ -1378,6 +1393,35 @@ mod tests {
         assert_eq!(opened.1["textDocument"]["text"], "const x = 1;");
     }
 
+    /// A query on an already-open document with checked text that differs
+    /// from what the server holds sends that text (`didChange`, full text)
+    /// before the request; the same text again sends nothing more.
+    #[tokio::test]
+    async fn query_on_an_open_document_sends_changed_text_first() {
+        let mock = MockLspClient::new_lenient();
+        for _ in 0..3 {
+            mock.register_response::<References>(Some(vec![]));
+        }
+        let file = std::path::Path::new("/ws/changed.ts");
+        let location = Location::new(file.to_path_buf(), 1, 7);
+        for text in ["const a = 1;", "const b = 2;", "const b = 2;"] {
+            query_references(&mock, file, &location, Some(text))
+                .await
+                .unwrap();
+        }
+        let sent = mock.sent_notifications();
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["textDocument/didOpen", "textDocument/didChange"]);
+        assert_eq!(sent[0].1["textDocument"]["text"], "const a = 1;");
+        assert_eq!(sent[1].1["contentChanges"][0]["text"], "const b = 2;");
+        assert!(sent[1].1["textDocument"]["version"].as_i64().unwrap() > 1);
+        assert_eq!(
+            mock.sent_requests().len(),
+            3,
+            "each query sends its request"
+        );
+    }
+
     /// Without the caller's text, a FIFO at the path is refused, not waited on.
     #[cfg(unix)]
     #[tokio::test]
@@ -1851,6 +1895,10 @@ mod tests {
 
         async fn readiness(&self, uri: &Uri) -> Option<bool> {
             self.inner.readiness(uri).await
+        }
+
+        async fn record_text(&self, uri: &Uri, text: &str) -> bool {
+            self.inner.record_text(uri, text).await
         }
 
         fn is_initialized(&self) -> bool {

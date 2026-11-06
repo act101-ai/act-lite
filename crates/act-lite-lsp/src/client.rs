@@ -28,6 +28,14 @@ use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, trace, warn};
 
+/// A document text's fingerprint, to tell whether the server holds it.
+pub(crate) fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// What a `did_open` actually did.
 ///
 /// The distinction is what makes the post-`didOpen` analysis wait affordable:
@@ -97,6 +105,12 @@ pub trait LspClientTrait: Send + Sync {
 
     async fn readiness(&self, uri: &Uri) -> Option<bool>;
 
+    /// Records `text` as the text the server holds for the open document
+    /// `uri`, and returns whether it differs from the text recorded before
+    /// (the `didOpen` text or a later recorded one). A caller that gets
+    /// `true` must send the server the text.
+    async fn record_text(&self, uri: &Uri, text: &str) -> bool;
+
     /// The capabilities the server advertised in its `initialize` result;
     /// `None` when they are not known, and then every request is sent.
     fn server_capabilities(&self) -> Option<&ServerCapabilities> {
@@ -154,7 +168,8 @@ pub struct LspClient {
     /// server discard and redo its analysis of it, so a query that opens what
     /// warming already opened pays for the same work twice and can time out
     /// waiting for an answer the server had moments ago.
-    opened: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Each holds the [`text_hash`] of the text the server was last sent.
+    opened: Arc<Mutex<HashMap<String, u64>>>,
 
     /// Outcome of the readiness wait paid at each document's first open,
     /// keyed by `uri.as_str()` exactly as `opened` is: `true` = the wait saw
@@ -357,7 +372,7 @@ impl LspClient {
             initialization_options: config.initialization_options.clone(),
             notifications,
             active_progress,
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -942,9 +957,13 @@ impl LspClientTrait for LspClient {
     }
 
     async fn did_open(&self, uri: Uri, language_id: String, text: String) -> Result<DocumentOpen> {
-        if !self.opened.lock().await.insert(uri.as_str().to_string()) {
-            trace!("{} already open in {}", uri.as_str(), self.language);
-            return Ok(DocumentOpen::AlreadyOpen);
+        {
+            let mut opened = self.opened.lock().await;
+            if opened.contains_key(uri.as_str()) {
+                trace!("{} already open in {}", uri.as_str(), self.language);
+                return Ok(DocumentOpen::AlreadyOpen);
+            }
+            opened.insert(uri.as_str().to_string(), text_hash(&text));
         }
         self.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
@@ -956,6 +975,15 @@ impl LspClientTrait for LspClient {
         })
         .await?;
         Ok(DocumentOpen::Opened)
+    }
+
+    async fn record_text(&self, uri: &Uri, text: &str) -> bool {
+        let hash = text_hash(text);
+        self.opened
+            .lock()
+            .await
+            .insert(uri.as_str().to_string(), hash)
+            != Some(hash)
     }
 
     fn is_initialized(&self) -> bool {
@@ -1052,7 +1080,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1366,7 +1394,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1407,7 +1435,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1509,7 +1537,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1558,7 +1586,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1614,7 +1642,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -1640,7 +1668,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2180,7 +2208,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2251,7 +2279,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2318,7 +2346,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2388,7 +2416,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2434,7 +2462,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2490,7 +2518,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2535,7 +2563,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),
@@ -2613,7 +2641,7 @@ mod tests {
             initialization_options: serde_json::Value::Null,
             notifications: broadcast::channel(16).0,
             active_progress: Arc::new(Mutex::new(std::collections::HashSet::new())),
-            opened: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             server_capabilities: std::sync::OnceLock::new(),
             settled: Arc::new(AtomicBool::new(false)),

@@ -7,7 +7,7 @@ use lsp_types::notification::Notification;
 use lsp_types::request::Request;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Mock LSP client for deterministic testing.
@@ -34,7 +34,7 @@ pub struct MockLspClient {
     diagnostics_waits: Arc<Mutex<Vec<String>>>,
 
     /// Documents already sent with `didOpen`, mirroring `LspClient::opened`.
-    opened: Arc<Mutex<HashSet<String>>>,
+    opened: Arc<Mutex<HashMap<String, u64>>>,
 
     /// Recorded readiness outcomes, mirroring `LspClient::readiness`.
     ///
@@ -65,7 +65,7 @@ impl MockLspClient {
             sent_notifications: Arc::new(Mutex::new(Vec::new())),
             lenient: Arc::new(Mutex::new(false)),
             diagnostics_waits: Arc::new(Mutex::new(Vec::new())),
-            opened: Arc::new(Mutex::new(HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             analysis_times_out: Arc::new(Mutex::new(false)),
             empty_answers: Arc::new(Mutex::new(false)),
@@ -85,7 +85,7 @@ impl MockLspClient {
             sent_notifications: Arc::new(Mutex::new(Vec::new())),
             lenient: Arc::new(Mutex::new(true)),
             diagnostics_waits: Arc::new(Mutex::new(Vec::new())),
-            opened: Arc::new(Mutex::new(HashSet::new())),
+            opened: Arc::new(Mutex::new(HashMap::new())),
             readiness: Arc::new(Mutex::new(HashMap::new())),
             analysis_times_out: Arc::new(Mutex::new(false)),
             empty_answers: Arc::new(Mutex::new(false)),
@@ -273,6 +273,15 @@ impl LspClientTrait for MockLspClient {
         self.readiness.lock().unwrap().get(uri.as_str()).copied()
     }
 
+    async fn record_text(&self, uri: &lsp_types::Uri, text: &str) -> bool {
+        let hash = crate::client::text_hash(text);
+        self.opened
+            .lock()
+            .unwrap()
+            .insert(uri.as_str().to_string(), hash)
+            != Some(hash)
+    }
+
     async fn did_open(
         &self,
         uri: lsp_types::Uri,
@@ -282,8 +291,12 @@ impl LspClientTrait for MockLspClient {
         // Deduplicated exactly as `LspClient` does it. A mock that re-opened a
         // document the real client would have skipped would model a server
         // state production can never reach.
-        if !self.opened.lock().unwrap().insert(uri.as_str().to_string()) {
-            return Ok(DocumentOpen::AlreadyOpen);
+        {
+            let mut opened = self.opened.lock().unwrap();
+            if opened.contains_key(uri.as_str()) {
+                return Ok(DocumentOpen::AlreadyOpen);
+            }
+            opened.insert(uri.as_str().to_string(), crate::client::text_hash(&text));
         }
         self.notify::<lsp_types::notification::DidOpenTextDocument>(
             lsp_types::DidOpenTextDocumentParams {
