@@ -678,7 +678,11 @@ fn only_the_module_files_of_the_package_trees_are_read() {
     write(root, "src/b.rs", marker);
     write(root, "tests/t.rs", &format!("mod helper;\n{marker}"));
     write(root, "tests/helper.rs", marker);
+    // An analyzed file that no tree reaches is read for its own tree; the
+    // lib of a crate that `app` does not depend on is not read.
     write(root, "src/c.rs", marker);
+    package(root, "other", "other", "");
+    write(root, "other/src/lib.rs", marker);
     let watching = Watching {
         watched: vec![
             "src/a.rs",
@@ -686,6 +690,7 @@ fn only_the_module_files_of_the_package_trees_are_read() {
             "src/c.rs",
             "tests/t.rs",
             "tests/helper.rs",
+            "other/src/lib.rs",
         ],
         read: Mutex::new(BTreeSet::new()),
     };
@@ -693,7 +698,13 @@ fn only_the_module_files_of_the_package_trees_are_read() {
     let read: Vec<String> = watching.read.into_inner().unwrap().into_iter().collect();
     assert_eq!(
         read,
-        ["src/a.rs", "src/b.rs", "tests/helper.rs", "tests/t.rs"]
+        [
+            "src/a.rs",
+            "src/b.rs",
+            "src/c.rs",
+            "tests/helper.rs",
+            "tests/t.rs"
+        ]
     );
 }
 

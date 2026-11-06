@@ -11,12 +11,17 @@
 //! `#[path]`, and it is resolved in each module that loads it. So every
 //! tree of a package is read in full once per build, and an index from
 //! file to trees makes each later lookup one map access; a tree that only a
-//! `use` path of another package goes through is read along that path.
+//! `use` path of another package goes through is read along that path,
+//! or in full when its lib root is analyzed.
+//! Each module file is read once per build, however many trees and modules
+//! load it, and the files of one level of the trees are read in parallel;
+//! only what expansion needs of a file is kept, not its parse.
 //! `cfg` is not evaluated, so a name with several `mod` declarations or
 //! dependency entries resolves to every file it reaches.
 
 use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
+use crate::analyze::read::Parsed;
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{InlineModule, Relationship, RelationshipKind, extract, module_names};
 use act_lite_parser::{Grammar, SourceFile};
@@ -87,6 +92,10 @@ enum Child {
     Outside,
 }
 
+/// A module's declared names and whether it has a glob `use`, shared by
+/// every module of the same file.
+type Names = Arc<(BTreeSet<String>, bool)>;
+
 /// One module of a tree: a module file or an inline module.
 struct Module {
     /// The file that holds the module.
@@ -102,7 +111,7 @@ struct Module {
     inline: Vec<(CompactRange, usize)>,
     /// The declared names and whether a glob `use` is present; the `Err` is
     /// the reason the file could not be read.
-    names: Result<(BTreeSet<String>, bool), String>,
+    names: Result<Names, String>,
     /// The module's file has been read; always true for an inline module.
     expanded: bool,
 }
@@ -151,6 +160,9 @@ struct RustState {
     /// For each package directory, the positions in its root order of the
     /// trees that reach each file.
     members: HashMap<String, Arc<HashMap<String, Vec<usize>>>>,
+    /// What each module file read gives, shared by every tree and module
+    /// that loads it; the `Err` is the reason it could not be read.
+    summaries: HashMap<String, Arc<Result<ModuleFile, String>>>,
 }
 
 impl Resolver for RustResolver {
@@ -310,6 +322,14 @@ fn use_path(
     }
     match crate_start(cx, package, is_lib, first) {
         Some(CrateStart::Libs(roots)) => {
+            // An analyzed lib root's package has all its trees read when
+            // that root is resolved, so reading the tree now, in parallel,
+            // reads nothing more than the build does.
+            for root in &roots {
+                if cx.analyzed(root) {
+                    complete(cx, &[(root.clone(), true)]);
+                }
+            }
             let outcomes = roots
                 .iter()
                 .map(|root| with_tree(cx, root, false, |cx, lib| walk(cx, lib, 0, &segments, 1)))
@@ -321,8 +341,8 @@ fn use_path(
         None => {
             let module = &tree.modules[m];
             if !global
-                && let Ok((names, _)) = &module.names
-                && names.contains(first)
+                && let Ok(names) = &module.names
+                && names.0.contains(first)
             {
                 return Outcome::Resolved(vec![module.file.clone()]);
             }
@@ -348,7 +368,7 @@ fn walk(cx: &mut ResolveCx<'_>, tree: &mut Tree, k: usize, segments: &[&str], i:
     }
     match &module.names {
         Err(reason) => Outcome::Unresolved(reason.clone()),
-        Ok((names, glob)) if *glob || names.contains(*segment) => {
+        Ok(names) if names.1 || names.0.contains(*segment) => {
             Outcome::Resolved(vec![module.file.clone()])
         }
         Ok(_) => Outcome::Unresolved(format!(
@@ -737,15 +757,24 @@ fn members(
     if let Some(known) = cx.cache::<RustState>().members.get(&package.dir) {
         return Arc::clone(known);
     }
+    complete(cx, roots);
     let mut index: HashMap<String, Vec<usize>> = HashMap::new();
     for (at, (root, _)) in roots.iter().enumerate() {
-        with_tree(cx, root, false, |cx, tree| {
-            complete(cx, tree);
+        with_tree(cx, root, false, |_, tree| {
             for file in tree.files.keys() {
                 index.entry(file.clone()).or_default().push(at);
             }
         });
     }
+    // An analyzed file of the package that no tree reaches gets a tree of
+    // its own, which reads that file: read those files together now.
+    let detached: Vec<String> = cx
+        .analyzed_files(".rs")
+        .into_iter()
+        .filter(|f| below(f, &package.dir) && !index.contains_key(f))
+        .filter(|f| matches!(package_of(cx, f), Ok(Some(p)) if p.dir == package.dir))
+        .collect();
+    summarize(cx, detached);
     let index = Arc::new(index);
     cx.cache::<RustState>()
         .members
@@ -753,17 +782,59 @@ fn members(
     index
 }
 
-/// Reads every module file of the tree once.
-fn complete(cx: &mut ResolveCx<'_>, tree: &mut Tree) {
-    if tree.complete {
+/// Reads every module file of the trees of `roots`, one level of the trees
+/// at a time: the files of a level are read together, several at once, and
+/// each file once. Modules are expanded in the order of their index, as a
+/// one-by-one expansion would.
+fn complete(cx: &mut ResolveCx<'_>, roots: &[Root]) {
+    let mut next: Vec<usize> = vec![0; roots.len()];
+    loop {
+        let mut files = Vec::new();
+        for (root, _) in roots {
+            with_tree(cx, root, false, |_, tree| {
+                if !tree.complete {
+                    files.extend(
+                        tree.modules
+                            .iter()
+                            .filter(|m| !m.expanded)
+                            .map(|m| m.file.clone()),
+                    );
+                }
+            });
+        }
+        if files.is_empty() {
+            break;
+        }
+        summarize(cx, files);
+        for (at, (root, _)) in roots.iter().enumerate() {
+            with_tree(cx, root, false, |cx, tree| {
+                let end = tree.modules.len();
+                for idx in next[at]..end {
+                    expand(cx, tree, idx);
+                }
+                next[at] = end;
+            });
+        }
+    }
+    for (root, _) in roots {
+        with_tree(cx, root, false, |_, tree| tree.complete = true);
+    }
+}
+
+/// Reads each of `files` that has no summary yet.
+fn summarize(cx: &mut ResolveCx<'_>, mut files: Vec<String>) {
+    let state = cx.cache::<RustState>();
+    files.retain(|f| !state.summaries.contains_key(f));
+    files.sort_unstable();
+    files.dedup();
+    if files.is_empty() {
         return;
     }
-    let mut idx = 0;
-    while idx < tree.modules.len() {
-        expand(cx, tree, idx);
-        idx += 1;
+    let read = cx.read_each(&files, module_file);
+    let state = cx.cache::<RustState>();
+    for (file, result) in files.into_iter().zip(read) {
+        state.summaries.insert(file, Arc::new(result));
     }
-    tree.complete = true;
 }
 
 /// Reads the file of the module `idx` once: its names, inline modules and
@@ -774,17 +845,20 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
     }
     tree.modules[idx].expanded = true;
     let file = tree.modules[idx].file.clone();
-    let (names, glob, inline, mods) = match read_module(cx, &file) {
+    summarize(cx, vec![file.clone()]);
+    let summary = Arc::clone(&cx.cache::<RustState>().summaries[&file]);
+    let (names, inline, mods) = match summary.as_ref() {
         Ok(read) => read,
         Err(reason) => {
-            tree.modules[idx].names = Err(reason);
+            tree.modules[idx].names = Err(reason.clone());
             return;
         }
     };
-    tree.modules[idx].names = Ok((names, glob));
-    add_inline(tree, idx, inline);
+    tree.modules[idx].names = Ok(Arc::clone(names));
+    add_inline(tree, idx, inline.clone());
     for (name, range, path_attribute) in mods {
-        let parent = innermost(tree, idx, &range);
+        let name = name.clone();
+        let parent = innermost(tree, idx, range);
         let target = probe_mod(
             cx,
             &tree.modules[parent],
@@ -832,7 +906,7 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
         attr_dir,
         children: Vec::new(),
         inline: Vec::new(),
-        names: Ok((BTreeSet::new(), false)),
+        names: Ok(Arc::default()),
         expanded: false,
     });
     let idx = tree.modules.len() - 1;
@@ -854,7 +928,7 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
             dir,
             children: Vec::new(),
             inline: Vec::new(),
-            names: Ok((module.names.names, module.names.glob)),
+            names: Ok(Arc::new((module.names.names, module.names.glob))),
             expanded: true,
         });
         let added = tree.modules.len() - 1;
@@ -866,18 +940,16 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
     }
 }
 
-/// A module file's declared names, glob flag, inline modules, and its
+/// A module file's declared names and glob flag, inline modules, and its
 /// `mod x;` declarations with their ranges and `#[path]` values, also
 /// those of the removed test regions.
 type ModuleFile = (
-    BTreeSet<String>,
-    bool,
+    Names,
     Vec<InlineModule>,
     Vec<(String, CompactRange, Option<String>)>,
 );
 
-fn read_module(cx: &mut ResolveCx<'_>, file: &str) -> Result<ModuleFile, String> {
-    let parsed = cx.source(file)?;
+fn module_file(parsed: &Parsed) -> ModuleFile {
     let mut mods: Vec<(String, CompactRange, Option<String>)> = extract(&parsed.source)
         .into_iter()
         .filter(|r| r.kind == RelationshipKind::Module)
@@ -889,7 +961,7 @@ fn read_module(cx: &mut ResolveCx<'_>, file: &str) -> Result<ModuleFile, String>
         }
     }
     let names = module_names(&parsed.source);
-    Ok((names.names, names.glob, names.inline, mods))
+    (Arc::new((names.names, names.glob)), names.inline, mods)
 }
 
 /// The `mod x;` declarations at the top level of a removed test region,
@@ -1205,6 +1277,14 @@ fn string_value(node: Node, text: &str) -> Option<String> {
 /// Whether a path as written is absolute.
 fn is_absolute(path: &str) -> bool {
     path.starts_with('/') || path.starts_with('\\') || Path::new(path).is_absolute()
+}
+
+/// Whether the workspace-relative `file` lies below the directory `dir`.
+fn below(file: &str, dir: &str) -> bool {
+    dir.is_empty()
+        || file
+            .strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// The directory of a workspace-relative path; `""` for the root.
