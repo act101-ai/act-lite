@@ -41,24 +41,33 @@ impl Detector for AstroDetector {
     fn regions(&self, tree: &tree_sitter::Tree, source: &str) -> Vec<Region> {
         let mut regions = Vec::new();
         let mut cursor = tree.walk();
+        // Whether each ancestor of the current node is an ERROR node, from
+        // the root down, and how many are.
+        let mut ancestors: Vec<bool> = Vec::new();
+        let mut errors = 0usize;
         loop {
             let node = cursor.node();
+            let under_error = errors > 0;
+            let parent_is_error = ancestors.last().copied().unwrap_or(false);
             let region = match node.kind() {
-                "frontmatter" => Some(frontmatter(node)),
-                "script_element" => script(node, source),
-                "style_element" => Some(style(node, source)),
-                "start_tag" | "self_closing_tag" if node.parent().is_some_and(|p| p.is_error()) => {
-                    unclosed(node, source)
-                }
+                "frontmatter" => Some(frontmatter(node, under_error)),
+                "script_element" => script(node, source, under_error),
+                "style_element" => Some(style(node, source, under_error)),
+                "start_tag" | "self_closing_tag" if parent_is_error => unclosed(node, source),
                 _ => None,
             };
             regions.extend(region);
             if cursor.goto_first_child() {
+                ancestors.push(node.is_error());
+                errors += usize::from(node.is_error());
                 continue;
             }
             while !cursor.goto_next_sibling() {
                 if !cursor.goto_parent() {
                     return regions;
+                }
+                if ancestors.pop() == Some(true) {
+                    errors -= 1;
                 }
             }
         }
@@ -80,15 +89,11 @@ fn child<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
     node.children(&mut cursor).find(|c| c.kind() == kind)
 }
 
-fn under_error(node: Node) -> bool {
-    std::iter::successors(node.parent(), Node::parent).any(|n| n.is_error())
-}
-
 /// Malformed when an ERROR lies above the element or an ERROR or MISSING
 /// node in it; else empty when it has no content, or zero-width content;
 /// else well-formed.
-fn state(element: Node, content: Option<Node>) -> RegionState {
-    if element.has_error() || under_error(element) {
+fn state(element: Node, content: Option<Node>, under_error: bool) -> RegionState {
+    if element.has_error() || under_error {
         RegionState::Malformed
     } else if content.is_none_or(|c| c.start_byte() == c.end_byte()) {
         RegionState::Empty
@@ -103,8 +108,9 @@ fn region(
     element: Node,
     start_tag: Node,
     content: Option<Node>,
+    under_error: bool,
 ) -> Region {
-    let state = state(element, content);
+    let state = state(element, content, under_error);
     Region {
         kind,
         language,
@@ -118,7 +124,7 @@ fn region(
 }
 
 /// The frontmatter, from its opening `---` to its closing one.
-fn frontmatter(node: Node) -> Region {
+fn frontmatter(node: Node, under_error: bool) -> Region {
     let opening = node.child(0).unwrap_or(node);
     region(
         RegionKind::Frontmatter,
@@ -126,6 +132,7 @@ fn frontmatter(node: Node) -> Region {
         node,
         opening,
         child(node, "frontmatter_js_block"),
+        under_error,
     )
 }
 
@@ -213,7 +220,7 @@ fn start_tag(element: Node) -> Option<Node> {
     child(element, "start_tag").or_else(|| child(element, "self_closing_tag"))
 }
 
-fn script(node: Node, source: &str) -> Option<Region> {
+fn script(node: Node, source: &str, under_error: bool) -> Option<Region> {
     let tag = start_tag(node)?;
     let language = script_language(&attributes(tag, source))?;
     Some(region(
@@ -222,10 +229,11 @@ fn script(node: Node, source: &str) -> Option<Region> {
         node,
         tag,
         child(node, "raw_text"),
+        under_error,
     ))
 }
 
-fn style(node: Node, source: &str) -> Region {
+fn style(node: Node, source: &str, under_error: bool) -> Region {
     let tag = start_tag(node).unwrap_or(node);
     region(
         RegionKind::Style,
@@ -233,6 +241,7 @@ fn style(node: Node, source: &str) -> Region {
         node,
         tag,
         child(node, "raw_text"),
+        under_error,
     )
 }
 

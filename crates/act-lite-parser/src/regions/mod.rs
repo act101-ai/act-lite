@@ -197,15 +197,18 @@ impl PositionIndex {
         let mut marks: Vec<(usize, usize, Position)> = Vec::new();
         let mut cursor = file.tree().root_node().walk();
         let mut labels = vec![Position::Outer];
+        // The kind of each ancestor of the current node, from the root down.
+        let mut kinds: Vec<&'static str> = Vec::new();
         loop {
             let node = cursor.node();
             let inherited = *labels.last().unwrap_or(&Position::Outer);
-            let label = node_position(grammar, node).unwrap_or(inherited);
+            let label = node_position(grammar, node, kinds.last().copied()).unwrap_or(inherited);
             if label != inherited {
                 marks.push((node.start_byte(), node.end_byte(), label));
             }
             if cursor.goto_first_child() {
                 labels.push(label);
+                kinds.push(node.kind());
                 continue;
             }
             loop {
@@ -221,6 +224,7 @@ impl PositionIndex {
                     };
                 }
                 labels.pop();
+                kinds.pop();
             }
         }
     }
@@ -246,15 +250,17 @@ impl PositionIndex {
 
 /// The position a node gives the bytes it holds, or `None` when it keeps
 /// its parent's (the rule [`position_at`] applies walking up).
-fn node_position(grammar: Grammar, node: tree_sitter::Node) -> Option<Position> {
+fn node_position(
+    grammar: Grammar,
+    node: tree_sitter::Node,
+    parent_kind: Option<&str>,
+) -> Option<Position> {
     let kind = node.kind();
     let unparsed_content = matches!(kind, "raw_text" | "frontmatter_js_block")
-        && node.parent().is_some_and(|parent| {
-            matches!(
-                parent.kind(),
-                "script_element" | "style_element" | "frontmatter"
-            )
-        });
+        && matches!(
+            parent_kind,
+            Some("script_element" | "style_element" | "frontmatter")
+        );
     if unparsed_content || expression_kinds(grammar).contains(&kind) {
         Some(Position::TemplateExpression)
     } else if matches!(kind, "element" | "template_element") {

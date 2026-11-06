@@ -294,3 +294,23 @@ fn deeply_nested_markup_is_filtered_in_one_walk() {
         assert!(elapsed.as_secs_f64() < 3.0, "{name}: {elapsed:?}");
     }
 }
+
+#[test]
+fn nested_astro_scripts_load_in_one_walk() {
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: set ACT_LITE_CHECK_PERF=1 to time 1,000 nested scripts");
+        return;
+    }
+    let text = format!(
+        "{}{}\n",
+        "<div><script>let a = 1;</script>".repeat(1_000),
+        "</div>".repeat(1_000)
+    );
+    let started = std::time::Instant::now();
+    let source = load("Nested.astro", &text, Grammar::Astro);
+    let rows = skeleton(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(source.region_trees().len(), 1_000);
+    assert!(rows.len() >= 3_000, "{}", rows.len());
+    assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
+}
