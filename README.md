@@ -993,10 +993,13 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `build.rs`), a path dependency or a workspace crate that the crate depends
   on; it follows module segments, and its first remaining segment must be an
   item that the reached module's file declares (or the file has a glob `use`).
-  A file in several crate trees resolves each relationship in every tree that
-  reaches it, in root order: it is `resolved` when any tree resolves it, with
-  one edge to each distinct target of those trees, and `unresolved` only when
-  no tree resolves it, with the reason of the first tree.
+  A file is in a crate tree when that tree's modules reach it, through any
+  `#[path]`, not by its directory: an example, bench or test root that loads
+  `src/shared.rs` has it in its tree. A file in several crate trees, or loaded
+  as several modules of one tree, resolves each relationship in every tree
+  and every module that loads it, in root order: it is `resolved` when any of
+  them resolves it, with one edge to each distinct target, and `unresolved`
+  only when none resolves it, with the reason of the first tree.
   `include!` paths are relative to the declaring file. A `Cargo.toml` that
   cannot be read makes every relationship of its package `unresolved`.
 
@@ -1023,8 +1026,9 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   or crate, so a test fixture that copies a real package does not create a
   duplicate.
 - *Support reads*: source files that are not analyzed but that resolution
-  needs: the Rust files on the module path from a crate root to an analyzed
-  file, and a module file whose names a `from X import n` or a `use` checks,
+  needs: the Rust module files of every crate tree of an analyzed file's
+  package (each tree is read once, to find every module that loads the file)
+  and those on a `use` path into another crate, and a module file whose names a `from X import n` or a `use` checks,
   when that file is outside `paths` or excluded by discovery. Each is read and
   parsed only for that purpose, under the 8 MiB, regular-file and UTF-8 bounds,
   inside the workspace and outside pruned directories. It counts nowhere in

@@ -664,7 +664,7 @@ impl Resolver for Watching {
 }
 
 #[test]
-fn only_the_module_files_on_the_path_are_read() {
+fn only_the_module_files_of_the_package_trees_are_read() {
     let ws = tempfile::tempdir().unwrap();
     let root = ws.path();
     package(root, ".", "app", "");
@@ -678,13 +678,23 @@ fn only_the_module_files_on_the_path_are_read() {
     write(root, "src/b.rs", marker);
     write(root, "tests/t.rs", &format!("mod helper;\n{marker}"));
     write(root, "tests/helper.rs", marker);
+    write(root, "src/c.rs", marker);
     let watching = Watching {
-        watched: vec!["src/a.rs", "src/b.rs", "tests/t.rs", "tests/helper.rs"],
+        watched: vec![
+            "src/a.rs",
+            "src/b.rs",
+            "src/c.rs",
+            "tests/t.rs",
+            "tests/helper.rs",
+        ],
         read: Mutex::new(BTreeSet::new()),
     };
     build_with(root, Includes::default(), &watching);
     let read: Vec<String> = watching.read.into_inner().unwrap().into_iter().collect();
-    assert_eq!(read, ["src/a.rs"]);
+    assert_eq!(
+        read,
+        ["src/a.rs", "src/b.rs", "tests/helper.rs", "tests/t.rs"]
+    );
 }
 
 #[test]
@@ -856,4 +866,93 @@ fn a_use_in_several_trees_resolves_in_every_tree() {
         outcome(&g, "shared.rs", "crate::imp::Thing"),
         resolved(&["src/imp_bin.rs", "src/imp_lib.rs"])
     );
+}
+
+/// A lib, an example and a test root that each load `src/shared.rs` through
+/// `#[path]` and name their own `imp` module.
+fn shared_in_scoped_roots(root: &Path) {
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "#[path = \"imp_lib.rs\"]\nmod imp;\nmod shared;\n",
+    );
+    for (root_file, imp) in [
+        ("examples/demo.rs", "imp_ex.rs"),
+        ("tests/it.rs", "imp_t.rs"),
+    ] {
+        write(
+            root,
+            root_file,
+            &format!(
+                "#[path = \"../src/shared.rs\"]\nmod shared;\n#[path = \"../src/{imp}\"]\nmod imp;\n"
+            ),
+        );
+        write(root, &format!("src/{imp}"), "pub struct Thing;\n");
+    }
+    write(root, "src/imp_lib.rs", "pub struct Thing;\n");
+    write(root, "src/shared.rs", "use crate::imp::Thing;\n");
+}
+
+#[test]
+fn a_root_outside_the_file_directory_resolves_the_file_in_its_tree() {
+    let ws = tempfile::tempdir().unwrap();
+    shared_in_scoped_roots(ws.path());
+    // A test root is a crate root whether or not test files are analyzed.
+    for includes in [Includes::default(), with_tests()] {
+        assert_eq!(
+            outcome(
+                &build(ws.path(), includes),
+                "src/shared.rs",
+                "crate::imp::Thing"
+            ),
+            resolved(&["src/imp_ex.rs", "src/imp_lib.rs", "src/imp_t.rs"]),
+            "{includes:?}"
+        );
+    }
+}
+
+#[test]
+fn a_file_loaded_as_two_modules_of_one_tree_resolves_in_each() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(root, "src/lib.rs", "mod a;\nmod b;\n");
+    for m in ["a", "b"] {
+        write(
+            root,
+            &format!("src/{m}.rs"),
+            &format!("#[path = \"shared.rs\"]\nmod shared;\n#[path = \"imp_{m}.rs\"]\nmod imp;\n"),
+        );
+        write(root, &format!("src/imp_{m}.rs"), "pub struct Thing;\n");
+    }
+    write(root, "src/shared.rs", "use super::imp::Thing;\n");
+    assert_eq!(
+        outcome(&graph(root), "src/shared.rs", "super::imp::Thing"),
+        resolved(&["src/imp_a.rs", "src/imp_b.rs"])
+    );
+}
+
+#[test]
+fn a_file_that_loads_itself_through_path_attributes_terminates() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(root, "src/lib.rs", "mod a;\nuse crate::a::b::again::X;\n");
+    write(
+        root,
+        "src/a.rs",
+        "#[path = \"b.rs\"]\nmod b;\npub struct X;\n",
+    );
+    write(
+        root,
+        "src/b.rs",
+        "#[path = \"a.rs\"]\nmod again;\npub struct Y;\n",
+    );
+    let g = graph(root);
+    assert_eq!(
+        outcome(&g, "src/lib.rs", "crate::a::b::again::X"),
+        resolved(&["src/a.rs"])
+    );
+    assert_eq!(outcome(&g, "src/b.rs", "again"), resolved(&["src/a.rs"]));
 }
