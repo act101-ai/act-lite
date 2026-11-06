@@ -1,7 +1,7 @@
 //! Source file with parsed syntax tree.
 
 use crate::{Grammar, Parser, ParserError, SyntaxTree, error::Result};
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
@@ -25,14 +25,14 @@ impl SourceFile {
     }
 
     /// Loads and parses a source file as [`SourceFile::load`] does, and
-    /// refuses it unless the opened file is the file at the canonical form of
-    /// `path` and that form lies inside the canonical `root`. The check is on
-    /// the opened file, so a path that changes after a caller's own check
+    /// refuses it unless the operating system's path of the opened file lies
+    /// inside the canonical `root`. The check is on the opened file, so a
+    /// path that changes after a caller's own check, or after this open,
     /// cannot make this read a file outside `root`.
     pub fn load_within(path: impl AsRef<Path>, root: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let file = open_regular(path).map_err(ParserError::Io)?;
-        if !opened_inside(path, &file, root.as_ref()) {
+        if !opened_inside(&file, root.as_ref()) {
             return Err(ParserError::Io(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "path must be inside the workspace root",
@@ -162,28 +162,72 @@ fn open_regular(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Whether `file`, opened from `path`, is the file at the canonical form of
-/// `path`, and that form lies inside the canonical `root`.
-fn opened_inside(path: &Path, file: &File, root: &Path) -> bool {
-    let (Ok(canonical), Ok(root)) = (path.canonicalize(), root.canonicalize()) else {
-        return false;
-    };
-    let (Ok(opened), Ok(found)) = (file.metadata(), std::fs::metadata(&canonical)) else {
-        return false;
-    };
-    canonical.starts_with(root) && same_file(&opened, &found)
+/// Whether `file` lies inside the canonical `root`, judged by the path the
+/// operating system holds for the opened file, not by a new look-up of a
+/// path that can have changed since the open.
+fn opened_inside(file: &File, root: &Path) -> bool {
+    match (opened_path(file), root.canonicalize()) {
+        (Ok(opened), Ok(root)) => opened.starts_with(root),
+        _ => false,
+    }
 }
 
-#[cfg(unix)]
-fn same_file(a: &Metadata, b: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+#[cfg(target_os = "macos")]
+fn opened_path(file: &File) -> io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes into `buf`.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])))
 }
 
-/// Without a stable file identity, the canonical path check stands alone.
-#[cfg(not(unix))]
-fn same_file(_: &Metadata, _: &Metadata) -> bool {
-    true
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn opened_path(file: &File) -> io::Result<PathBuf> {
+    use std::os::unix::io::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+#[cfg(windows)]
+fn opened_path(file: &File) -> io::Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+    let mut buf = vec![0u16; 1024];
+    loop {
+        // SAFETY: the call writes at most `buf.len()` UTF-16 units into `buf`.
+        let len = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        if len == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len < buf.len() {
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buf[..len])));
+        }
+        buf.resize(len, 0);
+    }
+}
+
+/// No way to get the path of an opened file: every file is refused.
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
+fn opened_path(_: &File) -> io::Result<PathBuf> {
+    Err(io::Error::from(io::ErrorKind::Unsupported))
 }
 
 #[cfg(test)]
@@ -373,6 +417,21 @@ mod tests {
         assert!(SourceFile::load_within(dir.path().join("out.rs"), &root).is_err());
         assert!(SourceFile::load_within(root.join("in.rs"), &root).is_ok());
         assert!(SourceFile::load_within(root.join("alias.rs"), &root).is_ok());
+    }
+
+    #[test]
+    fn the_root_check_is_on_the_opened_file_not_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(dir.path().join("out.rs"), "fn outside() {}\n").unwrap();
+        std::fs::write(root.join("a.rs"), "fn inside() {}\n").unwrap();
+        // A handle opened outside the root stays outside, whatever the path
+        // text names at the time of the check.
+        let outside = File::open(dir.path().join("out.rs")).unwrap();
+        assert!(!opened_inside(&outside, &root));
+        let inside = File::open(root.join("a.rs")).unwrap();
+        assert!(opened_inside(&inside, &root));
     }
 
     #[test]

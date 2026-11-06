@@ -179,7 +179,7 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callers").await?;
-            let position = find_symbol_position(file, name)?;
+            let position = find_symbol_position(file, name, workspace)?;
             let result = act_lite_lsp::query_callers(client.as_ref(), file, &position)
                 .await
                 .with_context(|| format!("failed to query callers of '{}'", name))?;
@@ -194,7 +194,7 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callees").await?;
-            let position = find_symbol_position(file, name)?;
+            let position = find_symbol_position(file, name, workspace)?;
             let result = act_lite_lsp::query_callees(client.as_ref(), file, &position)
                 .await
                 .with_context(|| format!("failed to query callees of '{}'", name))?;
@@ -209,7 +209,7 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "implementations").await?;
-            let position = find_symbol_position(file, name)?;
+            let position = find_symbol_position(file, name, workspace)?;
             let result = act_lite_lsp::query_implementations(client.as_ref(), file, &position)
                 .await
                 .with_context(|| format!("failed to query implementations of '{}'", name))?;
@@ -447,9 +447,8 @@ pub(crate) fn lsp_install_hint_once(grammar: Grammar, pool: &LspPool) -> Option<
 }
 
 /// Find a symbol's position in a file by name using tree-sitter.
-fn find_symbol_position(file: &Path, name: &str) -> Result<Location> {
-    let source = act_lite_parser::SourceFile::load(file)
-        .with_context(|| format!("failed to parse {}", file.display()))?;
+fn find_symbol_position(file: &Path, name: &str, workspace: Option<&Path>) -> Result<Location> {
+    let source = load_source(file, workspace)?;
     let result = act_lite_parser::execute_symbol(&source, name)?;
     match result {
         QueryResult::Symbol(sym) => Ok(sym.symbol.range().start().clone()),
@@ -1269,7 +1268,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function myFunc() { return 1; }").unwrap();
-        let result = find_symbol_position(&file_path, "myFunc");
+        let result = find_symbol_position(&file_path, "myFunc", None);
         assert!(
             result.is_ok(),
             "find_symbol_position should succeed: {:?}",
@@ -1282,13 +1281,13 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function foo() {}").unwrap();
-        let result = find_symbol_position(&file_path, "nonexistent");
+        let result = find_symbol_position(&file_path, "nonexistent", None);
         assert!(result.is_err(), "a missing symbol has no position");
     }
 
     #[test]
     fn test_find_symbol_position_file_not_found() {
-        let result = find_symbol_position(Path::new("/nonexistent/file.ts"), "foo");
+        let result = find_symbol_position(Path::new("/nonexistent/file.ts"), "foo", None);
         assert!(result.is_err());
     }
 

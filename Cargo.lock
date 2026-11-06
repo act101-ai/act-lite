@@ -118,6 +118,7 @@ dependencies = [
  "tree-sitter-yaml",
  "tree-sitter-zig",
  "walkdir",
+ "windows-sys",
 ]
 
 [[package]]
