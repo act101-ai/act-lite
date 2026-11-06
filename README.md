@@ -220,6 +220,223 @@ The kind comes from the syntax of the bound expression.
 Every `references` answer for the ten added languages is a name match, as the
 next section says; none of them has a language server.
 
+### Vue, Svelte and Astro components
+
+A component file holds code in regions: script, frontmatter and style
+elements inside a template. act-lite parses the file with the framework's
+grammar, finds the regions in that tree, and parses each region with the
+grammar of its language. Every location in a result (a range, a byte offset,
+a reference position, an analyzer range, a parse failure) is a position in
+the component file, so it points at the code as written there.
+
+| | Vue | Svelte | Astro |
+|---|---|---|---|
+| Files | `.vue` | `.svelte` | `.astro` |
+| Framework grammar | `tree-sitter-vue-next` 0.1.0 | `tree-sitter-svelte-ng` 1.0.2 | `tree-sitter-astro-next` 0.1.1 |
+| Structure | top-level blocks; `<template>` elements, `id` and `class` values | top-level script and style blocks; markup elements, `id` and `class` values; `{#snippet}` | frontmatter block; script and style blocks; template elements, `id` and `class` values |
+| Script regions | each top-level `<script>` and `<script setup>`: JavaScript, JSX, TypeScript or TSX by `lang` | each top-level `<script>` (the instance script and the module script): JavaScript or TypeScript by `lang` | the frontmatter (TypeScript); each `<script>` at any depth: TypeScript when Astro processes it, JavaScript when inline; data blocks are not regions |
+| Style regions | each top-level `<style>`: CSS or SCSS | each top-level `<style>`: CSS or SCSS | each `<style>` at any depth: CSS or SCSS |
+| Declarations | the JavaScript, TypeScript, CSS and SCSS rules, in each region | the same | the same |
+| `references`, `definition` | name-level | name-level | name-level |
+| Code-health analyzers | yes (script regions) | yes (script regions) | yes (frontmatter and script regions) |
+| Not read as code | template expressions; `<template lang="pug">` and other template languages; custom blocks; an unsupported `lang`; `<script>` below the top level | template expressions and block tags; an unsupported `lang`; `<script>` inside markup | template expressions and attribute expressions; an unsupported `lang` |
+| Dependency analyzers | not supported (`supported: false`) | not supported (`supported: false`) | not supported (`supported: false`) |
+| Level | `script analysis` | `script analysis` | `script analysis` |
+
+The level `script analysis` means: the structure, the declarations of the
+script and style regions, name-level `references` and `definition`, and the
+three code-health analyzers on the script regions. A framework at
+`structural only` would give the structure without region declarations or
+analyzer support; none of the three is at that level.
+
+**Regions.** A Vue `<script>` or `<style>` below the top level is not a
+region (Vue does not process it), and neither is a custom block (`<i18n>`,
+`<docs>`, or any other top-level element that is not `<template>`, `<script>`
+or `<style>`). A Svelte `<script>` or `<style>` inside markup, for example in
+`<svelte:head>`, is not a region: Svelte passes it to the page. An Astro
+frontmatter runs from the opening `---` to the next `---` line. Each region
+is a separate unit, with its own parse and its own scope: two script regions
+of one file are never parsed together. act-lite does not check the
+frameworks' block rules (at most one `<script setup>`, one instance script):
+a file that breaks them is analyzed region by region, without an error.
+
+**Language selection.**
+
+| Region | Attribute | Language |
+|---|---|---|
+| Vue `<script>` | no `lang`, or `lang="js"` / `"jsx"` / `"ts"` / `"tsx"` | JavaScript / JSX / TypeScript / TSX |
+| Svelte `<script>` | no `lang`, or `lang="js"` / `"ts"` | JavaScript / TypeScript |
+| Astro frontmatter | none | TypeScript |
+| Astro `<script>` | no attribute, or only `src` (Astro processes the script) | TypeScript |
+| Astro `<script>` | any other attribute, such as `is:inline`, `type="module"` or `define:vars` (Astro sends the script unchanged) | JavaScript |
+| Astro `<script>` | a `type` that is not empty, not `module` and not a JavaScript MIME type, such as `application/ld+json` | a data block: reported as a block, not code |
+| `<style>` | no `lang`, or `lang="css"` / `"scss"` | CSS / SCSS |
+| Vue `<template>` | no `lang`, or `lang="html"` | its elements are structure |
+
+Any other `lang` value (`coffee`, `less`, `sass`, `stylus`, `pug`, …) is a
+language act-lite does not read: the element is reported as a block and its
+content is not parsed. Attribute values are compared byte for byte and
+case-sensitively, except Astro's `type`, which follows HTML: surrounding
+whitespace is removed and the comparison ignores ASCII case. When an element
+has the attribute twice, the first one counts.
+
+**Empty and malformed regions.** An element with no content
+(`<style></style>`, `<script src="x.js"></script>`, Astro's
+`<script src="x.js"/>`, an empty frontmatter) is reported as a block and is
+not parsed. A region is malformed when its start tag, its content or its end
+tag is missing (an unclosed `<script>`, a frontmatter without its closing
+`---`), or when it lies inside a syntax error of the framework grammar's
+tree. A malformed region is not parsed, because its content can run to the
+end of the file and hold the template. Navigation reports nothing for it and
+nothing inside that syntax error, the file carries `parse_error: true` and a
+parse failure, and the analyzers list the region in
+`details.regions_not_analyzed`. A region whose parse exceeds the parse time
+limit is not analyzed either: the analyzers list it with `parse timeout`, and
+navigation reports its block with no declarations and `parse_error: true`.
+
+**Structure.** `skeleton`, `symbols`, `symbols-batch` and `repo-outline`
+report, in source order (an enclosing block before its content):
+
+- Blocks. Each region element, each Vue top-level `<template>` and custom
+  block, and each Astro data block is a `module`, named by its start tag as
+  written, cut to its first line (`<script setup lang="ts">`; a frontmatter
+  is `---`). In `skeleton` its range is the element; in `symbols` it is the
+  start tag.
+- Template structure. Each element of a Vue `<template>`, of Svelte markup
+  and of an Astro template is an `element`, named by its tag as written
+  (`div`, `Layout`, `svelte:head`), and each literal `id` value and each
+  token of a literal `class` value is a `field`. In `symbols`, an element is
+  a `class`, as in HTML. A dynamic attribute (`:class`, `v-bind:id`,
+  `class={x}`, `class:list={…}`) is not reported, nor is any token of a value
+  that holds an expression (`class="a {x}"`).
+- Svelte snippets. Each `{#snippet name(…)}` is a `function`. Other
+  template blocks (`{#if}`, `{#each}`, `{#await}`, `{#key}`, `v-if`, `v-for`,
+  slots) are not declarations.
+- Region declarations. Each well-formed script and style region of a
+  supported language gives the declarations and symbols that a `.js`, `.jsx`,
+  `.ts`, `.tsx`, `.css` or `.scss` file with the same code gives, at their
+  places in the component file.
+
+`parse_error: true` is set when the framework grammar's tree or any region's
+tree holds a syntax error. `repo-outline` lists the file under `Vue`,
+`Svelte` or `Astro`. `query symbol` reads `source`, `context_before` and
+`context_after` from the component file. `callers`, `callees` and
+`implementations` fail with `query type '<q>' needs a language server, and
+act-lite has none configured for Vue files` (or Svelte, or Astro files).
+
+**References and definition.** Every answer is a name match
+(`"source": "tree-sitter"`). The rule depends on where the position is:
+
+| Position | `references` | `definition` |
+|---|---|---|
+| In a script or style region of language L | The name matches of L in every region of L in the files of the same framework, and in every plain file of L in the workspace (`.ts` files for a TypeScript region). | The nearest declaration in the same files, by the rules for L. |
+| In the template, outside an expression | HTML's rules (`id`, `class`, `href` and `data-*` values, end-tag names) in the files of the same framework. Script regions are not searched. | An `id` value is its own definition; any other position gives `No symbol found at <file>:<line>:<column>`. |
+| In a template expression, or in a `<script>` or `<style>` that is not parsed | `symbol not found: <name> in <file>`, also when the text equals the name. | `No symbol found at <file>:<line>:<column>`. |
+
+From a plain file (`.ts`, `.js`), `references` and `definition` do not read
+component files, so the uses of a TypeScript export inside components are
+found only from a component file. MCP `references` takes `symbol` and `file`:
+in a component file it uses the first region symbol with that name, then the
+first template symbol, else the first whole-word match outside template
+expressions.
+
+**Code-health analyzers.** `analyze_patterns`, `analyze_hotspots` and
+`analyze_clones` analyze the well-formed script and frontmatter regions in
+JavaScript, JSX, TypeScript or TSX. They never analyze style regions or the
+template. A component file counts once in `coverage.languages`, under `Vue`,
+`Svelte` or `Astro`. Functions and metrics are those of the region's
+language; the top-level code of a region (the body of `<script setup>`, of a
+Svelte instance script or of an Astro frontmatter) is not a function, and
+only the functions written in it are measured. A hotspot item covers all the
+analyzed regions of its file. A clone candidate has its region's language:
+a TypeScript function duplicated between a `.ts` file and a TypeScript region
+of a component file is one class with `language` `TypeScript`, and a
+JavaScript region never matches a TypeScript one. A component file with no
+script region is analyzed with zero functions.
+
+The `details` of the three analyzers always hold `regions_not_analyzed`,
+`regions_not_analyzed_total` and `files_without_analyzed_code`:
+
+```json
+"regions_not_analyzed":[{"file":"Legacy.vue","range":"1:1-1:23","reason":"unsupported script language: coffee"},
+                        {"file":"Unclosed.vue","range":"1:1-1:19","reason":"malformed region"}],
+"regions_not_analyzed_total":2,
+"files_without_analyzed_code":1
+```
+
+`regions_not_analyzed` has one entry per script or frontmatter region of an
+in-scope component file that was not analyzed: `range` is the region's start
+tag, and `reason` is `unsupported script language: <value as written>`,
+`malformed region` or `parse timeout`. It holds at most 30 entries in
+location order; `regions_not_analyzed_total` gives the full count. Style
+regions and Astro data blocks are never listed. A malformed region also gives
+the file a parse failure, so the result is incomplete. A region in an
+unsupported language does not make the result incomplete, as a file in an
+unsupported language does not. A component file whose script regions are all
+in unsupported languages holds no code the analyzers read: it is not counted
+in `coverage.analyzed_files`, it is counted in `files_without_analyzed_code`,
+and for the status rules it is a file in an unsupported language, so a scope
+of only such files is `unsupported`.
+
+**Limits.**
+
+- Template expressions. Code in templates is not parsed as JavaScript or
+  TypeScript: Vue `{{ … }}` and directive values (`v-if`, `v-for`, `:prop`,
+  `@event`), Svelte `{…}`, block tags and event handlers (`on:click={…}`,
+  `onclick={…}`), and Astro `{…}` in the template and in attributes. It is
+  not in `skeleton` or `symbols`, it is not measured by `patterns` or
+  `hotspots` (an arrow function in `on:click={() => …}` is not a function),
+  and it is not a clone candidate. `references` and `definition` at a
+  position in it fail, as the table above says.
+- Template-to-script references. A name used in a template is not linked to
+  its declaration in a script region: `references` from a script region does
+  not list template uses, and a template position never resolves into a
+  script region. A component tag (`<Layout>`, `<Comp>`) is an element named
+  by its tag, not resolved to the imported component.
+- Generated bindings. act-lite reports the code as written, not what a
+  framework compiler generates:
+
+  | Framework | Construct | What act-lite reports |
+  |---|---|---|
+  | Vue | `defineProps`, `defineEmits`, `defineModel`, `defineExpose`, `withDefaults` | ordinary calls; `const props = defineProps<…>()` is a `variable` `props`, and the props are not declarations |
+  | Vue | top-level bindings of `<script setup>` exposed to the template; the shared scope of `<script>` and `<script setup>` | each region is its own scope; nothing is reported as exposed |
+  | Vue | Options API members (`data`, `methods`, `computed`) | an object literal, as in a `.js` or `.ts` file |
+  | Svelte | `$:` reactive statements that assign an undeclared name | a labeled statement; the assigned name is not a declaration |
+  | Svelte | `export let` props; the runes `$state`, `$derived`, `$props`, `$effect` | ordinary declarations and calls |
+  | Svelte | `$store` auto-subscriptions | an identifier `$store`, not linked to `store` |
+  | Astro | `Astro.props`, `Astro.request` and the other `Astro` globals; `interface Props` | ordinary member expressions and declarations |
+  | all | the function that a framework compiles a `<script setup>` body, a Svelte instance script or an Astro frontmatter into | not a function |
+  | Astro | a frontmatter that the Astro grammar ends early (for example at a regular expression that holds `"`) | a malformed region when the grammar's tree then holds an error; otherwise the region holds template text, and its parse errors show it |
+  | Svelte | text with `&` that the Svelte grammar rejects | a parse failure; the regions outside the error are still analyzed |
+
+- Cross-component dependencies. `graph`, `analyze_cycles`,
+  `analyze_coupling` and `analyze_impact` do not support Vue, Svelte or
+  Astro: they list the component files in `coverage.languages` with
+  `supported: false`. Imports inside component scripts are not
+  relationships, so a file that only components import has no dependent in
+  `analyze_impact`. An import of a component file from a JavaScript or
+  TypeScript file with its extension (`import Card from './Card.vue'`) is an
+  edge with `to_analyzed: false`; without the extension (`'./Card'`) it is
+  unresolved (`no file matches ./Card`). A region searches only the files of
+  its own framework and the plain files of its language, so a TypeScript
+  region of a `.vue` file does not find uses in `.svelte` or `.astro` files.
+
+**Partial support.** These parts of a component file are not read as code:
+template expressions; Vue templates with a `lang` other than `html`, and
+custom blocks; script regions in an unsupported language; style regions in
+an unsupported language; and `<script>` elements that are not regions (Vue
+below the top level, Svelte inside markup such as `<svelte:head>`), whose
+code passes to the page unread. Those `<script>` elements are not listed in
+`regions_not_analyzed`, which covers component scripts only.
+
+Examples, on the `Counter.vue` of the act-lite tests:
+
+```bash
+act-lite query skeleton Counter.vue      # blocks, template elements, region declarations
+act-lite query references count --file Counter.vue --line 9 --column 7    # script uses only: 9:7, 11:19, 12:5
+act-lite query references count --file Counter.vue --line 20 --column 31  # in {{ count }}: symbol not found
+```
+
 ## Install
 
 Install the latest release with one command:
