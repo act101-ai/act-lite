@@ -1413,7 +1413,7 @@ fn summarize(cx: &mut ResolveCx<'_>, mut files: Vec<String>) {
     if files.is_empty() {
         return;
     }
-    let read = cx.read_each(&files, module_file);
+    let read = cx.read_each(&files, Grammar::Rust, module_file);
     let state = cx.cache::<RustState>();
     for (file, result) in files.into_iter().zip(read) {
         state.summaries.insert(file, Arc::new(result));

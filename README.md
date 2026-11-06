@@ -1156,11 +1156,15 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   package (each tree is read once, to find every module that loads the file)
   and those on a `use` path into another crate, and a module file whose names a `from X import n` or a `use` checks,
   when that file is outside `paths` or excluded by discovery. Each is read and
-  parsed only for that purpose, under the 8 MiB, regular-file and UTF-8 bounds,
-  inside the workspace and outside pruned directories. It counts nowhere in
-  `coverage`, and its own relationships are not edges. When it cannot be read,
-  the relationship that needed it is `unresolved`, reason `<file> could not be
-  read`.
+  parsed only for that purpose, with the grammar of the family that needs it
+  whatever the file's extension (a Python module file as Python, a Rust module
+  file as Rust, so a `#[path]` module without `.rs` and an `__init__.py` that
+  links to `init.js` are read), and an analyzed file read this way keeps its
+  own language in its analysis. The reads are under the 8 MiB, regular-file
+  and UTF-8 bounds, inside the workspace and outside pruned directories. Such
+  a file counts nowhere in `coverage`, and its own relationships are not
+  edges. When it cannot be read, the relationship that needed it is
+  `unresolved`, reason `<file> could not be read`.
 - *Probe listings*: the directory listings of the probes, including the
   existence check of `node_modules/<package>/` in directories that discovery
   prunes (metadata only; nothing in them is read).

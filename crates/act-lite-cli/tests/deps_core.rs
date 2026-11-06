@@ -39,6 +39,11 @@ fn write(root: &Path, rel: &str, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+/// The grammar of the support read of `path`: the one its extension names.
+fn grammar_of(path: &str) -> Grammar {
+    Grammar::from_path(Path::new(path)).unwrap()
+}
+
 struct TestResolver {
     calls: AtomicUsize,
     cancel_on_first: Option<CancellationToken>,
@@ -106,19 +111,22 @@ impl Resolver for TestResolver {
         }
         if let Some(path) = spec.strip_prefix("src:") {
             let first = cx
-                .source(path)
+                .source(path, grammar_of(path))
                 .map(|p| p.source.content().lines().next().unwrap().to_string());
             fs::write(self.root.join(path), "// v2\nexport const s = 2;\n").unwrap();
             return Outcome::Unresolved(first.unwrap_or_else(|err| err));
         }
         if let Some(path) = spec.strip_prefix("read:") {
-            return match cx.source(path) {
+            return match cx.source(path, grammar_of(path)) {
                 Ok(_) => Outcome::Resolved(Vec::new()),
                 Err(err) => Outcome::Unresolved(err),
             };
         }
         if let Some(path) = spec.strip_prefix("rm:") {
-            return Outcome::Unresolved(format!("removed {}", cx.removed(path).len()));
+            return Outcome::Unresolved(format!(
+                "removed {}",
+                cx.removed(path, grammar_of(path)).len()
+            ));
         }
         if let Some(path) = spec.strip_prefix("ws:") {
             let listed = cx.workspace_files().iter().any(|f| f == path);

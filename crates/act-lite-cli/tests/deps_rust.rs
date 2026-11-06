@@ -6,6 +6,7 @@ use act_lite_cli::analyze::deps::{DepGraph, Family, Outcome, ResolveCx, Resolver
 use act_lite_cli::analyze::discovery::{Includes, discover};
 use act_lite_cli::analyze::read::{Reader, SupportReader};
 use act_lite_cli::analyze::run::{Request, RunContext};
+use act_lite_parser::Grammar;
 use act_lite_parser::deps::Relationship;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -784,7 +785,7 @@ impl Resolver for Watching {
         let outcome = RustResolver.resolve(file, rel, cx);
         if file == "src/lib.rs" {
             for watched in &self.watched {
-                if !cx.removed(watched).is_empty() {
+                if !cx.removed(watched, Grammar::Rust).is_empty() {
                     self.read.lock().unwrap().insert(watched.to_string());
                 }
             }
@@ -2355,5 +2356,34 @@ fn a_symlinked_cargo_toml_is_a_crate_at_the_link_directory() {
             .iter()
             .any(|i| i["file"] == "meta/shared.toml"),
         "{listed}"
+    );
+}
+
+#[test]
+fn a_path_module_in_a_file_without_an_extension_is_read_as_rust() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "#[path = \"gen/m\"]\nmod m;\nmod k;\npub struct X;\n",
+    );
+    write(root, "src/gen/m", "use crate::X;\n");
+    write(root, "src/k.rs", "use crate::m::X;\n");
+    let graph = graph(root);
+    assert_eq!(outcome(&graph, "src/lib.rs", "m"), resolved(&["src/gen/m"]));
+    assert_eq!(
+        outcome(&graph, "src/k.rs", "crate::m::X"),
+        resolved(&["src/gen/m"]),
+        "the `use` in the module binds `X`"
+    );
+    assert_eq!(
+        pairs(&graph),
+        [
+            edge("src/k.rs", "src/gen/m"),
+            edge("src/lib.rs", "src/gen/m"),
+            edge("src/lib.rs", "src/k.rs"),
+        ]
     );
 }
