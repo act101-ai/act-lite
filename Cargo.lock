@@ -70,6 +70,7 @@ dependencies = [
  "act-lite-core",
  "insta",
  "inventory",
+ "libc",
  "proptest",
  "serde",
  "serde_json",

@@ -244,7 +244,7 @@ pub fn walk_reference_siblings(
             });
             continue;
         }
-        match SourceFile::load(&path) {
+        match SourceFile::load_within(&path, root) {
             Ok(source) => siblings.push(source),
             Err(err) => skipped.push(SkippedFile {
                 file: path,

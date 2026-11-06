@@ -335,8 +335,11 @@ fn load_source(file: &Path, workspace: Option<&Path>) -> Result<act_lite_parser:
     if grammar_for_file(file).is_none() {
         return Err(unsupported_language_error(file));
     }
-    act_lite_parser::SourceFile::load(file)
-        .with_context(|| format!("failed to parse {}", file.display()))
+    match workspace {
+        Some(root) => act_lite_parser::SourceFile::load_within(file, root),
+        None => act_lite_parser::SourceFile::load(file),
+    }
+    .with_context(|| format!("failed to parse {}", file.display()))
 }
 
 /// Get the grammar for a file: filename conventions first, then extension.
@@ -587,7 +590,7 @@ pub fn execute_repo_outline(
         // file rather than swallowed.
         let mut per_file_error = None;
         let symbol_names = if symbols {
-            match act_lite_parser::SourceFile::load(path) {
+            match act_lite_parser::SourceFile::load_within(path, &canonical_root) {
                 Ok(source) => match act_lite_parser::execute_skeleton(&source) {
                     Ok(QueryResult::Skeleton(sk)) => {
                         Some(sk.declarations.into_iter().map(|d| d.name).collect())
@@ -739,7 +742,7 @@ pub fn execute_symbols_batch_by_files(
         if Grammar::from_path(file).is_none() {
             return Err(unsupported_language_error(file));
         }
-        let source = act_lite_parser::SourceFile::load(file)
+        let source = act_lite_parser::SourceFile::load_within(file, workspace_root)
             .with_context(|| format!("failed to load {}", file.display()))?;
 
         let skeleton = act_lite_parser::execute_skeleton(&source)?;
@@ -803,7 +806,7 @@ pub fn execute_symbols_batch_by_ids(
 
     for (file_path, id_list) in &file_ids {
         let full_path = workspace_root.join(file_path);
-        let source = act_lite_parser::SourceFile::load(&full_path)
+        let source = act_lite_parser::SourceFile::load_within(&full_path, workspace_root)
             .with_context(|| format!("failed to load {}", file_path))?;
 
         let skeleton = act_lite_parser::execute_skeleton(&source)?;
