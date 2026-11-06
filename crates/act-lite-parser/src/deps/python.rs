@@ -50,8 +50,9 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
 }
 
 /// The names bound by the module's top-level statements, also inside
-/// top-level `if`, `try`, `with` and loop blocks and by a top-level `for`
-/// target or `with … as` alias, not inside a function or class.
+/// top-level `if`, `try`, `with`, `match` and loop blocks and by a top-level
+/// `for` target, `with … as` alias or `case` pattern capture, not inside a
+/// function or class.
 pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     let mut names = ModuleNames::default();
     bind_block(root, source, &mut names);
@@ -143,6 +144,53 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
                             bind_block(block, source, names);
                         }
                     }
+                }
+            }
+        }
+        "match_statement" => {
+            let Some(body) = statement.child_by_field_name("body") else {
+                return;
+            };
+            let mut cursor = body.walk();
+            for case in body.named_children(&mut cursor) {
+                let mut cursor = case.walk();
+                for child in case.named_children(&mut cursor) {
+                    match child.kind() {
+                        "case_pattern" => bind_pattern(child, source, names),
+                        "block" => bind_block(child, source, names),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The capture names of a `case` pattern: not `_`, a dotted value, a class
+/// name, a keyword name or a mapping key.
+fn bind_pattern(pattern: Node, source: &str, names: &mut ModuleNames) {
+    match pattern.kind() {
+        "identifier" => {
+            names.names.insert(text(pattern, source).to_string());
+        }
+        "dotted_name" if pattern.named_child_count() == 1 => {
+            names.names.insert(text(pattern, source).to_string());
+        }
+        "case_pattern" | "list_pattern" | "tuple_pattern" | "splat_pattern" | "as_pattern"
+        | "union_pattern" | "class_pattern" | "keyword_pattern" | "dict_pattern" => {
+            // The class name of `P(…)` and the keyword of `k=…` come first.
+            let skip = usize::from(matches!(
+                pattern.kind(),
+                "class_pattern" | "keyword_pattern"
+            ));
+            let mut cursor = pattern.walk();
+            for (i, child) in pattern.children(&mut cursor).enumerate() {
+                if child.is_named()
+                    && i >= skip
+                    && pattern.field_name_for_child(i as u32) != Some("key")
+                {
+                    bind_pattern(child, source, names);
                 }
             }
         }
