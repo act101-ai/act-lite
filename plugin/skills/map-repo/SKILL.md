@@ -65,7 +65,7 @@ Ranking: <hotspots details.formula>.
 - <file>: depends on <n> files (<to>, …); depended on by <m> files (<file>, …)
 Relationship kinds: <details.kinds>.
 ### Not analyzed and limits
-Dependency support: <supported languages>; not supported: <languages>. Unresolved relationships: <n> (<first entries>). Depth limit: 1 (<limits_hit detail>). Exclusions and truncation.
+Dependency support: <supported languages>; not supported: <languages>. Unresolved relationships: <n> (<first entries>). Depth limit: 1 (<limits_hit detail>). Regions not analyzed (<file>:<range>: <reason>). Exclusions and truncation.
 ```
 
 - **`<scope>`:** the `paths`, or "the workspace" for `[]`.
@@ -98,6 +98,15 @@ Dependency support: <supported languages>; not supported: <languages>. Unresolve
     that the top files' neighbours have relationships that are not shown;
   - the `excluded.counts`, `incomplete.skipped_files` and
     `incomplete.parse_failures` of each result;
+  - the `details.regions_not_analyzed` entries of the `analyze_hotspots`
+    result, each entry (`file`, `range`, `reason`) once, the
+    `details.regions_not_analyzed_total` when it is more than the entries
+    listed, and `details.files_without_analyzed_code`. In component files
+    (`.vue`, `.svelte`, `.astro`), only script regions are analyzed: the
+    template and style regions are not, so no score comes from them.
+    Component files are not graph sources: the `graph` result reports Vue,
+    Svelte and Astro as `supported: false`, so their own dependencies are not
+    analyzed;
   - each truncation (`total` against what is shown), and a partial outline
     from step 1.
   A result with `complete: false` can miss findings in that evidence; say so.
