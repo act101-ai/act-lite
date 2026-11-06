@@ -20,11 +20,15 @@
 //! `r#name` is the identifier `name` in every probe and comparison.
 
 use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
-use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
+use super::{
+    Family, INVALID_LITERAL, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical,
+};
 use crate::analyze::envelope::LimitHit;
 use crate::analyze::read::{Parsed, RemovedRegion};
 use act_lite_core::CompactRange;
-use act_lite_parser::deps::{InlineModule, Relationship, RelationshipKind, extract, module_names};
+use act_lite_parser::deps::{
+    InlineModule, LiteralValue, Relationship, RelationshipKind, extract, module_names,
+};
 use act_lite_parser::{Grammar, SourceFile};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -119,6 +123,9 @@ struct Module {
     names: Result<Names, String>,
     /// The module's file has been read; always true for an inline module.
     expanded: bool,
+    /// The `#[path]` literal of the module, or of an inline module around
+    /// it, does not decode, so its directory is unknown.
+    invalid_path: bool,
 }
 
 /// The module tree of one crate root, or of a file that no root reaches.
@@ -266,7 +273,7 @@ fn outcome_in(
                 cx,
                 &tree.modules[m],
                 unraw(&rel.specifier),
-                rel.path_attribute.as_deref(),
+                rel.path_attribute.as_ref(),
                 tree.detached,
             );
             match target {
@@ -961,7 +968,7 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
             cx,
             &tree.modules[parent],
             &name,
-            path_attribute.as_deref(),
+            path_attribute.as_ref(),
             tree.detached,
         );
         let child = match target {
@@ -1006,6 +1013,7 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
         inline: Vec::new(),
         names: Ok(Arc::default()),
         expanded: false,
+        invalid_path: false,
     });
     let idx = tree.modules.len() - 1;
     tree.files.entry(file.to_string()).or_default().push(idx);
@@ -1024,7 +1032,11 @@ fn inline_count(inline: &[InlineModule]) -> usize {
 fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
     for module in inline {
         let parent = &tree.modules[idx];
-        let written = module.path_attribute.as_deref().unwrap_or(&module.name);
+        let invalid_path = parent.invalid_path || matches!(module.path_attribute, Some(Err(_)));
+        let written = match &module.path_attribute {
+            Some(Ok(path)) => path,
+            _ => &module.name,
+        };
         let dir = lexical(&parent.dir, written).unwrap_or_else(|| join(&parent.dir, written));
         let file = parent.file.clone();
         tree.modules.push(Module {
@@ -1036,6 +1048,7 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
             inline: Vec::new(),
             names: Ok(Arc::new((module.names.names, module.names.glob))),
             expanded: true,
+            invalid_path,
         });
         let added = tree.modules.len() - 1;
         tree.modules[idx]
@@ -1052,7 +1065,7 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
 type ModuleFile = (
     Names,
     Vec<InlineModule>,
-    Vec<(String, CompactRange, Option<String>)>,
+    Vec<(String, CompactRange, Option<LiteralValue>)>,
 );
 
 fn module_file(parsed: &Parsed) -> ModuleFile {
@@ -1069,7 +1082,7 @@ fn module_file(parsed: &Parsed) -> ModuleFile {
     (Arc::new((names.names, names.glob)), inline, mods)
 }
 
-fn module_decls(file: &SourceFile) -> Vec<(String, CompactRange, Option<String>)> {
+fn module_decls(file: &SourceFile) -> Vec<(String, CompactRange, Option<LiteralValue>)> {
     extract(file)
         .into_iter()
         .filter(|r| r.kind == RelationshipKind::Module)
@@ -1120,10 +1133,16 @@ fn probe_mod(
     cx: &mut ResolveCx<'_>,
     module: &Module,
     name: &str,
-    path_attribute: Option<&str>,
+    path_attribute: Option<&LiteralValue>,
     detached: bool,
 ) -> ModTarget {
+    if module.invalid_path {
+        return ModTarget::Missing(INVALID_LITERAL.to_string());
+    }
     if let Some(written) = path_attribute {
+        let Ok(written) = written else {
+            return ModTarget::Missing(INVALID_LITERAL.to_string());
+        };
         if is_absolute(written) {
             return ModTarget::Missing(format!("absolute path is not resolved: {written}"));
         }
@@ -1156,10 +1175,13 @@ fn include(cx: &mut ResolveCx<'_>, file: &str, rel: &Relationship) -> Outcome {
     if !rel.literal {
         return Outcome::Unresolved("specifier is not a string literal".to_string());
     }
-    if is_absolute(&rel.specifier) {
-        return Outcome::Unresolved(format!("absolute path is not resolved: {}", rel.specifier));
+    let Ok(value) = &rel.value else {
+        return Outcome::Unresolved(INVALID_LITERAL.to_string());
+    };
+    if is_absolute(value) {
+        return Outcome::Unresolved(format!("absolute path is not resolved: {value}"));
     }
-    let Some(path) = cx.normalize(dir_of(file), &rel.specifier) else {
+    let Some(path) = cx.normalize(dir_of(file), value) else {
         return Outcome::External;
     };
     match cx.probe_file(&path) {

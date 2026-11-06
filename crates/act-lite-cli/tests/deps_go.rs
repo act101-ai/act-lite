@@ -692,3 +692,55 @@ fn a_replace_directive_outside_the_workspace_makes_its_path_external() {
         assert!(pairs(&graph).is_empty(), "{replace}");
     }
 }
+
+#[test]
+fn an_import_path_is_resolved_by_its_decoded_value() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "lib/go.mod", "module example.com/lib\n");
+    write(root, "lib/l.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport (\n\t\"example.com/\\x6cib\"\n\t\"example.com/\\154ib\"\n\t\"example.com/\\u006cib\"\n\t\"example.com/\\U0000006cib\"\n\t`example.com/\\x6cib/raw`\n\t\"example.com/\\q\"\n\t\"example.com/\\xff\"\n)\n",
+    );
+    let graph = graph(root);
+    for import in [
+        "example.com/\\x6cib",
+        "example.com/\\154ib",
+        "example.com/\\u006cib",
+        "example.com/\\U0000006cib",
+    ] {
+        assert_eq!(
+            outcome(&graph, "main.go", import),
+            Outcome::Resolved(vec!["lib/l.go".to_string()]),
+            "{import}"
+        );
+    }
+    assert_eq!(
+        outcome(&graph, "main.go", "example.com/\\x6cib/raw"),
+        Outcome::External
+    );
+    for import in ["example.com/\\q", "example.com/\\xff"] {
+        assert_eq!(
+            outcome(&graph, "main.go", import),
+            Outcome::Unresolved("invalid string literal".to_string()),
+            "{import}"
+        );
+    }
+    let evidence: Vec<String> = graph.edges()[0]
+        .evidence
+        .iter()
+        .map(|e| e.specifier.clone())
+        .collect();
+    assert_eq!(
+        evidence,
+        [
+            "example.com/\\x6cib",
+            "example.com/\\154ib",
+            "example.com/\\u006cib",
+            "example.com/\\U0000006cib",
+        ]
+    );
+}

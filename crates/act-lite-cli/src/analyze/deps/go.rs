@@ -2,7 +2,7 @@
 //! the workspace, the candidate modules of an import path and the package
 //! files of the one valid candidate.
 
-use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join};
+use super::{Family, INVALID_LITERAL, InputKind, Outcome, Probe, ResolveCx, Resolver, join};
 use crate::analyze::read::EntryKind;
 use act_lite_parser::deps::Relationship;
 use std::collections::HashMap;
@@ -37,7 +37,9 @@ impl Resolver for GoResolver {
     }
 
     fn resolve(&self, file: &str, rel: &Relationship, cx: &mut ResolveCx<'_>) -> Outcome {
-        let import = rel.specifier.as_str();
+        let Ok(import) = rel.value.as_deref() else {
+            return Outcome::Unresolved(INVALID_LITERAL.to_string());
+        };
         if import == "C" {
             return Outcome::External;
         }

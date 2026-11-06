@@ -3,7 +3,7 @@
 
 use tree_sitter::Node;
 
-use super::{Relationship, RelationshipKind, nodes, text, unquote};
+use super::{Relationship, RelationshipKind, js_value, nodes, text, unquote};
 
 pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
     let mut found = Vec::new();
@@ -16,20 +16,20 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
                     } else {
                         RelationshipKind::Import
                     };
-                    found.push(Relationship::new(kind, unquote(text(target, source)), node));
+                    found.push(string(kind, text(target, source), node));
                 } else if let Some(target) = require_clause_source(node) {
-                    found.push(Relationship::new(
+                    found.push(string(
                         RelationshipKind::Require,
-                        unquote(text(target, source)),
+                        text(target, source),
                         node,
                     ));
                 }
             }
             "export_statement" => {
                 if let Some(target) = node.child_by_field_name("source") {
-                    found.push(Relationship::new(
+                    found.push(string(
                         RelationshipKind::Reexport,
-                        unquote(text(target, source)),
+                        text(target, source),
                         node,
                     ));
                 }
@@ -74,9 +74,20 @@ fn call(node: Node, source: &str) -> Option<Relationship> {
         _ => false,
     };
     let written = text(first, source);
-    let specifier = if literal { unquote(written) } else { written };
+    if literal {
+        return Some(string(kind, written, node));
+    }
     Some(Relationship {
         literal,
-        ..Relationship::new(kind, specifier, node)
+        ..Relationship::new(kind, written, node)
     })
+}
+
+/// The relationship of the string `written`, with its decoded value.
+fn string(kind: RelationshipKind, written: &str, node: Node) -> Relationship {
+    let specifier = unquote(written);
+    Relationship {
+        value: js_value(specifier),
+        ..Relationship::new(kind, specifier, node)
+    }
 }

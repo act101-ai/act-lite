@@ -869,6 +869,17 @@ they share the statement's range. Relationships inside removed test regions
 are not extracted. A file with a parse error gives the relationships of its
 recovered tree.
 
+A specifier, `#[path]` value or `include` argument read from a string literal
+is resolved by its value, decoded by the language's escape rules: JS/TS strings
+and template strings without a substitution (`\xHH`, `\uHHHH` and surrogate
+pairs, `\u{…}`, `\0`, single-character escapes, line continuations); Go
+interpreted strings (`\xHH`, octal `\OOO`, `\uHHHH`, `\UHHHHHHHH`,
+single-character escapes); Rust strings (`\xHH` up to `\x7F`, `\u{…}`,
+single-character escapes, line continuations). Go and Rust raw strings are
+their own value. The `specifier`, and the `target` of an `unresolved` entry,
+keep the written text. A literal that does not decode is `unresolved`, reason
+`invalid string literal`.
+
 | Family | Construct | `kind` | `specifier` | `range` |
 |---|---|---|---|---|
 | JS/TS | `import … from '…'`, `import '…'` | `import`; `type_import` for `import type` | the source string | the statement |
