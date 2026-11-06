@@ -1421,3 +1421,50 @@ fn a_string_literal_is_resolved_by_its_decoded_value() {
         "invalid string literal"
     )));
 }
+
+#[test]
+fn an_inline_module_with_a_rejected_path_has_no_directory() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "#[path = \"/outside\"]\n",
+            "mod inline {\n",
+            "    mod x;\n",
+            "    #[path = \"z.rs\"]\n",
+            "    mod z;\n",
+            "    mod deeper {\n",
+            "        mod w;\n",
+            "    }\n",
+            "}\n",
+            "#[path = \"../../..\"]\n",
+            "mod up {\n",
+            "    mod y;\n",
+            "}\n",
+        ),
+    );
+    for decoy in [
+        "src/outside/x.rs",
+        "src/outside/z.rs",
+        "src/outside/deeper/w.rs",
+        "y.rs",
+    ] {
+        write(root, decoy, "pub struct T;\n");
+    }
+    let graph = graph(root);
+    for name in ["x", "z", "w"] {
+        assert_eq!(
+            outcome(&graph, "src/lib.rs", name),
+            unresolved("absolute path is not resolved: /outside"),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "y"),
+        unresolved("absolute path is not resolved: ../../..")
+    );
+    assert!(pairs(&graph).is_empty());
+}

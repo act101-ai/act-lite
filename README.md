@@ -1025,7 +1025,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `<dir>/x/mod.rs`, where `<dir>` is the module file's directory when the file
   is a crate root, a `mod.rs` or a `#[path]` file, else that directory plus the
   file's stem; `#[path = "p"]` replaces the probe (comments inside the
-  attribute are skipped). A raw identifier `r#name` is the identifier
+  attribute are skipped). An absolute `#[path]` is `unresolved` (`absolute
+  path is not resolved: <path>`). An absolute or workspace-leaving `#[path]`
+  on an inline module (`#[path = "/outside"] mod inline { mod x; }`) leaves
+  the module without a directory: each `mod x;` inside it, at any depth, is
+  `unresolved` with that reason for the inline module's path, and no
+  directory is probed. A raw identifier `r#name` is the identifier
   `name`: `mod r#type;` probes `type.rs`, then `type/mod.rs`, and `use`
   segments, `extern crate` names, declared names and attribute names
   compare without `r#`; the relationship's target keeps the written
