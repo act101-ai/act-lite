@@ -882,7 +882,7 @@ recovered tree.
 | Rust | `use` declaration, one per leaf path (`use a::{b, c::d}` gives `a::b` and `a::c::d`; `self` in a list gives the list's prefix; `use a::*` gives `a`; `use a::b as c` gives `a::b`) | `use` | the leaf path | the declaration |
 | Rust | `extern crate x;` | `extern_crate` | the name | the declaration |
 | Rust | `include!`, `include_str!`, `include_bytes!` | `include` | the string literal, or the argument's text when it is not a string literal (`unresolved`) | the invocation |
-| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
+| Rust | `mod x;` and `use …;` token sequences inside a macro invocation at module level (wrapper macros such as `cfg_rt! { pub mod a; }`) | `module`, `use` | as above; a `#[path = "…"]` among the attributes directly before the `mod` replaces the file probe; comments between these tokens, and inside the `#[path …]` tokens, are skipped | from the first token (`pub`, `mod` or `use`) to the `;` |
 
 The kinds are `dynamic_import`, `extern_crate`, `from_import`, `import`,
 `include`, `module`, `reexport`, `require`, `type_import` and `use`. A Python `from __future__ import …` is not a relationship.
@@ -997,7 +997,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   module tree follows the Rust Reference: `mod x;` probes `<dir>/x.rs`, then
   `<dir>/x/mod.rs`, where `<dir>` is the module file's directory when the file
   is a crate root, a `mod.rs` or a `#[path]` file, else that directory plus the
-  file's stem; `#[path = "p"]` replaces the probe. A `use` path starts at the
+  file's stem; `#[path = "p"]` replaces the probe (comments inside the
+  attribute are skipped). A raw identifier `r#name` is the identifier
+  `name`: `mod r#type;` probes `type.rs`, then `type/mod.rs`, and `use`
+  segments, `extern crate` names, declared names and attribute names
+  compare without `r#`; the relationship's target keeps the written
+  spelling. A `use` path starts at the
   crate root (`crate`), the current module (`self`), its parent (`super`), a
   child module, the package's own lib (from a bin, example, bench, test or
   `build.rs`), a path dependency or a workspace crate that the crate depends

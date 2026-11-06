@@ -869,3 +869,125 @@ fn python_assignment_expressions_in_every_module_level_statement() {
     );
     assert!(!deps::module_names(&handler).names.contains("n"));
 }
+
+#[test]
+fn rust_raw_identifiers_are_evidence_as_written() {
+    let file = parse(
+        Grammar::Rust,
+        "mod r#type;\nuse crate::r#type::r#Foo;\nextern crate r#core as r#cc;\nw! { mod r#m; use r#type::{r#A}; }\n",
+    );
+    let relationships = deps::extract(&file);
+    let specifiers: Vec<&str> = relationships.iter().map(|r| r.specifier.as_str()).collect();
+    assert_eq!(
+        specifiers,
+        [
+            "r#type",
+            "crate::r#type::r#Foo",
+            "r#core",
+            "r#m",
+            "r#type::r#A"
+        ]
+    );
+}
+
+#[test]
+fn rust_raw_identifiers_declare_their_names() {
+    let file = parse(
+        Grammar::Rust,
+        r#"fn r#match() {}
+struct r#Foo;
+macro_rules! r#mm { () => {} }
+extern crate core as r#cc;
+use a::r#B;
+use a::C as r#D;
+mod r#inl {
+    fn r#f() {}
+}
+w! { struct r#S; mod r#gm; use x::r#Y; macro_rules! r#wm { () => {} } }
+"#,
+    );
+    let declared = deps::module_names(&file);
+    assert_eq!(
+        declared.names,
+        names(&[
+            "B", "D", "Foo", "S", "Y", "cc", "gm", "inl", "match", "mm", "wm"
+        ])
+    );
+    assert_eq!(declared.inline[0].name, "inl");
+    assert_eq!(declared.inline[0].names.names, names(&["f"]));
+    assert_eq!(deps::mods_in_text("mod r#type;"), vec!["type"]);
+}
+
+#[test]
+fn rust_raw_path_attributes_apply() {
+    let file = parse(
+        Grammar::Rust,
+        "#[r#path = \"z.rs\"]\nmod z;\nw! { #[r#path = \"o.rs\"] mod x; }\n",
+    );
+    let relationships = deps::extract(&file);
+    let attributes: Vec<Option<&str>> = relationships
+        .iter()
+        .map(|r| r.path_attribute.as_deref())
+        .collect();
+    assert_eq!(attributes, [Some("z.rs"), Some("o.rs")]);
+}
+
+#[test]
+fn comments_inside_a_path_attribute_keep_it() {
+    let file = parse(
+        Grammar::Rust,
+        r#"#[/* a */ path /* c */ = /* d */ "y.rs" /* e */]
+mod y;
+#[/* a */ path = "inl"]
+mod inl {}
+w! {
+    #[path /* c */ = "o.rs"] mod x;
+    #[/* a */ path = // b
+      "p.rs" /* e */] mod q;
+}
+"#,
+    );
+    let relationships = deps::extract(&file);
+    let attributes: Vec<(&str, Option<&str>)> = relationships
+        .iter()
+        .map(|r| (r.specifier.as_str(), r.path_attribute.as_deref()))
+        .collect();
+    assert_eq!(
+        attributes,
+        [
+            ("y", Some("y.rs")),
+            ("x", Some("o.rs")),
+            ("q", Some("p.rs"))
+        ]
+    );
+    assert_eq!(
+        deps::module_names(&file).inline[0]
+            .path_attribute
+            .as_deref(),
+        Some("inl")
+    );
+}
+
+#[test]
+fn comments_inside_include_and_use_tokens_are_skipped() {
+    let file = parse(
+        Grammar::Rust,
+        "const X: &str = include_str!(/* c */ \"d.txt\" // e\n);\nuse a::/* c */b;\nuse a /* c */ ::{/* d */ e};\nuse f::/* c */ *;\nr#include!(\"g.txt\");\nw! { use h /* c */ ::i; }\n",
+    );
+    let relationships = deps::extract(&file);
+    let found: Vec<(RelationshipKind, &str, bool)> = relationships
+        .iter()
+        .map(|r| (r.kind, r.specifier.as_str(), r.literal))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (Include, "d.txt", true),
+            (Use, "a::b", true),
+            (Use, "a::e", true),
+            (Use, "f", true),
+            (Include, "g.txt", true),
+            (Use, "h::i", true),
+        ]
+    );
+}
