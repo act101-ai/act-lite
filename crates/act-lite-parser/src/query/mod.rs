@@ -620,23 +620,29 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
     Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
 }
 
-/// One declaration per `(name, range)`: when two patterns report the same
-/// node, the specific kind wins over `constant`/`variable`, else the first.
+/// Two patterns that report the same node: an identical kind is reported
+/// once, and a specific kind replaces `constant`/`variable`. Two distinct
+/// specific kinds at one node are both kept (a proto2 group is a struct and
+/// a field).
 fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration> {
+    let generic = |k: &str| k == "constant" || k == "variable";
     let mut kept: Vec<Declaration> = Vec::with_capacity(declarations.len());
     for decl in declarations {
-        match kept
-            .iter_mut()
-            .find(|d| d.name == decl.name && d.range == decl.range)
-        {
-            None => kept.push(decl),
-            Some(existing) => {
-                let generic = |k: &str| k == "constant" || k == "variable";
-                if generic(&existing.kind) && !generic(&decl.kind) {
-                    *existing = decl;
-                }
-            }
+        let same = |d: &Declaration| d.name == decl.name && d.range == decl.range;
+        if kept.iter().any(|d| same(d) && d.kind == decl.kind) {
+            continue;
         }
+        if let Some(existing) = kept
+            .iter_mut()
+            .find(|d| same(d) && generic(&d.kind) && !generic(&decl.kind))
+        {
+            *existing = decl;
+            continue;
+        }
+        if generic(&decl.kind) && kept.iter().any(|d| same(d) && !generic(&d.kind)) {
+            continue;
+        }
+        kept.push(decl);
     }
     kept
 }
@@ -658,6 +664,7 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
     let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
 
     let mut symbols = Vec::new();
+    let mut suppressed: Vec<(String, Range)> = Vec::new();
 
     while let Some(match_) = matches.next() {
         let mut name = None;
@@ -666,6 +673,7 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         let mut is_class_attribute = false;
         let mut definition_node = None;
         let mut kinded_definition = None;
+        let mut suppress = false;
 
         for capture in match_.captures {
             let capture_name = &query.capture_names()[capture.index as usize];
@@ -701,8 +709,16 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
                 dotted if dotted.starts_with("definition.") => {
                     kinded_definition = Some((node, &dotted["definition.".len()..]));
                 }
+                "suppress" => suppress = true,
                 _ => {}
             }
+        }
+
+        if suppress {
+            if let (Some(name), Some(range)) = (name, range) {
+                suppressed.push((name, range));
+            }
+            continue;
         }
 
         let resolved = match definition_node {
@@ -731,28 +747,40 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
-    let symbols = one_symbol_per_range(symbols);
+    let symbols = one_symbol_per_range(symbols, &suppressed);
     Ok(QueryResult::Symbols { symbols })
 }
 
-/// One symbol per `(name, range)`: when two patterns report the same name
-/// node, the specific kind wins over `Constant`/`Variable`, else the first.
-fn one_symbol_per_range(symbols: Vec<Symbol>) -> Vec<Symbol> {
+/// Two patterns that report the same name node: an identical kind is
+/// reported once, and a specific kind replaces `Constant`/`Variable`. Two
+/// distinct specific kinds at one node are both kept. A name node a
+/// `@suppress` pattern matched (an import) reports no generic symbol.
+fn one_symbol_per_range(symbols: Vec<Symbol>, suppressed: &[(String, Range)]) -> Vec<Symbol> {
+    let generic = |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
     let mut kept: Vec<Symbol> = Vec::with_capacity(symbols.len());
     for symbol in symbols {
-        match kept
-            .iter_mut()
-            .find(|s| s.name() == symbol.name() && s.range() == symbol.range())
+        if generic(symbol.kind())
+            && suppressed
+                .iter()
+                .any(|(n, r)| n == symbol.name() && r == symbol.range())
         {
-            None => kept.push(symbol),
-            Some(existing) => {
-                let generic =
-                    |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
-                if generic(existing.kind()) && !generic(symbol.kind()) {
-                    *existing = symbol;
-                }
-            }
+            continue;
         }
+        let same = |s: &Symbol| s.name() == symbol.name() && s.range() == symbol.range();
+        if kept.iter().any(|s| same(s) && s.kind() == symbol.kind()) {
+            continue;
+        }
+        if let Some(existing) = kept
+            .iter_mut()
+            .find(|s| same(s) && generic(s.kind()) && !generic(symbol.kind()))
+        {
+            *existing = symbol;
+            continue;
+        }
+        if generic(symbol.kind()) && kept.iter().any(|s| same(s) && !generic(s.kind())) {
+            continue;
+        }
+        kept.push(symbol);
     }
     kept
 }
