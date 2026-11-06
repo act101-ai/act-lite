@@ -22,11 +22,11 @@
 ; inherit a b; and inherit (s) a;
 (inherit
   attrs: (inherited_attrs
-    attr: (identifier) @name)) @variable
+    attr: [(identifier) (string_expression)] @name)) @variable
 
 (inherit_from
   attrs: (inherited_attrs
-    attr: (identifier) @name)) @variable
+    attr: [(identifier) (string_expression)] @name)) @variable
 
 ; import <path>: the application of import to the path only
 (apply_expression

@@ -7,7 +7,7 @@
 
 ; inherit lists
 (inherited_attrs
-  attr: (identifier) @reference)
+  attr: [(identifier) (string_expression)] @reference)
 
 ; Parameters
 (function_expression

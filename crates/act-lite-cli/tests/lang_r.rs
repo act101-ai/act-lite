@@ -135,6 +135,20 @@ fn skeleton_pairs(source: &str) -> BTreeSet<(String, String)> {
 }
 
 #[test]
+fn a_comment_before_the_argument_does_not_hide_an_import_or_include() {
+    let source = "library(# c\nstats)\nrequire(# c\nutils)\nsource(# c\n\"f.R\")\nlibrary(dplyr, warn.conflicts = FALSE)\n";
+    assert_eq!(
+        skeleton_pairs(source),
+        pair_set(&[
+            ("import", "stats"),
+            ("import", "utils"),
+            ("include", "\"f.R\""),
+            ("import", "dplyr")
+        ])
+    );
+}
+
+#[test]
 fn fixture_holds_the_design_bytes() {
     assert_eq!(
         std::fs::read_to_string(fixture("r/scale.R")).unwrap(),

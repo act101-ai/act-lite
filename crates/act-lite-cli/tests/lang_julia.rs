@@ -421,6 +421,31 @@ fn using_and_import_give_one_entry_per_module() {
 }
 
 #[test]
+fn a_comment_around_the_include_string_does_not_hide_it() {
+    let source = "include(#= c =# \"f.jl\")\ninclude(\"g.jl\") # c\ninclude(\n  # c\n  \"h.jl\")\n";
+    assert_eq!(
+        skeleton_pairs(source),
+        pair_set(&[
+            ("include", "\"f.jl\""),
+            ("include", "\"g.jl\""),
+            ("include", "\"h.jl\"")
+        ])
+    );
+}
+
+#[test]
+fn a_raw_string_include_is_an_entry_named_as_written() {
+    let source = "include(raw\"f.jl\")\ninclude(#= c =# raw\"\"\"g.jl\"\"\")\n";
+    assert_eq!(
+        skeleton_pairs(source),
+        pair_set(&[
+            ("include", "raw\"f.jl\""),
+            ("include", "raw\"\"\"g.jl\"\"\""),
+        ])
+    );
+}
+
+#[test]
 fn include_is_a_skeleton_entry_named_by_its_string() {
     let source = "include(\"f.jl\")\n";
     assert_eq!(skeleton_pairs(source), pair_set(&[("include", "\"f.jl\"")]));
