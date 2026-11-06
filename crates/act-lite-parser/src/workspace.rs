@@ -106,7 +106,7 @@ impl Workspace {
         }
 
         if !self.files.contains_key(&abs_path) {
-            let source = SourceFile::load(&abs_path)?;
+            let source = SourceFile::load_within(&abs_path, &self.root)?;
             self.files.insert(abs_path.clone(), source);
         }
 

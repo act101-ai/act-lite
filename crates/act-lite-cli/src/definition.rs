@@ -651,7 +651,7 @@ fn workspace_candidates(
             continue;
         }
         // A sibling that cannot be read or parsed has no definitions to offer.
-        let Ok(other_source) = SourceFile::load(&other) else {
+        let Ok(other_source) = SourceFile::load_within(&other, root) else {
             continue;
         };
         for (name, ranges) in names.iter().zip(&mut candidates) {

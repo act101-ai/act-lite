@@ -133,10 +133,11 @@ impl IgnoreRules {
     }
 }
 
-/// Whether `dir` contains a `.git` entry (a directory, or the file of a
-/// linked worktree). A `.git` symlink is not followed and does not count.
+/// Whether `dir` contains a `.git` entry (a directory, the file of a linked
+/// worktree, or a symlink to an existing target), the same test MCP uses to
+/// find a root. A `dir` with a `.git` entry is a work-tree top.
 fn has_git(dir: &Path) -> bool {
-    fs::symlink_metadata(dir.join(".git")).is_ok_and(|meta| !meta.file_type().is_symlink())
+    dir.join(".git").exists()
 }
 
 /// Whether `path` is a directory itself, not a symlink to one.
@@ -312,7 +313,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_git_is_not_a_work_tree_top() {
+    fn symlinked_git_is_a_work_tree_top() {
         let outside = outside_work_tree();
         write(&outside.path().join("info/exclude"), "*.tmp\n");
         let tmp = outside_work_tree();
@@ -321,12 +322,12 @@ mod tests {
         write(&top.join(".gitignore"), "*.log\n");
         let rules = IgnoreRules::for_root(top);
         assert!(!rules.is_ignored(&top.join("a.tmp"), false));
-        assert!(!rules.is_ignored(&top.join("a.log"), false));
+        assert!(rules.is_ignored(&top.join("a.log"), false));
     }
 
     #[cfg(unix)]
     #[test]
-    fn nested_symlinked_git_keeps_the_outer_patterns() {
+    fn nested_symlinked_git_drops_the_outer_patterns() {
         let outside = outside_work_tree();
         write(&outside.path().join("info/exclude"), "*.tmp\n");
         let tmp = outside_work_tree();
@@ -338,7 +339,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), inner.join(".git")).unwrap();
         let rules = IgnoreRules::for_root(top).child(&inner);
         assert!(!rules.is_ignored(&inner.join("a.tmp"), false));
-        assert!(rules.is_ignored(&inner.join("a.log"), false));
+        assert!(!rules.is_ignored(&inner.join("a.log"), false));
     }
 
     #[cfg(unix)]

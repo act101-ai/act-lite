@@ -218,8 +218,8 @@ impl ActLiteServer {
         }
     }
 
-    fn load(path: &Path, file: &str) -> Result<act_lite_parser::SourceFile, McpError> {
-        act_lite_parser::SourceFile::load(path).map_err(|e| {
+    fn load(&self, path: &Path, file: &str) -> Result<act_lite_parser::SourceFile, McpError> {
+        act_lite_parser::SourceFile::load_within(path, &self.root).map_err(|e| {
             McpError::invalid_params(
                 format!(
                     "Failed to load file '{}' (resolved: '{}'): {}",
@@ -282,7 +282,7 @@ impl ActLiteServer {
         params: Parameters<SkeletonParams>,
     ) -> Result<CallToolResult, McpError> {
         let (path, _) = self.source_path(&params.0.file)?;
-        let source = Self::load(&path, &params.0.file)?;
+        let source = self.load(&path, &params.0.file)?;
         let result = act_lite_parser::execute_skeleton(&source).map_err(|e| {
             McpError::internal_error(format!("Failed to execute skeleton query: {}", e), None)
         })?;
@@ -298,7 +298,7 @@ impl ActLiteServer {
     async fn symbols(&self, params: Parameters<SymbolsParams>) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, _) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         let result = act_lite_parser::execute_symbols(&source).map_err(|e| {
             McpError::internal_error(format!("Failed to execute symbols query: {}", e), None)
         })?;
@@ -531,7 +531,7 @@ impl ActLiteServer {
     ) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         // Validate the symbol before branching on the language server, so the
         // caller gets the same "not found" error either way.
         let position = Self::symbol_position(&source, &p.symbol, &p.file)?;
@@ -539,7 +539,14 @@ impl ActLiteServer {
 
         let mut lsp_error = None;
         if let Some(client) = self.lsp_pool.get_query_client(grammar).await {
-            match act_lite_lsp::query_references(client.as_ref(), &path, &location).await {
+            match act_lite_lsp::query_references(
+                client.as_ref(),
+                &path,
+                &location,
+                Some(source.content()),
+            )
+            .await
+            {
                 Ok(refs) => {
                     let response = serde_json::json!({
                         "symbol": p.symbol,
@@ -634,7 +641,7 @@ impl ActLiteServer {
     async fn callers(&self, params: Parameters<CallersParams>) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
         let position = Self::symbol_position(&source, &p.symbol, &p.file)?;
         let location = act_lite_core::Location::new(path.clone(), position.0, position.1);
 
@@ -654,23 +661,24 @@ impl ActLiteServer {
                     None,
                 )
             })?;
-        let callers = act_lite_lsp::query_callers(client.as_ref(), &path, &location)
-            .await
-            .map_err(|e| match e {
-                // Nothing was sent: the server does not offer the operation,
-                // a request the tool cannot serve, as when none is available.
-                act_lite_lsp::LspError::NotAdvertised { .. } => {
-                    McpError::invalid_request(e.to_string(), None)
-                }
-                e => McpError::internal_error(
-                    format!(
-                        "the {} server failed to answer callers of '{}': {e}",
-                        lsp_server_name(grammar),
-                        p.symbol
+        let callers =
+            act_lite_lsp::query_callers(client.as_ref(), &path, &location, Some(source.content()))
+                .await
+                .map_err(|e| match e {
+                    // Nothing was sent: the server does not offer the operation,
+                    // a request the tool cannot serve, as when none is available.
+                    act_lite_lsp::LspError::NotAdvertised { .. } => {
+                        McpError::invalid_request(e.to_string(), None)
+                    }
+                    e => McpError::internal_error(
+                        format!(
+                            "the {} server failed to answer callers of '{}': {e}",
+                            lsp_server_name(grammar),
+                            p.symbol
+                        ),
+                        None,
                     ),
-                    None,
-                ),
-            })?;
+                })?;
         let response = serde_json::json!({
             "symbol": p.symbol,
             "resolved_by": lsp_resolved_by(grammar),
@@ -693,7 +701,7 @@ impl ActLiteServer {
     ) -> Result<CallToolResult, McpError> {
         let p = &params.0;
         let (path, _grammar) = self.source_path(&p.file)?;
-        let source = Self::load(&path, &p.file)?;
+        let source = self.load(&path, &p.file)?;
 
         let (symbol_name, best) =
             definition::resolve_definition(&source, &self.root, &p.symbol, p.line, p.column)

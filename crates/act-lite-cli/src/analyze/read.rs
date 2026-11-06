@@ -240,17 +240,23 @@ pub fn read_files(
 
 /// The range of the first ERROR or MISSING node in document order.
 fn first_error(source: &SourceFile) -> Option<CompactRange> {
-    fn find(node: Node) -> Option<Node> {
-        if !node.has_error() {
-            return None;
+    fn find(root: Node) -> Option<Node> {
+        let mut cursor = root.walk();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if !node.has_error() {
+                continue;
+            }
+            // A recovered leaf can carry the error without being marked missing
+            // (tree-sitter-zig's empty container member).
+            if node.is_error() || node.is_missing() || node.child_count() == 0 {
+                return Some(node);
+            }
+            let start = stack.len();
+            stack.extend(node.children(&mut cursor));
+            stack[start..].reverse();
         }
-        // A recovered leaf can carry the error without being marked missing
-        // (tree-sitter-zig's empty container member).
-        if node.is_error() || node.is_missing() || node.child_count() == 0 {
-            return Some(node);
-        }
-        let mut cursor = node.walk();
-        node.children(&mut cursor).find_map(find)
+        None
     }
     let node = find(source.tree().root_node())?;
     let (start, end) = (node.start_position(), node.end_position());
