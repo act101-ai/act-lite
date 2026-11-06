@@ -139,6 +139,14 @@ fn symbol_pairs(source: &str) -> BTreeSet<(String, String)> {
 }
 
 /// `(kind, name)` of every declaration that `query skeleton` reports for `source`.
+fn skeleton_names(source: &str) -> Vec<String> {
+    let ws = workspace("t.zig", source);
+    skeleton_declarations(ws.path(), "t.zig")
+        .iter()
+        .map(|d| d["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
 fn skeleton_pairs(source: &str) -> BTreeSet<(String, String)> {
     let ws = workspace("t.zig", source);
     pairs(&Value::Array(skeleton_declarations(ws.path(), "t.zig")))
@@ -350,7 +358,7 @@ fn a_member_access_on_an_import_is_a_constant_and_an_exact_import_is_not() {
 
 #[test]
 fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
-    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\nextern var errno: c_int;\npub extern const limit: u8;\nconst value = struct { y: u8 }{ .y = 1 };\nconst In = struct { extern var g: u8; const lit = struct { z: u8 }{ .z = 2 }; };\nconst w: u8 = // c\n 1;\n";
+    let source = "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst c = @import(\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst n = @import(\\\\x\n);\nconst t = @import(\"std\") // c\n;\nconst S: type = struct { x: i32 };\nconst u: type = @import(\"std\").debug;\nextern var errno: c_int;\npub extern const limit: u8;\nconst value = struct { y: u8 }{ .y = 1 };\nconst In = struct { extern var g: u8; const lit = struct { z: u8 }{ .z = 2 }; };\nconst w: u8 = // c\n 1;\nextern var buffer: u8 align(16);\nconst T: type = type;\nvar typed: struct { q: u8 } = undefined;\nconst C = struct { extern var b2: u8 align(4); var t2: struct { r: u8 } = undefined; };\n";
     assert_eq!(
         skeleton_pairs(source),
         pair_set(&[
@@ -370,7 +378,13 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("struct", "In"),
             ("variable", "g"),
             ("constant", "lit"),
-            ("constant", "w")
+            ("constant", "w"),
+            ("variable", "buffer"),
+            ("constant", "T"),
+            ("variable", "typed"),
+            ("struct", "C"),
+            ("variable", "b2"),
+            ("variable", "t2")
         ])
     );
     assert_eq!(
@@ -388,9 +402,21 @@ fn a_typed_or_commented_exact_import_is_an_import_and_not_a_symbol() {
             ("variable", "g"),
             ("constant", "lit"),
             ("field", "z"),
-            ("constant", "w")
+            ("constant", "w"),
+            ("variable", "buffer"),
+            ("constant", "T"),
+            ("variable", "typed"),
+            ("field", "q"),
+            ("struct", "C"),
+            ("variable", "b2"),
+            ("variable", "t2"),
+            ("field", "r")
         ])
     );
+    let once = skeleton_names(source);
+    for name in ["typed", "t2", "buffer", "T"] {
+        assert_eq!(once.iter().filter(|n| *n == name).count(), 1, "{name} once");
+    }
 }
 
 #[test]
