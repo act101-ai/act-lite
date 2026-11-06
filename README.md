@@ -1524,8 +1524,9 @@ and adds nine skills: eight that you invoke and one shared skill.
 - `diagnose-defect` finds the root cause of a defect and fixes it with a test
   that failed first.
 - `review-change` reviews a diff, branch or pull request for code health: the
-  structural problems in the changed functions and the duplication that
-  touches the change, as a report with no edit.
+  structural problems in the changed functions, the duplication that
+  touches the change, the files exposed to it (impact) and the dependency
+  cycles that involve it, as a report with no edit.
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
   them, and the largest duplicated code, as a report with no edit.
