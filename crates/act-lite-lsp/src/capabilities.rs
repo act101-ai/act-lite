@@ -155,23 +155,46 @@ pub async fn open_document(client: &impl LspClientTrait, file: &Path) -> Result<
     Ok(open_with_text(client, file, content).await?.1)
 }
 
+/// Held by a query from its document sync to its last request, so no other
+/// query changes the document's text in between.
+type DocumentGuard = tokio::sync::OwnedMutexGuard<()>;
+
+/// The lock that serializes the queries on one document.
+async fn lock_document(file: &Path) -> DocumentGuard {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Locks = HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>;
+    static LOCKS: OnceLock<Mutex<Locks>> = OnceLock::new();
+    let lock = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(file.to_path_buf())
+        .or_default()
+        .clone();
+    lock.lock_owned().await
+}
+
 /// Opens `file` with `text` when the caller holds the checked text, else as
 /// [`open_document`] does. A document that is already open and was last
 /// sent other text gets `text` as a `didChange`, so the query is answered
-/// against the text its position was taken from.
+/// against the text its position was taken from. The returned guard keeps
+/// any other query from changing the document until the caller drops it:
+/// a query holds it until its last request is answered.
 async fn open_for_query(
     client: &impl LspClientTrait,
     file: &Path,
     text: Option<&str>,
-) -> Result<DocumentReady> {
+) -> Result<(DocumentReady, DocumentGuard)> {
+    let guard = lock_document(file).await;
     let Some(text) = text else {
-        return open_document(client, file).await;
+        return Ok((open_document(client, file).await?, guard));
     };
     let (opened, ready) = open_with_text(client, file, text.to_string()).await?;
     if opened == DocumentOpen::AlreadyOpen {
         client.change_text(&path_to_uri(file)?, text).await?;
     }
-    Ok(ready)
+    Ok((ready, guard))
 }
 
 /// [`open_document`]'s body for a caller that already holds the text: the
@@ -254,7 +277,7 @@ pub async fn query_references(
     );
 
     // Ensure the document is open in the LSP server
-    open_for_query(client, file, text).await?;
+    let (_, _document) = open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -334,7 +357,7 @@ pub async fn query_callers(
     )?;
 
     // Ensure the document is open in the LSP server
-    open_for_query(client, file, text).await?;
+    let (_, _document) = open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -674,7 +697,8 @@ pub async fn query_callees(
     // zero until the file changes, and nothing short of deleting the index
     // would ever revisit it. An error here leaves the file's record
     // incomplete, and the next build retries.
-    if open_for_query(client, file, text).await? == DocumentReady::AnalysisTimedOut {
+    let (ready, _document) = open_for_query(client, file, text).await?;
+    if ready == DocumentReady::AnalysisTimedOut {
         return Err(LspError::AnalysisNotReady {
             path: file.display().to_string(),
             language: "the language server".to_string(),
@@ -765,7 +789,7 @@ pub async fn query_implementations(
         )
     })?;
 
-    open_for_query(client, file, text).await?;
+    let (_, _document) = open_for_query(client, file, text).await?;
 
     let uri = path_to_uri(file)?;
     let lsp_position = crate::types::location_to_position(position);
@@ -1434,6 +1458,43 @@ mod tests {
                 "round {round}: the server holds {text}, the record disagrees"
             );
         }
+    }
+
+    /// While one query holds a document, another query with other text waits:
+    /// its `didChange` is not sent until the first query is done, so the
+    /// first query's requests see the text its position was taken from.
+    #[tokio::test]
+    async fn a_query_waits_for_the_query_that_holds_the_document() {
+        let mock = std::sync::Arc::new(MockLspClient::new_lenient());
+        mock.register_response::<References>(Some(vec![]));
+        let file = std::path::PathBuf::from("/ws/held.ts");
+        let (_, held) = open_for_query(mock.as_ref(), &file, Some("text A"))
+            .await
+            .unwrap();
+        let second = {
+            let (mock, file) = (mock.clone(), file.clone());
+            tokio::spawn(async move {
+                let location = Location::new(file.clone(), 1, 1);
+                query_references(mock.as_ref(), &file, &location, Some("text B"))
+                    .await
+                    .unwrap();
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let methods = |mock: &MockLspClient| -> Vec<String> {
+            mock.sent_notifications()
+                .into_iter()
+                .map(|(m, _)| m)
+                .collect()
+        };
+        assert_eq!(methods(&mock), ["textDocument/didOpen"], "B waits for A");
+        assert!(mock.sent_requests().is_empty(), "B sends no request yet");
+        drop(held);
+        second.await.unwrap();
+        assert_eq!(
+            methods(&mock),
+            ["textDocument/didOpen", "textDocument/didChange"]
+        );
     }
 
     /// Without the caller's text, a FIFO at the path is refused, not waited on.
