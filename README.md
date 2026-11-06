@@ -24,12 +24,12 @@ act-lite ships one binary, `act-lite`, with four commands:
 
 ## Languages
 
-act-lite supports 40 languages:
+act-lite supports 43 languages:
 
-Bash, C, C#, C++, CMake, CSS, Dart, Dockerfile, Elixir, Go, GraphQL,
+Astro, Bash, C, C#, C++, CMake, CSS, Dart, Dockerfile, Elixir, Go, GraphQL,
 HCL/Terraform, HTML, Java, JavaScript, JSX, JSON, JSONC, Julia, Kotlin, Lua,
 Make, Markdown, Nix, PHP, Protocol Buffers, Python, R, Ruby, Rust, Scala, SCSS,
-SQL, Swift, TOML, TSX, TypeScript, XML, YAML, Zig.
+SQL, Svelte, Swift, TOML, TSX, TypeScript, Vue, XML, YAML, Zig.
 
 A file in any other language is refused with an error that names its
 extension and lists these languages.
@@ -56,10 +56,17 @@ language it had, or stays unrecognized (`mytsconfig.json` is JSON,
 In `tsconfig.*.json` and `jsconfig.*.json`, `*` is one or more characters. Any
 other `.json` file, such as `.vscode/settings.json`, stays JSON.
 
+Vue, Svelte and Astro component files are recognized by their extension only:
+`.vue`, `.svelte` and `.astro`. SvelteKit route files (`+page.svelte`,
+`+layout.svelte`) and Astro pages (`src/pages/index.astro`) are found by that
+extension. Svelte modules (`x.svelte.ts`, `x.svelte.js`) stay TypeScript and
+JavaScript. `Counter.vue.bak`, `x.vuex` and `.mdx` files are unrecognized.
+
 ### Capabilities by language
 
 | Language | `skeleton`, `symbols` | `definition` | `references` | `callers`, `callees`, `implementations` | `patterns` | `hotspots` | `clones` |
 |---|---|---|---|---|---|---|---|
+| Astro | yes (structure and regions) | name-level (regions; HTML rules in templates) | name-level | needs a language server | yes (script regions) | yes (script regions) | yes (script regions) |
 | Bash | yes | tree-sitter | name-level | not available | yes | yes | yes |
 | C | yes | tree-sitter | language server | language server | yes | yes | yes |
 | C# | yes | tree-sitter | language server | language server | yes | yes | yes |
@@ -93,10 +100,12 @@ other `.json` file, such as `.vscode/settings.json`, stays JSON.
 | Scala | yes | tree-sitter | language server | language server | yes | yes | yes |
 | SCSS | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
 | SQL | yes | tree-sitter | language server | language server | not applicable | not applicable | not applicable |
+| Svelte | yes (structure and regions) | name-level (regions; HTML rules in templates) | name-level | needs a language server | yes (script regions) | yes (script regions) | yes (script regions) |
 | Swift | yes | tree-sitter | language server | language server | yes | yes | yes |
 | TOML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
 | TSX | yes | tree-sitter | language server | language server | yes | yes | yes |
 | TypeScript | yes | tree-sitter | language server | language server | yes | yes | yes |
+| Vue | yes (structure and regions) | name-level (regions; HTML rules in templates) | name-level | needs a language server | yes (script regions) | yes (script regions) | yes (script regions) |
 | XML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
 | YAML | yes | tree-sitter | name-level | not available | not applicable | not applicable | not applicable |
 | Zig | yes | tree-sitter; parameters are not declarations | name-level | not available | yes | yes | yes |
@@ -109,8 +118,9 @@ language with no server. A language with a server falls back to a name-level
 search when its server is not installed (see [`act-lite query`](#act-lite-query)).
 `not available` means that the query fails with an error that names the
 language and says that act-lite has no language server for it. The analyzer
-columns say `yes` for the 23 languages the analyzers support and
-`not applicable` for the 17 data, schema and markup formats (see
+columns say `yes` for the 23 languages the analyzers support,
+`yes (script regions)` for Vue, Svelte and Astro, and `not applicable` for the
+17 data, schema and markup formats (see
 [Code-health analyzers](#code-health-analyzers)).
 
 `definition` notes. JSON and JSONC keys are returned without their quotes. A
@@ -394,7 +404,7 @@ code-health analyzers `analyze_patterns`, `analyze_hotspots` and
 `analyze_clones` (see [Code-health analyzers](#code-health-analyzers)), and
 the dependency analyzers `graph`, `analyze_cycles`, `analyze_coupling` and
 `analyze_impact` (see [Dependency analyzers](#dependency-analyzers)).
-`status` lists the 40 languages and, for each language server, whether it is
+`status` lists the 43 languages and, for each language server, whether it is
 `ready` or `not_installed`. MCP `skeleton` omits `import` entries for every
 language. It keeps `include` entries: C and C++ `#include`, Make `include`,
 CMake `include()` and `add_subdirectory()`, R `source()` and Julia
@@ -608,11 +618,11 @@ Three analyzers measure code health: `analyze_patterns`
 (`act-lite analyze clones`). Each returns the result described under
 [Analysis results](#analysis-results), with `details` always present.
 
-**Languages.** The three analyzers support 23 programming languages: Bash, C,
-C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Julia, Kotlin, Lua, PHP,
-Python, R, Ruby, Rust, Scala, Swift, TSX, TypeScript and Zig. They do not
-support the 17 data, schema and markup formats: CMake, CSS, Dockerfile,
-GraphQL, HCL/Terraform, HTML, JSON, JSONC, Make, Markdown, Nix, Protocol
+**Languages.** The three analyzers support 26 programming languages: Astro,
+Bash, C, C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Julia, Kotlin, Lua,
+PHP, Python, R, Ruby, Rust, Scala, Svelte, Swift, TSX, TypeScript, Vue and Zig.
+They do not support the 17 data, schema and markup formats: CMake, CSS,
+Dockerfile, GraphQL, HCL/Terraform, HTML, JSON, JSONC, Make, Markdown, Nix, Protocol
 Buffers, SCSS, SQL, TOML, XML and YAML. Those files are listed in `coverage.languages` with
 `supported: false`; a scope that holds only such files gives `unsupported`, and
 a mixed scope is not made incomplete by them. A Bash function declares no
@@ -786,7 +796,7 @@ report which files import which other files, with the import statements as
 evidence. They do not report which symbols a file uses.
 
 **Languages.** The four analyzers support seven languages, in four families:
-JS/TS (JavaScript, JSX, TypeScript, TSX), Python, Go and Rust. The other 33
+JS/TS (JavaScript, JSX, TypeScript, TSX), Python, Go and Rust. The other 36
 languages are listed in `coverage.languages` with `supported: false`; a scope
 that holds only such files gives `unsupported`, and a mixed scope is not made
 incomplete by them. A language gets dependency resolution when its import
@@ -837,6 +847,9 @@ the network.
 | R | `source()`, `library()` | no: `source` is relative to the working directory; `library` names packages | no | No static rule. |
 | Julia | `include("x.jl")`, `using`, `import` | `include` yes (relative to the file); `using` names packages | no | Later candidate. |
 | Nix | `import ./x.nix`, `<nixpkgs>` | yes for a path literal; `<…>` uses `NIX_PATH` | no | Later candidate. |
+| Vue | `import`, `export … from`, `import()` and `require()` inside script regions | yes | no | Later candidate: dependencies between component files are outside the initial component support. |
+| Svelte | `import`, `export … from`, `import()` and `require()` inside script regions | yes | no | Later candidate: dependencies between component files are outside the initial component support. |
+| Astro | `import`, `export … from`, `import()` and `require()` inside script regions | yes | no | Later candidate: dependencies between component files are outside the initial component support. |
 
 **Parameters.** Each analyzer takes the shared parameters. `paths` is the
 *scope*: the files whose relationships are read. Only files in scope can be
@@ -1537,7 +1550,7 @@ its name matches a pattern of its language:
 | Lua | `*_spec.lua`, `*_test.lua` |
 | Bash | `*_test.sh`, `test_*.sh` |
 | HCL/Terraform | `*.tftest.hcl` |
-| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile, JSONC, XML, GraphQL, Protocol Buffers, Make, CMake, Zig, R, Julia, Nix | the directory rule only |
+| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile, JSONC, XML, GraphQL, Protocol Buffers, Make, CMake, Zig, R, Julia, Nix, Vue, Svelte, Astro | the directory rule only |
 
 R `testthat` reads test files only from `tests/testthat/`, which the directory
 rule covers; `R/test_x.R` is package source. Julia's `test/runtests.jl` is
@@ -1574,6 +1587,7 @@ covered by the directory rule.
 | Rust, other `cfg` forms | `#![cfg(test)]` as an inner attribute of a file; `#[cfg(all(test, …))]`; `#[cfg(any(test, …))]`; `#[cfg_attr(test, …)]` | A file with `#![cfg(test)]` is a test file (whole file). An item with `cfg(all(test, …))` is a test item, like `cfg(test)`. `cfg(any(test, …))` and `cfg_attr(test, …)` are not test items: the code is also compiled outside tests. |
 | Rust, out-of-line | `#[cfg(test)] mod tests;` loads `tests.rs` (or `tests/mod.rs`) beside the module | The declaration's range is removed and reported. The loaded file is excluded only by the directory rule (`tests/mod.rs`); a `src/tests.rs` is analyzed as source. |
 | JavaScript/TypeScript | In-source tests (for example `if (import.meta.vitest)`) | Not detected. Not removed. |
+| Vue, Svelte, Astro | In-source tests in a script region (for example `if (import.meta.vitest)`) | Not detected. Not removed. |
 | All other languages | No embedded-test convention is detected | — |
 
 A parse error inside a removed region is not reported in `parse_failures`.

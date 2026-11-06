@@ -872,7 +872,8 @@ mod tests {
         let mut missing = Vec::new();
         let mut covered = 0;
         for grammar in Grammar::all() {
-            if !function_model::supports(grammar) {
+            // A component entry's literals are those of its regions' languages.
+            if !function_model::supports(grammar) || grammar.is_component() {
                 continue;
             }
             covered += 1;

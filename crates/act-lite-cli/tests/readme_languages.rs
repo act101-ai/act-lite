@@ -102,6 +102,10 @@ const ANALYZED: [&str; 23] = [
     "Zig",
 ];
 
+/// The component entries: the analyzers read the code of their script
+/// regions.
+const COMPONENTS: [&str; 3] = ["Astro", "Svelte", "Vue"];
+
 /// The 19 languages with a configured language server.
 const SERVED: [&str; 19] = [
     "C",
@@ -165,8 +169,8 @@ fn the_language_list_is_the_status_list() {
     let blocks = blocks();
     let at = blocks
         .iter()
-        .position(|b| b == "act-lite supports 40 languages:")
-        .expect("README says `act-lite supports 40 languages:`");
+        .position(|b| b == "act-lite supports 43 languages:")
+        .expect("README says `act-lite supports 43 languages:`");
     let mut listed: Vec<String> = blocks[at + 1]
         .trim_end_matches('.')
         .split(", ")
@@ -185,6 +189,22 @@ fn the_capability_table_has_one_true_row_per_language() {
     for row in &rows {
         let name = row[0].as_str();
         assert_eq!(row.len(), 8, "{name}: {row:?}");
+        if COMPONENTS.contains(&name) {
+            assert_eq!(
+                row[1..],
+                [
+                    "yes (structure and regions)",
+                    "name-level (regions; HTML rules in templates)",
+                    "name-level",
+                    "needs a language server",
+                    "yes (script regions)",
+                    "yes (script regions)",
+                    "yes (script regions)",
+                ],
+                "{name}"
+            );
+            continue;
+        }
         assert_eq!(row[1], "yes", "{name} skeleton and symbols");
         assert!(row[2].starts_with("tree-sitter"), "{name} definition");
         let served = SERVED.contains(&name);
@@ -220,6 +240,16 @@ fn the_capability_table_has_one_true_row_per_language() {
     assert!(note("Nix").contains("parameters") && note("Nix").contains("dotted"));
     assert!(note("Julia").contains("dotted"));
     assert!(note("CMake").contains("case-sensitive"));
+}
+
+#[test]
+fn component_files_are_recognized_by_their_extension_only() {
+    must_state(&[
+        "Vue, Svelte and Astro component files are recognized by their extension only: `.vue`, `.svelte` and `.astro`.",
+        "SvelteKit route files (`+page.svelte`, `+layout.svelte`) and Astro pages (`src/pages/index.astro`) are found by that extension.",
+        "Svelte modules (`x.svelte.ts`, `x.svelte.js`) stay TypeScript and JavaScript.",
+        "`Counter.vue.bak`, `x.vuex` and `.mdx` files are unrecognized.",
+    ]);
 }
 
 #[test]
@@ -395,7 +425,7 @@ fn reference_walks_and_evidence_are_stated() {
         "For the ten added languages every `references` answer is a name match (`\"source\": \"tree-sitter\"`), and none of them has a language server: `callers`, `callees` and `implementations` fail for them, and `status` lists no server for them.",
         "MCP `skeleton` omits `import` entries for every language. It keeps `include` entries: C and C++ `#include`, Make `include`, CMake `include()` and `add_subdirectory()`, R `source()` and Julia `include()`. `act-lite query skeleton` and `symbols-batch` list both.",
         "`repo-outline` counts every recognized file against `--max-files`, so the files of the added languages (`.svg`, `.xml`, `Makefile`, and others) use part of the budget: a truncated outline of a repository that has them lists fewer of its other files.",
-        "`status` lists the 40 languages",
+        "`status` lists the 43 languages",
     ]);
     assert!(
         !readme().contains("every same-language file"),
@@ -406,7 +436,8 @@ fn reference_walks_and_evidence_are_stated() {
 #[test]
 fn test_files_and_embedded_tests_of_the_added_languages_are_stated() {
     must_state(&[
-        "| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile, JSONC, XML, GraphQL, Protocol Buffers, Make, CMake, Zig, R, Julia, Nix | the directory rule only |",
+        "| Rust, CSS, SCSS, HTML, JSON, YAML, TOML, Markdown, SQL, Dockerfile, JSONC, XML, GraphQL, Protocol Buffers, Make, CMake, Zig, R, Julia, Nix, Vue, Svelte, Astro | the directory rule only |",
+        "| Vue, Svelte, Astro | In-source tests in a script region (for example `if (import.meta.vitest)`) | Not detected. Not removed. |",
         "R `testthat` reads test files only from `tests/testthat/`, which the directory rule covers; `R/test_x.R` is package source.",
         "| Zig | A `test` declaration (`test \"name\" { … }`, `test name { … }`, `test { … }`) |",
         "| Julia | `@test` and `@testset` in source files | Not detected. Not removed. |",
@@ -417,7 +448,7 @@ fn test_files_and_embedded_tests_of_the_added_languages_are_stated() {
 #[test]
 fn the_analyzer_statements_follow_zig_r_and_julia() {
     must_state(&[
-        "The three analyzers support 23 programming languages: Bash, C, C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Julia, Kotlin, Lua, PHP, Python, R, Ruby, Rust, Scala, Swift, TSX, TypeScript and Zig.",
+        "The three analyzers support 26 programming languages: Astro, Bash, C, C++, C#, Dart, Elixir, Go, Java, JavaScript, JSX, Julia, Kotlin, Lua, PHP, Python, R, Ruby, Rust, Scala, Svelte, Swift, TSX, TypeScript, Vue and Zig.",
     ]);
     must_state(&[
         "They do not support the 17 data, schema and markup formats: CMake, CSS, Dockerfile, GraphQL, HCL/Terraform, HTML, JSON, JSONC, Make, Markdown, Nix, Protocol Buffers, SCSS, SQL, TOML, XML and YAML.",
@@ -513,13 +544,14 @@ fn the_examples_for_the_added_languages_run() {
 }
 
 #[test]
-fn the_plugin_and_marketplace_descriptions_say_forty_languages() {
+fn the_plugin_and_marketplace_descriptions_say_forty_three_languages() {
     for rel in [
         "plugin/.claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json",
     ] {
         let text = read(rel);
-        assert!(text.contains("across 40 languages"), "{rel}");
+        assert!(text.contains("across 43 languages"), "{rel}");
+        assert!(!text.contains("40 languages"), "{rel}");
         assert!(!text.contains("30 languages"), "{rel}");
     }
 }
@@ -661,7 +693,8 @@ fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 /// One small file for each language `status` lists: `(language, path, content)`.
-const ONE_FILE_EACH: [(&str, &str, &str); 40] = [
+const ONE_FILE_EACH: [(&str, &str, &str); 43] = [
+    ("Astro", "a.astro", "---\n---\n<p></p>\n"),
     ("Bash", "a.sh", "f() { :; }\n"),
     ("C", "a.c", "int f(void) { return 0; }\n"),
     ("C#", "a.cs", "class A { void F() {} }\n"),
@@ -695,10 +728,12 @@ const ONE_FILE_EACH: [(&str, &str, &str); 40] = [
     ("Scala", "a.scala", "object A\n"),
     ("SCSS", "a.scss", "a { b: c; }\n"),
     ("SQL", "a.sql", "SELECT 1;\n"),
+    ("Svelte", "a.svelte", "<p></p>\n"),
     ("Swift", "a.swift", "func f() {}\n"),
     ("TOML", "a.toml", "a = 1\n"),
     ("TSX", "a.tsx", "function f() {}\n"),
     ("TypeScript", "a.ts", "function f() {}\n"),
+    ("Vue", "a.vue", "<template><p></p></template>\n"),
     ("XML", "a.xml", "<a/>\n"),
     ("YAML", "a.yaml", "a: 1\n"),
     ("Zig", "a.zig", "fn f() void {}\n"),
@@ -742,7 +777,7 @@ fn the_analyzer_language_lists_are_what_the_analyzers_report() {
 
     let patterns = cli_json(ws.path(), &["analyze", "patterns"]);
     let coverage = patterns["coverage"]["languages"].as_array().unwrap();
-    assert_eq!(coverage.len(), 40, "{patterns}");
+    assert_eq!(coverage.len(), 43, "{patterns}");
     let reported = |supported: bool| -> BTreeSet<String> {
         coverage
             .iter()
@@ -752,7 +787,7 @@ fn the_analyzer_language_lists_are_what_the_analyzers_report() {
             .collect()
     };
     let (supported, unsupported) = (reported(true), reported(false));
-    assert_eq!((supported.len(), unsupported.len()), (23, 17), "{patterns}");
+    assert_eq!((supported.len(), unsupported.len()), (26, 17), "{patterns}");
 
     let readme = readme();
     let (count, listed) = analyzer_list(
@@ -761,7 +796,7 @@ fn the_analyzer_language_lists_are_what_the_analyzers_report() {
         " programming languages: ",
         ". They do not support",
     );
-    assert_eq!((count, listed.len()), (23, 23), "{listed:?}");
+    assert_eq!((count, listed.len()), (26, 26), "{listed:?}");
     assert_eq!(listed, supported);
     let (count, listed) = analyzer_list(
         &readme,
@@ -771,7 +806,14 @@ fn the_analyzer_language_lists_are_what_the_analyzers_report() {
     );
     assert_eq!((count, listed.len()), (17, 17), "{listed:?}");
     assert_eq!(listed, unsupported);
-    assert_eq!(supported, ANALYZED.iter().map(|l| l.to_string()).collect());
+    assert_eq!(
+        supported,
+        ANALYZED
+            .iter()
+            .chain(&COMPONENTS)
+            .map(|l| l.to_string())
+            .collect()
+    );
 
     let mut mcp = Mcp::start(ws.path());
     let result = mcp.call("analyze_hotspots", json!({})).unwrap();

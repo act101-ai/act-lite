@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "act-lite-marketplace",
-  "description": "act-lite: AST-aware code queries, code-health and dependency analysis for AI agents across 40 languages.",
+  "description": "act-lite: AST-aware code queries, code-health and dependency analysis for AI agents across 43 languages.",
   "owner": {
     "name": "Kage Martin",
     "url": "https://github.com/act101-ai"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "act-lite",
-      "description": "AST-aware code queries, code-health and dependency analysis for AI agents across 40 languages: skeletons, symbols, repository outlines, definitions, references and callers; structural patterns, hotspots and duplicated code; and file dependency graphs, cycles, coupling and impact, over MCP.",
+      "description": "AST-aware code queries, code-health and dependency analysis for AI agents across 43 languages: skeletons, symbols, repository outlines, definitions, references and callers; structural patterns, hotspots and duplicated code; and file dependency graphs, cycles, coupling and impact, over MCP.",
       "version": "1.0.1",
       "author": {
         "name": "Kage Martin",
