@@ -1,6 +1,7 @@
 //! `analyze_cycles`: the strongly connected components of the file graph,
 //! each with a shortest witness cycle through its first file.
-//! Every case runs the analyzer on a synthetic workspace.
+//! Every case runs the built binary on a synthetic workspace; the cases that
+//! need a cancellation token run on the library.
 
 use act_lite_cli::analyze::cycles::{CyclesAnalyzer, witness};
 use act_lite_cli::analyze::deps::{Edge, Evidence, supports};
@@ -29,20 +30,44 @@ fn workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 fn request_for(root: &Path, paths: &[String]) -> Request {
-    request_limited(root, paths, 100)
+    Request::new(root, paths, &[], &[], Includes::default(), 100).unwrap()
 }
 
-fn request_limited(root: &Path, paths: &[String], limit: u32) -> Request {
-    Request::new(root, paths, &[], &[], Includes::default(), limit).unwrap()
+/// Runs the binary as `act-lite --workspace <root> analyze <name> <args>` with
+/// an empty configuration directory. Exit 0 gives the parsed stdout; exit 1
+/// gives the message of the error frame, after the frame is checked.
+fn binary(root: &Path, name: &str, args: &[String]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", name])
+        .args(args)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    match out.status.code() {
+        Some(0) => Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value")),
+        Some(1) => {
+            assert!(out.stdout.is_empty(), "stdout of an error");
+            let v: Value = serde_json::from_str(&stderr).expect("stderr is one JSON value");
+            let message = v["error"]["message"].as_str().unwrap().to_string();
+            let frame = json!({"error": {"message": message, "chain": []}});
+            assert_eq!(stderr, format!("{frame}\n"));
+            Err(message)
+        }
+        code => panic!("exit status {code:?}: {stderr}"),
+    }
 }
 
-fn run_request(request: &Request) -> Value {
-    let envelope = run(&CyclesAnalyzer, request, &CancellationToken::new()).unwrap();
-    serde_json::to_value(envelope).unwrap()
+fn cycles_with(root: &Path, args: &[String]) -> Value {
+    binary(root, "cycles", args).unwrap_or_else(|e| panic!("unexpected error: {e}"))
 }
 
 fn cycles_in(root: &Path, paths: &[String]) -> Value {
-    run_request(&request_for(root, paths))
+    cycles_with(root, paths)
 }
 
 fn cycles(root: &Path) -> Value {
@@ -209,7 +234,7 @@ fn the_limit_cuts_findings_but_not_the_totals() {
         ("src/d.ts", "import './e';\n"),
         ("src/e.ts", "import './c';\n"),
     ]);
-    let out = run_request(&request_limited(ws.path(), &[], 1));
+    let out = cycles_with(ws.path(), &["--limit".to_string(), "1".to_string()]);
     let findings = out["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["file"], "src/c.ts");

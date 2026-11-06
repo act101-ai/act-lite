@@ -1,4 +1,6 @@
-//! Acceptance tests of the `impact` analyzer, run through the library runner.
+//! Acceptance tests of the `impact` analyzer, run through the built binary
+//! (`act-lite --workspace <dir> analyze impact ...`); the cancellation checks
+//! that need a token run on the library.
 //! Every workspace is synthetic and built in a temporary directory; expected
 //! dependents, depths and chains come from the fixture sources and the
 //! traversal rules, not from the analyzer's output.
@@ -100,20 +102,49 @@ fn call<'a>(focus: &'a [&'a str]) -> Call<'a> {
     }
 }
 
+/// Runs the binary as `act-lite --workspace <root> analyze <name> <args>` with
+/// an empty configuration directory. Exit 0 gives the parsed stdout; exit 1
+/// gives the message of the error frame, after the frame is checked.
+fn binary(root: &Path, name: &str, args: &[String]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", name])
+        .args(args)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    match out.status.code() {
+        Some(0) => Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value")),
+        Some(1) => {
+            assert!(out.stdout.is_empty(), "stdout of an error");
+            let v: Value = serde_json::from_str(&stderr).expect("stderr is one JSON value");
+            let message = v["error"]["message"].as_str().unwrap().to_string();
+            let frame = json!({"error": {"message": message, "chain": []}});
+            assert_eq!(stderr, format!("{frame}\n"));
+            Err(message)
+        }
+        code => panic!("exit status {code:?}: {stderr}"),
+    }
+}
+
 /// Runs the `impact` analysis and returns the envelope, or the error text.
 fn impact_with(root: &Path, c: &Call) -> Result<Value, String> {
-    let paths: Vec<String> = c.paths.iter().map(|s| s.to_string()).collect();
-    let focus: Vec<String> = c.focus.iter().map(|s| s.to_string()).collect();
-    let includes = Includes {
-        tests: c.include_tests,
-        ..Includes::default()
-    };
-    let request =
-        Request::new(root, &paths, &[], &[], includes, c.limit).map_err(|e| e.to_string())?;
-    let analyzer = ImpactAnalyzer::new(&request, &focus, c.max_depth).map_err(|e| e.to_string())?;
-    let envelope =
-        run(&analyzer, &request, &CancellationToken::new()).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(envelope).unwrap())
+    let mut args: Vec<String> = c.paths.iter().map(|s| s.to_string()).collect();
+    for f in c.focus {
+        args.extend(["--focus".to_string(), f.to_string()]);
+    }
+    if let Some(n) = c.max_depth {
+        args.extend(["--max-depth".to_string(), n.to_string()]);
+    }
+    if c.include_tests {
+        args.push("--include-tests".to_string());
+    }
+    args.extend(["--limit".to_string(), c.limit.to_string()]);
+    binary(root, "impact", &args)
 }
 
 fn impact(root: &Path, focus: &[&str]) -> Result<Value, String> {

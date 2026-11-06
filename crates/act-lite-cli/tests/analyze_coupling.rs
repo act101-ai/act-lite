@@ -1,6 +1,7 @@
 //! `analyze_coupling`: per file, the number of files it depends on and the
 //! number of analyzed files that depend on it, with the instability they give.
-//! Every case runs the analyzer on a synthetic workspace.
+//! Every case runs the built binary on a synthetic workspace; the cases that
+//! need a cancellation token run on the library.
 
 use act_lite_cli::analyze::coupling::CouplingAnalyzer;
 use act_lite_cli::analyze::deps::supports;
@@ -29,10 +30,38 @@ fn request(root: &Path) -> Request {
     Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap()
 }
 
-/// The result of the analyzer on `root`, as the JSON it serializes to.
+/// Runs the binary as `act-lite --workspace <root> analyze <name> <args>` with
+/// an empty configuration directory. Exit 0 gives the parsed stdout; exit 1
+/// gives the message of the error frame, after the frame is checked.
+fn binary(root: &Path, name: &str, args: &[String]) -> Result<Value, String> {
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", name])
+        .args(args)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    match out.status.code() {
+        Some(0) => Ok(serde_json::from_slice(&out.stdout).expect("stdout is one JSON value")),
+        Some(1) => {
+            assert!(out.stdout.is_empty(), "stdout of an error");
+            let v: Value = serde_json::from_str(&stderr).expect("stderr is one JSON value");
+            let message = v["error"]["message"].as_str().unwrap().to_string();
+            let frame = json!({"error": {"message": message, "chain": []}});
+            assert_eq!(stderr, format!("{frame}\n"));
+            Err(message)
+        }
+        code => panic!("exit status {code:?}: {stderr}"),
+    }
+}
+
+/// The stdout of `act-lite analyze coupling` on `root`, parsed.
 fn coupling(root: &Path) -> Value {
-    let envelope = run(&CouplingAnalyzer, &request(root), &CancellationToken::new()).unwrap();
-    serde_json::to_value(envelope).unwrap()
+    binary(root, "coupling", &[]).unwrap_or_else(|e| panic!("unexpected error: {e}"))
 }
 
 /// One finding as (file, fan_in, fan_out, degree, instability, external, unresolved).
@@ -270,13 +299,17 @@ fn a_token_cancelled_before_the_run_gives_the_cancelled_error() {
 #[test]
 fn instability_is_serialized_with_three_decimals_at_most_and_no_trailing_zeros() {
     let ws = workspace(&ts_fixture());
-    let envelope = run(
-        &CouplingAnalyzer,
-        &request(ws.path()),
-        &CancellationToken::new(),
-    )
-    .unwrap();
-    let text = serde_json::to_string(&envelope).unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .env_remove("ACT_LITE_DISABLE_LSP")
+        .arg("--workspace")
+        .arg(ws.path())
+        .args(["analyze", "coupling"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
     for expected in [
         r#""instability":0.833"#,
         r#""instability":0.333"#,
