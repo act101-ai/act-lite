@@ -131,3 +131,27 @@ fn deep_nesting_with_a_syntax_error_does_not_kill_the_server() {
         assert!(status.success(), "{analyzer}: {status:?}");
     }
 }
+
+#[test]
+fn deeply_nested_cfg_predicates_do_not_kill_the_server() {
+    // `all(all(…all(test)…))` nested DEPTH times, as an outer and as an inner
+    // attribute: the `cfg(test)` check reads through every level.
+    let predicate = format!("{}test{}", "all(".repeat(DEPTH), ")".repeat(DEPTH));
+    for source in [
+        format!("#[cfg({predicate})]\nfn t() {{}}\nfn f() {{}}\n"),
+        format!("#![cfg({predicate})]\nfn f() {{}}\n"),
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join("src")).unwrap();
+        std::fs::write(ws.path().join("src/deep.rs"), source).unwrap();
+        for analyzer in ["analyze_patterns", "analyze_hotspots", "analyze_clones"] {
+            let (reply, status) = call_once(ws.path(), analyzer, json!({}));
+            assert!(
+                reply.is_some(),
+                "{analyzer}: no reply; the server died with signal {:?} (status {status:?})",
+                status.signal()
+            );
+            assert!(status.success(), "{analyzer}: {status:?}");
+        }
+    }
+}

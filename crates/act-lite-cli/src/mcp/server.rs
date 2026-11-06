@@ -539,7 +539,14 @@ impl ActLiteServer {
 
         let mut lsp_error = None;
         if let Some(client) = self.lsp_pool.get_query_client(grammar).await {
-            match act_lite_lsp::query_references(client.as_ref(), &path, &location).await {
+            match act_lite_lsp::query_references(
+                client.as_ref(),
+                &path,
+                &location,
+                Some(source.content()),
+            )
+            .await
+            {
                 Ok(refs) => {
                     let response = serde_json::json!({
                         "symbol": p.symbol,
@@ -654,23 +661,24 @@ impl ActLiteServer {
                     None,
                 )
             })?;
-        let callers = act_lite_lsp::query_callers(client.as_ref(), &path, &location)
-            .await
-            .map_err(|e| match e {
-                // Nothing was sent: the server does not offer the operation,
-                // a request the tool cannot serve, as when none is available.
-                act_lite_lsp::LspError::NotAdvertised { .. } => {
-                    McpError::invalid_request(e.to_string(), None)
-                }
-                e => McpError::internal_error(
-                    format!(
-                        "the {} server failed to answer callers of '{}': {e}",
-                        lsp_server_name(grammar),
-                        p.symbol
+        let callers =
+            act_lite_lsp::query_callers(client.as_ref(), &path, &location, Some(source.content()))
+                .await
+                .map_err(|e| match e {
+                    // Nothing was sent: the server does not offer the operation,
+                    // a request the tool cannot serve, as when none is available.
+                    act_lite_lsp::LspError::NotAdvertised { .. } => {
+                        McpError::invalid_request(e.to_string(), None)
+                    }
+                    e => McpError::internal_error(
+                        format!(
+                            "the {} server failed to answer callers of '{}': {e}",
+                            lsp_server_name(grammar),
+                            p.symbol
+                        ),
+                        None,
                     ),
-                    None,
-                ),
-            })?;
+                })?;
         let response = serde_json::json!({
             "symbol": p.symbol,
             "resolved_by": lsp_resolved_by(grammar),

@@ -1879,7 +1879,7 @@ mod tests {
         let querying = Arc::clone(&client);
         let query = tokio::spawn(async move {
             let position = act_lite_core::Location::new(file.clone(), 1, 6);
-            let _ = crate::capabilities::query_references(&*querying, &file, &position).await;
+            let _ = crate::capabilities::query_references(&*querying, &file, &position, None).await;
         });
 
         let opened = match rx.recv().await {
@@ -1959,7 +1959,8 @@ mod tests {
         let query_file = file.clone();
         let query = tokio::spawn(async move {
             let position = act_lite_core::Location::new(query_file.clone(), 2, 7);
-            let _ = crate::capabilities::query_references(&*querying, &query_file, &position).await;
+            let _ = crate::capabilities::query_references(&*querying, &query_file, &position, None)
+                .await;
         });
 
         let opened = match rx.recv().await {

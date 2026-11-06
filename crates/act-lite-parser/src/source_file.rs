@@ -145,6 +145,14 @@ impl SourceFile {
     }
 }
 
+/// The text of the regular file at `path`. On unix a FIFO is not waited on,
+/// and a path that is not a regular file is refused.
+pub fn read_regular_text(path: &Path) -> io::Result<String> {
+    let mut text = String::new();
+    open_regular(path)?.read_to_string(&mut text)?;
+    Ok(text)
+}
+
 /// Opens `path` for reading. On unix a FIFO is not waited on. A handle that
 /// is not a regular file is refused.
 fn open_regular(path: &Path) -> io::Result<File> {

@@ -126,8 +126,13 @@ pub async fn execute(
                 let pool = LspPool::new(workspace_root.clone());
                 if let Some(client) = pool.get_query_client(source.grammar()).await {
                     let location = Location::new(file.clone(), *line, *column);
-                    if let Ok(lsp_refs) =
-                        act_lite_lsp::query_references(client.as_ref(), file, &location).await
+                    if let Ok(lsp_refs) = act_lite_lsp::query_references(
+                        client.as_ref(),
+                        file,
+                        &location,
+                        Some(source.content()),
+                    )
+                    .await
                     {
                         let result = lsp_references_result(lsp_refs.ranges);
                         output(&result, format)?;
@@ -179,10 +184,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callers").await?;
-            let position = find_symbol_position(file, name, workspace)?;
-            let result = act_lite_lsp::query_callers(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query callers of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_callers(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query callers of '{}'", name))?;
             let qr = QueryResult::Callers {
                 callers: result.callers,
             };
@@ -194,10 +205,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callees").await?;
-            let position = find_symbol_position(file, name, workspace)?;
-            let result = act_lite_lsp::query_callees(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query callees of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_callees(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query callees of '{}'", name))?;
             let qr = QueryResult::Callees {
                 callees: result.callees,
             };
@@ -209,10 +226,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "implementations").await?;
-            let position = find_symbol_position(file, name, workspace)?;
-            let result = act_lite_lsp::query_implementations(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query implementations of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_implementations(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query implementations of '{}'", name))?;
             let qr = QueryResult::Implementations {
                 locations: result.locations,
             };
@@ -447,12 +470,11 @@ pub(crate) fn lsp_install_hint_once(grammar: Grammar, pool: &LspPool) -> Option<
 }
 
 /// Find a symbol's position in a file by name using tree-sitter.
-fn find_symbol_position(file: &Path, name: &str, workspace: Option<&Path>) -> Result<Location> {
-    let source = load_source(file, workspace)?;
-    let result = act_lite_parser::execute_symbol(&source, name)?;
+fn find_symbol_position(source: &act_lite_parser::SourceFile, name: &str) -> Result<Location> {
+    let result = act_lite_parser::execute_symbol(source, name)?;
     match result {
         QueryResult::Symbol(sym) => Ok(sym.symbol.range().start().clone()),
-        _ => bail!("symbol '{}' not found in {}", name, file.display()),
+        _ => bail!("symbol '{}' not found in {}", name, source.path().display()),
     }
 }
 
@@ -1268,7 +1290,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function myFunc() { return 1; }").unwrap();
-        let result = find_symbol_position(&file_path, "myFunc", None);
+        let source = act_lite_parser::SourceFile::load(&file_path).unwrap();
+        let result = find_symbol_position(&source, "myFunc");
         assert!(
             result.is_ok(),
             "find_symbol_position should succeed: {:?}",
@@ -1281,13 +1304,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function foo() {}").unwrap();
-        let result = find_symbol_position(&file_path, "nonexistent", None);
+        let source = act_lite_parser::SourceFile::load(&file_path).unwrap();
+        let result = find_symbol_position(&source, "nonexistent");
         assert!(result.is_err(), "a missing symbol has no position");
     }
 
     #[test]
     fn test_find_symbol_position_file_not_found() {
-        let result = find_symbol_position(Path::new("/nonexistent/file.ts"), "foo", None);
+        let result = load_source(Path::new("/nonexistent/file.ts"), None);
         assert!(result.is_err());
     }
 

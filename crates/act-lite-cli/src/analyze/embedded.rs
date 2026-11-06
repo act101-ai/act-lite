@@ -171,27 +171,39 @@ fn is_comment(kind: &str) -> bool {
     kind == "line_comment" || kind == "block_comment"
 }
 
+/// Whether `list`, the arguments of `all`, holds `test` directly or inside a
+/// nested `all(…)`. The nested lists are read from a heap stack, so the
+/// nesting depth does not grow the thread stack.
 fn list_has_test(list: Node, content: &str) -> bool {
-    let mut cursor = list.walk();
-    let items: Vec<Node> = list
-        .named_children(&mut cursor)
-        .filter(|n| !is_comment(n.kind()))
-        .collect();
-    items.iter().enumerate().any(|(i, item)| match item.kind() {
-        "identifier" => {
-            text(*item, content) == "test"
-                && items
-                    .get(i + 1)
-                    .is_none_or(|next| next.kind() != "token_tree")
+    let mut lists = vec![list];
+    while let Some(list) = lists.pop() {
+        let mut cursor = list.walk();
+        let items: Vec<Node> = list
+            .named_children(&mut cursor)
+            .filter(|n| !is_comment(n.kind()))
+            .collect();
+        for (i, item) in items.iter().enumerate() {
+            match item.kind() {
+                "identifier"
+                    if text(*item, content) == "test"
+                        && items
+                            .get(i + 1)
+                            .is_none_or(|next| next.kind() != "token_tree") =>
+                {
+                    return true;
+                }
+                "token_tree"
+                    if i > 0
+                        && items[i - 1].kind() == "identifier"
+                        && text(items[i - 1], content) == "all" =>
+                {
+                    lists.push(*item);
+                }
+                _ => {}
+            }
         }
-        "token_tree" => {
-            i > 0
-                && items[i - 1].kind() == "identifier"
-                && text(items[i - 1], content) == "all"
-                && list_has_test(*item, content)
-        }
-        _ => false,
-    })
+    }
+    false
 }
 
 fn text<'a>(node: Node, content: &'a str) -> &'a str {
