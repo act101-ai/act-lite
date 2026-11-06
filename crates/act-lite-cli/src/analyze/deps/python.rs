@@ -348,8 +348,14 @@ struct PyCache {
 
 /// Where a dotted name was found.
 enum Found {
-    /// A package's `__init__.py` or a module file.
+    /// A module file.
     File(String),
+    /// A regular package: its directory as written, where its submodules
+    /// are looked up, and its `__init__.py` by its own path.
+    Package {
+        dir: String,
+        init: String,
+    },
     /// A namespace package directory.
     Namespace(String),
     /// A symlink on the way leads out of the workspace.
@@ -380,7 +386,9 @@ fn import(cx: &mut ResolveCx<'_>, file: &str, dotted: &str) -> Outcome {
     let segments: Vec<&str> = dotted.split('.').collect();
     match locate(cx, file, &segments) {
         Err(outcome) => outcome,
-        Ok((_, Found::File(target))) => Outcome::Resolved(vec![target]),
+        Ok((_, Found::File(target) | Found::Package { init: target, .. })) => {
+            Outcome::Resolved(vec![target])
+        }
         Ok((_, Found::Namespace(_))) => Outcome::Resolved(Vec::new()),
         Ok((root, Found::Missing)) => {
             Outcome::Unresolved(format!("{dotted} not found under {}", shown(&root)))
@@ -417,10 +425,8 @@ fn from_import(cx: &mut ResolveCx<'_>, file: &str, module: &str, name: &str) -> 
 /// the file when it has a wildcard import.
 fn imported_from(cx: &mut ResolveCx<'_>, module: &str, found: Found, name: &str) -> Outcome {
     let (own_file, package_dir) = match found {
-        Found::File(path) => {
-            let dir = is_init(&path).then(|| parent(&path).to_string());
-            (Some(path), dir)
-        }
+        Found::File(path) => (Some(path), None),
+        Found::Package { dir, init } => (Some(init), Some(dir)),
         Found::Namespace(dir) => (None, Some(dir)),
         _ => (None, None),
     };
@@ -449,7 +455,7 @@ fn imported_from(cx: &mut ResolveCx<'_>, module: &str, found: Found, name: &str)
     }
     let mut targets = Vec::new();
     match submodule {
-        Found::File(path) => targets.push(path),
+        Found::File(path) | Found::Package { init: path, .. } => targets.push(path),
         Found::Namespace(_) => {}
         Found::Missing if !glob => {
             let file = match (&own_file, &package_dir) {
@@ -492,7 +498,10 @@ fn relative(cx: &mut ResolveCx<'_>, file: &str, module: &str) -> Result<Found, O
     }
     if rest.is_empty() {
         return Ok(match cx.probe_file(&join(base, "__init__.py")) {
-            Probe::File(path) => Found::File(path),
+            Probe::File(init) => Found::Package {
+                dir: base.to_string(),
+                init,
+            },
             _ => Found::Namespace(base.to_string()),
         });
     }
@@ -522,7 +531,9 @@ fn locate(
     let first = &segments[..1];
     let mut chosen = None;
     for root in &roots {
-        if let Found::File(_) | Found::Outside | Found::Blocked(_) = find(cx, root, first) {
+        if let Found::File(_) | Found::Package { .. } | Found::Outside | Found::Blocked(_) =
+            find(cx, root, first)
+        {
             chosen = Some(root.clone());
             break;
         }
@@ -721,7 +732,7 @@ fn find(cx: &mut ResolveCx<'_>, base: &str, segments: &[&str]) -> Found {
         path = join(&path, segment);
         let last = i + 1 == segments.len();
         match cx.probe_file(&join(&path, "__init__.py")) {
-            Probe::File(target) if last => return Found::File(target),
+            Probe::File(init) if last => return Found::Package { dir: path, init },
             Probe::File(_) => continue,
             Probe::Outside => return Found::Outside,
             _ => {}

@@ -443,6 +443,25 @@ fn a_python_module_file_before_the_last_segment_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_python_package_with_a_symlinked_initializer_finds_its_submodule_in_its_own_directory() {
+    let ws = workspace();
+    write(ws.path(), "other/__init__.py", "");
+    write(ws.path(), "other/n.py", "");
+    write(ws.path(), "pkg/n.py", "import main\n");
+    write(ws.path(), "main.py", "from pkg import n\n");
+    std::os::unix::fs::symlink("../other/__init__.py", ws.path().join("pkg/__init__.py")).unwrap();
+    let v = graph(ws.path(), &[]);
+    assert_eq!(
+        edges(&v),
+        pairs(&[("main.py", "pkg/n.py"), ("pkg/n.py", "main.py")])
+    );
+    let cycles = analyze(ws.path(), "cycles", &[]);
+    assert_eq!(cycles["findings"][0]["members_total"], 2);
+    assert_eq!(cycles["findings"][0]["members"][0]["file"], "main.py");
+    assert_eq!(cycles["findings"][0]["members"][1]["file"], "pkg/n.py");
+}
+
+#[test]
 fn the_go_fixture_gives_five_edges_and_its_variants_follow_the_module_rules() {
     let ws = workspace();
     go(ws.path(), true);
