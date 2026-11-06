@@ -1147,3 +1147,27 @@ fn a_malformed_go_mod_of_another_module_path_leaves_a_resolved_import_and_the_re
     );
     assert!(!complete(root));
 }
+
+/// A FIFO named `*.go` is not a package file.
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_not_a_package_file() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(root, "go.mod", "module example.com/app\n");
+    write(root, "lib/l.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/app/lib\"\n",
+    );
+    let made = std::process::Command::new("mkfifo")
+        .arg(root.join("lib/pipe.go"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert_eq!(
+        outcome(&graph(root), "main.go", "example.com/app/lib"),
+        Outcome::Resolved(vec!["lib/l.go".to_string()])
+    );
+}

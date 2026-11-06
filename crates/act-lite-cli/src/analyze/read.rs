@@ -490,8 +490,11 @@ impl SupportReader {
                 (EntryKind::Symlink, Some(self.target(&entry.path())))
             } else if file_type.is_dir() {
                 (EntryKind::Dir, None)
-            } else {
+            } else if file_type.is_file() {
                 (EntryKind::File, None)
+            } else {
+                // A FIFO, socket or device is never a source file or input.
+                continue;
             };
             out.push(DirEntry { name, kind, target });
         }

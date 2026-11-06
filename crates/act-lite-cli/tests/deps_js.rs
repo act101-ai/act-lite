@@ -961,3 +961,18 @@ fn a_non_utf8_file_name_does_not_match_its_lossy_spelling() {
         Outcome::Unresolved(_)
     ));
 }
+
+/// A FIFO is not a source file: a probe passes over it to the next
+/// candidate.
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_not_a_probe_candidate() {
+    let ws = workspace(&[("main.ts", "import './dep';\n"), ("dep.js", "export {};\n")]);
+    let fifo = ws.path().join("dep.ts");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert_eq!(outcome(&build(ws.path()), "main.ts"), resolved("dep.js"));
+}
