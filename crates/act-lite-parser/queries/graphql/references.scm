@@ -8,16 +8,31 @@
 (interface_type_definition
   (name) @reference)
 
+(interface_type_extension
+  (name) @reference)
+
 (input_object_type_definition
+  (name) @reference)
+
+(input_object_type_extension
   (name) @reference)
 
 (enum_type_definition
   (name) @reference)
 
+(enum_type_extension
+  (name) @reference)
+
 (union_type_definition
   (name) @reference)
 
+(union_type_extension
+  (name) @reference)
+
 (scalar_type_definition
+  (name) @reference)
+
+(scalar_type_extension
   (name) @reference)
 
 (directive_definition
