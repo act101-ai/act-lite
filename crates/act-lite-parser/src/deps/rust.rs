@@ -1,5 +1,5 @@
 //! Rust: `mod x;`, the leaves of each `use` tree, `extern crate`, the
-//! `include!` family, the `mod` and `use` forms inside a module-level macro
+//! `include!` family, the `mod` and `use` forms inside an item-position macro
 //! invocation, the names a module file declares, and the blocks of its
 //! bodies that declare items (block-local scopes).
 //!
@@ -91,7 +91,7 @@ pub(super) fn extract(root: Node, source: &str) -> Vec<Relationship> {
             }
             "macro_invocation" => {
                 found.extend(include(node, source));
-                if at_module_level(node)
+                if at_item_level(node)
                     && let Some(tree) = token_tree(node)
                 {
                     let mut items = Vec::new();
@@ -137,10 +137,11 @@ pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     declared(root, source, false, false)
 }
 
-/// The names that the items of `container` declare. In a block, only the
-/// items and inline modules count: a `use` there, an `extern crate` and a
-/// macro invocation declare nothing. In a body (`in_body`), the leaves of
-/// each `use` are also kept as bindings.
+/// The names that the items of `container` declare, also those of the
+/// `mod`, `use` and item forms of its macro invocations. In a block, only
+/// the items and modules count: a `use` there and an `extern crate`
+/// declare nothing. In a body (`in_body`), the leaves of each `use` are
+/// also kept as bindings, and each `mod x;` as a file module of the scope.
 fn declared(container: Node, source: &str, block: bool, in_body: bool) -> ModuleNames {
     let mut names = ModuleNames::default();
     let mut cursor = container.walk();
@@ -174,23 +175,10 @@ fn declared(container: Node, source: &str, block: bool, in_body: bool) -> Module
             "use_declaration" if in_body => {
                 if let Some(argument) = item.child_by_field_name("argument") {
                     for leaf in use_leaves(argument, source) {
-                        names.uses.extend(binding(&leaf, item));
+                        names.uses.extend(binding(&leaf, &range_of(item)));
                         if !block {
                             declare_leaf(&mut names, leaf);
                         }
-                    }
-                }
-            }
-            _ if block => {}
-            "extern_crate_declaration" => {
-                if let Some(alias) = item.child_by_field_name("alias") {
-                    names.names.insert(unraw(text(alias, source)).to_string());
-                }
-            }
-            "use_declaration" => {
-                if let Some(argument) = item.child_by_field_name("argument") {
-                    for leaf in use_leaves(argument, source) {
-                        declare_leaf(&mut names, leaf);
                     }
                 }
             }
@@ -207,14 +195,39 @@ fn declared(container: Node, source: &str, block: bool, in_body: bool) -> Module
                 }
                 for item in items {
                     match item {
-                        MacroItem::Mod(name, ..) | MacroItem::Name(name) => {
-                            names.names.insert(unraw(&name).to_string());
-                        }
-                        MacroItem::Use(leaves, _) => {
-                            for leaf in leaves {
-                                declare_leaf(&mut names, leaf);
+                        MacroItem::Mod(name, range, _) => {
+                            let name = unraw(&name).to_string();
+                            names.names.insert(name.clone());
+                            if in_body {
+                                names.files.push((name, range));
                             }
                         }
+                        MacroItem::Name(name) => {
+                            names.names.insert(unraw(&name).to_string());
+                        }
+                        MacroItem::Use(leaves, range) => {
+                            for leaf in leaves {
+                                if in_body {
+                                    names.uses.extend(binding(&leaf, &range));
+                                }
+                                if !block {
+                                    declare_leaf(&mut names, leaf);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ if block => {}
+            "extern_crate_declaration" => {
+                if let Some(alias) = item.child_by_field_name("alias") {
+                    names.names.insert(unraw(text(alias, source)).to_string());
+                }
+            }
+            "use_declaration" => {
+                if let Some(argument) = item.child_by_field_name("argument") {
+                    for leaf in use_leaves(argument, source) {
+                        declare_leaf(&mut names, leaf);
                     }
                 }
             }
@@ -256,9 +269,9 @@ fn blocks_in(node: Node, source: &str, found: &mut Vec<BlockModule>) {
     }
 }
 
-/// The binding of a `use` leaf of the declaration `item`; `None` for
+/// The binding of a `use` leaf of the declaration at `range`; `None` for
 /// `as _`, which binds no name.
-fn binding(leaf: &Leaf, item: Node) -> Option<UseBinding> {
+fn binding(leaf: &Leaf, range: &CompactRange) -> Option<UseBinding> {
     let name = match (&leaf.alias, leaf.glob) {
         (_, true) => None,
         (Some(alias), _) if alias == "_" => return None,
@@ -268,7 +281,7 @@ fn binding(leaf: &Leaf, item: Node) -> Option<UseBinding> {
     Some(UseBinding {
         name,
         path: leaf.path.clone(),
-        range: range_of(item),
+        range: range.clone(),
     })
 }
 
@@ -471,14 +484,15 @@ fn token_tree(invocation: Node) -> Option<Node> {
         .find(|c| c.kind() == "token_tree")
 }
 
-/// A macro invocation directly in a file or in an inline module.
-fn at_module_level(invocation: Node) -> bool {
+/// A macro invocation in item position: directly in a file, in an inline
+/// module, or as a statement of a block.
+fn at_item_level(invocation: Node) -> bool {
     let mut parent = invocation.parent();
     if parent.is_some_and(|p| p.kind() == "expression_statement") {
         parent = parent.and_then(|p| p.parent());
     }
     match parent {
-        Some(p) if p.kind() == "source_file" => true,
+        Some(p) if p.kind() == "source_file" || p.kind() == "block" => true,
         Some(p) if p.kind() == "declaration_list" => {
             p.parent().is_some_and(|m| m.kind() == "mod_item")
         }

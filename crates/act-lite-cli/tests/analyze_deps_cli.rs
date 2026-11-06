@@ -1137,6 +1137,57 @@ fn a_file_module_in_a_body_gives_no_edge_from_elsewhere_and_no_cycle() {
 }
 
 #[test]
+fn a_file_module_of_a_macro_in_a_body_gives_no_edge_from_elsewhere_and_no_cycle() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        concat!(
+            "mod a;\n",
+            "mod c;\n",
+            "macro_rules! items { ($($i:item)*) => { $($i)* } }\n",
+            "fn f() {\n",
+            "    items! {\n",
+            "        #[path = \"b.rs\"]\n",
+            "        mod a;\n",
+            "    }\n",
+            "}\n",
+        ),
+    );
+    write(root, "src/a.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "src/b.rs",
+        "use crate::c::Other;\npub struct Thing;\n",
+    );
+    write(
+        root,
+        "src/c.rs",
+        "use crate::a::Thing;\npub struct Other;\n",
+    );
+    let v = graph(root, &[]);
+    assert_eq!(kinds(edge(&v, "src/lib.rs", "src/a.rs")), ["module"]);
+    assert_eq!(kinds(edge(&v, "src/lib.rs", "src/b.rs")), ["module"]);
+    assert_eq!(kinds(edge(&v, "src/b.rs", "src/c.rs")), ["use"]);
+    assert_eq!(kinds(edge(&v, "src/c.rs", "src/a.rs")), ["use"]);
+    assert!(
+        !edges(&v).contains(&("src/c.rs".to_string(), "src/b.rs".to_string())),
+        "{}",
+        edges_text(&v)
+    );
+    assert_eq!(unresolved(&v), []);
+    let cycles = analyze(root, "cycles", &[]);
+    assert_eq!(cycles["findings"], json!([]));
+    assert_eq!(cycles["status"], "no_findings");
+}
+
+#[test]
 fn an_example_root_that_loads_a_source_file_gives_an_edge_from_its_tree() {
     let ws = workspace();
     let root = ws.path();
