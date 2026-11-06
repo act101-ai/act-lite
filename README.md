@@ -993,7 +993,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `pyproject.toml`, `requirements*.txt` or `setup.cfg` in the file's directory
   or an ancestor), else `unresolved`.
 - **Go.** The module map is the set of `go.mod` files in the workspace (not in
-  directories named `testdata` or starting with `_` or `.`). An import path
+  directories named `testdata` or starting with `_` or `.`). A `go.mod` is
+  read as the go command reads it: a quoted string (interpreted `"…"`,
+  decoded by Go's escapes, or raw `` `…` ``) is one word, and `//` starts a
+  comment only outside a string, in a single-line directive and in a
+  `replace ( … )` block; `replace example.com/lib => "./local lib"` replaces
+  with the directory `./local lib`. An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
   directory. A `replace` in the importing file's `go.mod`, with or without a

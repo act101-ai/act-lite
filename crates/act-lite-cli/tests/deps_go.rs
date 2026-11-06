@@ -773,3 +773,104 @@ fn an_import_path_is_resolved_by_its_decoded_value() {
         ]
     );
 }
+
+/// A `replace` to `"./local lib"` and a decoy module in `local/`, the
+/// directory that the target's first word names.
+fn spaced_replace(root: &Path, go_mod: &str) {
+    write(root, "go.mod", go_mod);
+    write(root, "local lib/go.mod", "module example.com/lib\n");
+    write(root, "local lib/lib.go", "package lib\n");
+    write(root, "local/go.mod", "module example.com/lib\n");
+    write(root, "local/lib.go", "package lib\n");
+    write(
+        root,
+        "main.go",
+        "package main\n\nimport \"example.com/lib\"\n",
+    );
+}
+
+#[test]
+fn a_quoted_replace_target_is_one_token() {
+    for go_mod in [
+        "module example.com/app\n\nreplace example.com/lib => \"./local lib\"\n",
+        "module example.com/app\n\nreplace example.com/lib => `./local lib` // raw\n",
+        "module example.com/app\n\nreplace \"example.com/lib\" v1.0.0 => \"./local\\x20lib\"\n",
+        "module example.com/app\n\nreplace (\n\texample.com/other => ./other\n\t\"example.com/lib\" => \"./local lib\" // block\n)\n",
+        "module example.com/app\n\nreplace(\n\"example.com/lib\" => \"./local lib\"\n)\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        spaced_replace(root, go_mod);
+        let graph = graph(root);
+        assert_eq!(
+            outcome(&graph, "main.go", "example.com/lib"),
+            Outcome::Resolved(vec!["local lib/lib.go".to_string()]),
+            "{go_mod}"
+        );
+    }
+}
+
+#[test]
+fn a_comment_marker_inside_a_quoted_path_is_part_of_the_path() {
+    for go_mod in [
+        "module example.com/app\n\nreplace example.com/lib => \"./x//y\"\n",
+        "module example.com/app\n\nreplace (\n\texample.com/lib => `./x//y` // c\n)\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "go.mod", go_mod);
+        write(root, "x/go.mod", "module example.com/lib\n");
+        write(root, "x/lib.go", "package lib\n");
+        write(root, "x/y/go.mod", "module example.com/lib\n");
+        write(root, "x/y/lib.go", "package lib\n");
+        write(
+            root,
+            "main.go",
+            "package main\n\nimport \"example.com/lib\"\n",
+        );
+        let graph = graph(root);
+        assert_eq!(
+            outcome(&graph, "main.go", "example.com/lib"),
+            Outcome::Resolved(vec!["x/y/lib.go".to_string()]),
+            "{go_mod}"
+        );
+    }
+}
+
+#[test]
+fn a_quoted_module_path_is_read_by_its_value() {
+    for module in [
+        "module \"example.com/my lib\"\n",
+        "module `example.com/my lib` // raw\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "go.mod", "module example.com/app\n");
+        write(root, "spaced/go.mod", module);
+        write(root, "spaced/s.go", "package lib\n");
+        write(root, "spaced/sub/s.go", "package sub\n");
+        write(root, "lib/go.mod", "module \"example.com/\\x6cib\" // \"x\"\n");
+        write(root, "lib/l.go", "package lib\n");
+        write(
+            root,
+            "main.go",
+            "package main\n\nimport (\n\t\"example.com/my lib\"\n\t\"example.com/my/sub\"\n\t\"example.com/lib\"\n)\n",
+        );
+        let graph = graph(root);
+        assert_eq!(
+            outcome(&graph, "main.go", "example.com/my lib"),
+            Outcome::Resolved(vec!["spaced/s.go".to_string()]),
+            "{module}"
+        );
+        assert_eq!(
+            outcome(&graph, "main.go", "example.com/my/sub"),
+            Outcome::External,
+            "{module}"
+        );
+        assert_eq!(
+            outcome(&graph, "main.go", "example.com/lib"),
+            Outcome::Resolved(vec!["lib/l.go".to_string()]),
+            "{module}"
+        );
+    }
+}
