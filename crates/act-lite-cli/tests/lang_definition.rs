@@ -218,15 +218,16 @@ fn imports_and_includes_are_never_candidates() {
 fn a_typed_or_commented_zig_import_is_never_a_candidate() {
     let ws = workspace(&[(
         "t.zig",
-        "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst t = @import(\"std\") // c\n;\nconst a2: type = // c\n @import(\"std\");\nfn f() void {\n    _ = a;\n    _ = b;\n    _ = d;\n    _ = e;\n    _ = m;\n    _ = t;\n    _ = a2;\n}\n",
+        "const a: type = @import(\"std\");\nconst b = @import(// c\n\"std\");\nconst d = @import(\"std\",);\nconst e = @import // c\n(\"std\");\nconst m = @import(\"a\\\"b.zig\");\nconst t = @import(\"std\") // c\n;\nconst a2: type = // c\n @import(\"std\");\npub // c\nconst ci: type = @import(\"std\");\nfn f() void {\n    _ = a;\n    _ = b;\n    _ = d;\n    _ = e;\n    _ = m;\n    _ = t;\n    _ = a2;\n    _ = ci;\n}\n",
     )]);
-    assert_not_found(ws.path(), "t.zig", "a", 13, 9);
-    assert_not_found(ws.path(), "t.zig", "b", 14, 9);
-    assert_not_found(ws.path(), "t.zig", "d", 15, 9);
-    assert_not_found(ws.path(), "t.zig", "e", 16, 9);
-    assert_not_found(ws.path(), "t.zig", "m", 17, 9);
-    assert_not_found(ws.path(), "t.zig", "t", 18, 9);
-    assert_not_found(ws.path(), "t.zig", "a2", 19, 9);
+    assert_not_found(ws.path(), "t.zig", "a", 15, 9);
+    assert_not_found(ws.path(), "t.zig", "b", 16, 9);
+    assert_not_found(ws.path(), "t.zig", "d", 17, 9);
+    assert_not_found(ws.path(), "t.zig", "e", 18, 9);
+    assert_not_found(ws.path(), "t.zig", "m", 19, 9);
+    assert_not_found(ws.path(), "t.zig", "t", 20, 9);
+    assert_not_found(ws.path(), "t.zig", "a2", 21, 9);
+    assert_not_found(ws.path(), "t.zig", "ci", 22, 9);
 }
 
 #[test]

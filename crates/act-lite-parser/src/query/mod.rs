@@ -2,7 +2,8 @@
 
 pub mod locals;
 
-pub use locals::{LocalDefinition, LocalScope, LocalsModel};
+use locals::{LocalDefinition, LocalScope, LocalsModel};
+pub use std::collections::{HashMap, HashSet};
 
 use crate::{Grammar, NodeKind, SourceFile, error::Result};
 use act_lite_core::{Location, Range, Symbol, SymbolKind};
@@ -623,28 +624,38 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
 /// Two patterns that report the same node: an identical kind is reported
 /// once, and a specific kind replaces `constant`/`variable`. Two distinct
 /// specific kinds at one node are both kept (a proto2 group is a struct and
-/// a field).
+/// a field). Linear in the number of declarations.
 fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration> {
     let generic = |k: &str| k == "constant" || k == "variable";
-    let mut kept: Vec<Declaration> = Vec::with_capacity(declarations.len());
+    let mut kept: Vec<Option<Declaration>> = Vec::with_capacity(declarations.len());
+    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for decl in declarations {
-        let same = |d: &Declaration| d.name == decl.name && d.range == decl.range;
-        if kept.iter().any(|d| same(d) && d.kind == decl.kind) {
+        let key = (decl.name.clone(), format!("{:?}", decl.range));
+        let group = groups.entry(key).or_default();
+        let same_kind = group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|d| d.kind == decl.kind));
+        if same_kind {
             continue;
         }
-        if let Some(existing) = kept
-            .iter_mut()
-            .find(|d| same(d) && generic(&d.kind) && !generic(&decl.kind))
+        if !generic(&decl.kind) {
+            if let Some(&i) = group
+                .iter()
+                .find(|&&i| kept[i].as_ref().is_some_and(|d| generic(&d.kind)))
+            {
+                kept[i] = Some(decl);
+                continue;
+            }
+        } else if group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|d| !generic(&d.kind)))
         {
-            *existing = decl;
             continue;
         }
-        if generic(&decl.kind) && kept.iter().any(|d| same(d) && !generic(&d.kind)) {
-            continue;
-        }
-        kept.push(decl);
+        group.push(kept.len());
+        kept.push(Some(decl));
     }
-    kept
+    kept.into_iter().flatten().collect()
 }
 
 /// Executes a symbols query on a source file.
@@ -755,34 +766,43 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
 /// reported once, and a specific kind replaces `Constant`/`Variable`. Two
 /// distinct specific kinds at one node are both kept. A name node a
 /// `@suppress` pattern matched (an import) reports no generic symbol.
+/// Linear in the number of symbols.
 fn one_symbol_per_range(symbols: Vec<Symbol>, suppressed: &[(String, Range)]) -> Vec<Symbol> {
     let generic = |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
-    let mut kept: Vec<Symbol> = Vec::with_capacity(symbols.len());
+    let key = |name: &str, range: &Range| (name.to_string(), format!("{range:?}"));
+    let suppressed: HashSet<(String, String)> = suppressed.iter().map(|(n, r)| key(n, r)).collect();
+    let mut kept: Vec<Option<Symbol>> = Vec::with_capacity(symbols.len());
+    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for symbol in symbols {
-        if generic(symbol.kind())
-            && suppressed
+        let k = key(symbol.name(), symbol.range());
+        if generic(symbol.kind()) && suppressed.contains(&k) {
+            continue;
+        }
+        let group = groups.entry(k).or_default();
+        let same_kind = group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|s| s.kind() == symbol.kind()));
+        if same_kind {
+            continue;
+        }
+        if !generic(symbol.kind()) {
+            if let Some(&i) = group
                 .iter()
-                .any(|(n, r)| n == symbol.name() && r == symbol.range())
+                .find(|&&i| kept[i].as_ref().is_some_and(|s| generic(s.kind())))
+            {
+                kept[i] = Some(symbol);
+                continue;
+            }
+        } else if group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|s| !generic(s.kind())))
         {
             continue;
         }
-        let same = |s: &Symbol| s.name() == symbol.name() && s.range() == symbol.range();
-        if kept.iter().any(|s| same(s) && s.kind() == symbol.kind()) {
-            continue;
-        }
-        if let Some(existing) = kept
-            .iter_mut()
-            .find(|s| same(s) && generic(s.kind()) && !generic(symbol.kind()))
-        {
-            *existing = symbol;
-            continue;
-        }
-        if generic(symbol.kind()) && kept.iter().any(|s| same(s) && !generic(s.kind())) {
-            continue;
-        }
-        kept.push(symbol);
+        group.push(kept.len());
+        kept.push(Some(symbol));
     }
-    kept
+    kept.into_iter().flatten().collect()
 }
 
 /// The `.` or `#` token that precedes a CSS class or id name node.
