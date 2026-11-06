@@ -130,7 +130,10 @@ pub enum Status {
 
 impl Status {
     /// Derives the status from the result, checking the rules in order:
-    /// unsupported, findings, incomplete, no findings.
+    /// unsupported, findings, incomplete, no findings. `analyzed_files`
+    /// leaves out a component file whose script code is all in languages
+    /// that are not parsed, so such a file counts as a file of an
+    /// unsupported language.
     pub fn derive(total: u64, complete: bool, analyzed_files: u64) -> Status {
         if total == 0 && complete && analyzed_files == 0 {
             Status::Unsupported

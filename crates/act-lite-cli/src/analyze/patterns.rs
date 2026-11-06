@@ -90,6 +90,10 @@ impl Analyzer for PatternsAnalyzer {
         function_model::supports(grammar)
     }
 
+    fn reports_regions(&self) -> bool {
+        true
+    }
+
     fn analyze(
         &self,
         files: &mut dyn FileSource,
@@ -110,7 +114,10 @@ impl Analyzer for PatternsAnalyzer {
             let Some(file) = files.next_file()? else {
                 break;
             };
-            let mut functions = function_model::functions(&file.source);
+            let code = file.code();
+            let mut functions = code.iter().flat_map(|unit| {
+                function_model::functions_in(unit.grammar, unit.tree, unit.source)
+            });
             loop {
                 checkpoint()?;
                 let Some(function) = functions.next() else {

@@ -66,8 +66,17 @@ pub fn node_kinds(grammar: Grammar) -> Vec<&'static str> {
 
 /// Every function of the file, in location order.
 pub fn functions(file: &SourceFile) -> Functions<'_> {
-    let grammar = file.grammar();
-    let source = file.content();
+    functions_in(file.grammar(), file.tree().inner(), file.content())
+}
+
+/// Every function of one tree of `grammar` over `source`, in location
+/// order: a file's tree, or a region tree whose positions are those of the
+/// file that holds it.
+pub fn functions_in<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+) -> Functions<'a> {
     let ctx = table::row(grammar)
         .filter(|_| supports(grammar))
         .map(|row| Ctx {
@@ -76,7 +85,7 @@ pub fn functions(file: &SourceFile) -> Functions<'_> {
             source,
         });
     let stack = if ctx.is_some() {
-        vec![file.tree().root_node()]
+        vec![tree.root_node()]
     } else {
         Vec::new()
     };

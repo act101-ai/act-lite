@@ -167,6 +167,10 @@ impl Analyzer for ClonesAnalyzer {
         function_model::supports(grammar)
     }
 
+    fn reports_regions(&self) -> bool {
+        true
+    }
+
     fn analyze(
         &self,
         source: &mut dyn FileSource,

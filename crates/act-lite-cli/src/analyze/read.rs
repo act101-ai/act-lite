@@ -318,6 +318,11 @@ impl Reader {
         }
     }
 
+    /// The component files pulled so far that hold no analyzed code.
+    pub fn files_without_analyzed_code(&self) -> u64 {
+        self.outcome.files_without_analyzed_code
+    }
+
     /// The skips, parse failures, test exclusions and regions not analyzed
     /// of every file pulled so far, each list sorted.
     pub fn finish(mut self) -> ReadOutcome {
