@@ -104,6 +104,7 @@ impl Analyzer for HotspotsAnalyzer {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: Some(details(measured)),
+            failed_inputs: None,
         })
     }
 }

@@ -25,8 +25,9 @@ struct GoMod {
 #[derive(Default)]
 struct GoState {
     built: bool,
-    /// The module path and directory of each `go.mod` of the map.
-    modules: Arc<Vec<(String, String)>>,
+    /// The module path and directory of each `go.mod` of the map, and
+    /// whether that `go.mod` failed to parse.
+    modules: Arc<Vec<(String, String, bool)>>,
     /// Each `go.mod` read: `None` when it could not be read or parsed.
     mods: HashMap<String, Option<Arc<GoMod>>>,
 }
@@ -76,10 +77,17 @@ impl Resolver for GoResolver {
         let replaced_away = replaces
             .iter()
             .any(|(old, dir)| dir.is_none() && under(old));
+        // A candidate from a `go.mod` that failed to parse leaves the
+        // import unresolved: its other directives are unknown.
+        if let Some((_, dir, _)) = modules.iter().find(|(path, _, failed)| {
+            *failed && under(path) && !replaces.iter().any(|(old, _)| old == path)
+        }) {
+            return Outcome::Unresolved(format!("{} could not be read", join(dir, "go.mod")));
+        }
         let kept = modules
             .iter()
-            .filter(|(path, _)| !replaces.iter().any(|(old, _)| old == path))
-            .map(|(path, dir)| (path.as_str(), dir.as_str()));
+            .filter(|(path, _, _)| !replaces.iter().any(|(old, _)| old == path))
+            .map(|(path, dir, _)| (path.as_str(), dir.as_str()));
         let local = replaces
             .iter()
             .filter_map(|(path, dir)| Some((path.as_str(), dir.as_deref()?)));
@@ -195,7 +203,13 @@ fn build_map(cx: &mut ResolveCx<'_>) {
             continue;
         }
         if let Some(m) = read_mod(cx, &file) {
-            modules.push((m.module.clone(), dir.to_string()));
+            modules.push((m.module.clone(), dir.to_string(), false));
+        } else if let Some(module) = cx
+            .input(&file, InputKind::GoMod)
+            .ok()
+            .and_then(first_module)
+        {
+            modules.push((module, dir.to_string(), true));
         }
     }
     let state = cx.cache::<GoState>();
@@ -315,6 +329,25 @@ fn parse(text: &str) -> Result<(String, Vec<(String, String)>), String> {
         Some(module) => Ok((module, replaces)),
         None => Err("no module directive".to_string()),
     }
+}
+
+/// The path of the first well-formed `module` line of a `go.mod` that does
+/// not parse: a line outside a block with `module` and one path.
+fn first_module(text: &str) -> Option<String> {
+    let mut in_block = false;
+    for line in text.lines() {
+        let Some(words) = tokens(line) else {
+            continue;
+        };
+        match words.as_slice() {
+            [close, ..] if in_block && close == ")" => in_block = false,
+            _ if in_block => {}
+            [_, open] if open == "(" => in_block = true,
+            [verb, path] if verb == "module" => return Some(path.clone()),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The tokens of one `go.mod` line, as Go's modfile reads them: `//` outside

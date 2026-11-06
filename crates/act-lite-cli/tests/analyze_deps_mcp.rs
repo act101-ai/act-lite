@@ -461,6 +461,23 @@ fn an_unresolved_import_is_never_read_as_no_dependents_over_mcp() {
     assert_eq!(v["complete"], true);
 }
 
+#[test]
+fn a_malformed_package_json_elsewhere_makes_the_result_incomplete_over_mcp() {
+    let ws = workspace();
+    let root = ws.path();
+    write(root, "package.json", r#"{"dependencies":{"p":"1.0.0"}}"#);
+    write(root, "packages/p/package.json", r#"{"name":"p"}"#);
+    write(root, "packages/p/index.ts", "");
+    write(root, "other/package.json", r#"{"name":"#);
+    write(root, "main.ts", "import 'p';\n");
+    let mut session = Session::start(root);
+    let (v, _) = session.ok("analyze_cycles", json!({}));
+    assert_eq!(v["complete"], false, "{v}");
+    assert_eq!(v["status"], "incomplete");
+    assert_eq!(v["incomplete"]["counts"]["failed_inputs"], 1);
+    assert_eq!(v, cli(root, "cycles", &[]));
+}
+
 // ---- cancellation ----
 
 /// Files of a workspace that `analyze_cycles` takes several seconds to read:

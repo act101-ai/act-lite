@@ -229,6 +229,7 @@ impl Analyzer for ImpactAnalyzer {
             unresolved,
             limits_hit,
             details: Some(details),
+            failed_inputs: Some(graph.failed_inputs()),
         })
     }
 

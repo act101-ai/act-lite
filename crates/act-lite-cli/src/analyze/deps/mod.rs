@@ -781,6 +781,15 @@ impl DepGraph {
         &self.limits_hit
     }
 
+    /// The number of resolution inputs that could not be read or parsed,
+    /// over every input read, listed or not.
+    pub fn failed_inputs(&self) -> u64 {
+        self.inputs
+            .values()
+            .filter(|(_, error)| error.is_some())
+            .count() as u64
+    }
+
     /// The files whose relationships were read.
     pub fn analyzed(&self) -> &BTreeSet<String> {
         &self.analyzed

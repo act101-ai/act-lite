@@ -83,6 +83,10 @@ pub struct Analysis<F> {
     pub unresolved: Vec<Unresolved>,
     pub limits_hit: Vec<LimitHit>,
     pub details: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The number of resolution inputs that could not be read or parsed,
+    /// for `incomplete.counts.failed_inputs`; `None` for an analyzer that
+    /// reads no resolution input, whose counts have no such key.
+    pub failed_inputs: Option<u64>,
 }
 
 /// What an analyzer can read besides the files it is given.
@@ -213,7 +217,8 @@ fn run_named<A: Analyzer>(
         && read.skipped.is_empty()
         && read.parse_failures.is_empty()
         && analysis.unresolved.is_empty()
-        && analysis.limits_hit.is_empty();
+        && analysis.limits_hit.is_empty()
+        && analysis.failed_inputs.unwrap_or(0) == 0;
 
     if no_supported_file && complete && (no_recognized_file || removed_supported) {
         let counts = &excluded.counts;
@@ -234,12 +239,13 @@ fn run_named<A: Analyzer>(
         .chain(read.skipped)
         .map(|s| s.file)
         .collect();
-    let incomplete = Incomplete::new(
+    let mut incomplete = Incomplete::new(
         skipped,
         read.parse_failures,
         analysis.unresolved,
         analysis.limits_hit,
     );
+    incomplete.counts.failed_inputs = analysis.failed_inputs;
     let sources = if analyzed_files >= 1 {
         vec!["tree-sitter".to_string()]
     } else {
@@ -631,6 +637,7 @@ mod tests {
                 unresolved: vec![],
                 limits_hit,
                 details: None,
+                failed_inputs: None,
             })
         }
     }

@@ -161,6 +161,7 @@ impl Analyzer for PatternsAnalyzer {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: Some(details),
+            failed_inputs: None,
         })
     }
 

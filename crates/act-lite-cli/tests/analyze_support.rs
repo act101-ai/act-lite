@@ -443,6 +443,7 @@ impl Analyzer for FailsAfterScope {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: None,
+            failed_inputs: None,
         })
     }
 

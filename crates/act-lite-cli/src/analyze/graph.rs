@@ -572,6 +572,7 @@ impl Analyzer for GraphAnalyzer {
             unresolved,
             limits_hit,
             details: Some(details),
+            failed_inputs: Some(graph.failed_inputs()),
         })
     }
 
@@ -774,6 +775,7 @@ mod tests {
             unresolved: Vec::new(),
             limits_hit: Vec::new(),
             details: None,
+            failed_inputs: None,
         };
         let result = analyzer.after_scope(&ctx, &ReadOutcome::default(), &mut analysis);
         assert_eq!(result.err(), Some(poisoned_error()));
