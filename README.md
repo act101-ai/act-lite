@@ -958,7 +958,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   else the first under which it is a namespace package. `from X import n`
   targets `X`'s file when a top-level statement of it binds `n` (an
   annotation binds only with a value: `n: int = 1` binds, `n: int` does
-  not), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
+  not; `global n` does not bind), else the submodule `X.n`, and also `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
   is `unresolved` outside a package (`relative import outside a package`) or
   above the top-level package (`relative import beyond the top-level

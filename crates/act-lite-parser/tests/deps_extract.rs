@@ -506,7 +506,7 @@ fn python_names_bound_at_top_level() {
          from x import y as z, w\n",
     );
     let expected = ModuleNames {
-        names: names(&["K", "a", "b", "c", "f", "n", "r", "t", "w", "z"]),
+        names: names(&["K", "a", "b", "c", "f", "r", "t", "w", "z"]),
         glob: false,
         inline: vec![],
     };

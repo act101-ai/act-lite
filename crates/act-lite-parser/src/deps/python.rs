@@ -116,14 +116,6 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
                 names.glob = true;
             }
         }
-        "global_statement" => {
-            let mut cursor = statement.walk();
-            for name in statement.named_children(&mut cursor) {
-                if name.kind() == "identifier" {
-                    insert(names, name);
-                }
-            }
-        }
         "if_statement" | "try_statement" | "with_statement" | "for_statement"
         | "while_statement" => {
             if let Some(left) = statement.child_by_field_name("left") {
