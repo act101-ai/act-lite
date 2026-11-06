@@ -157,22 +157,34 @@ pub fn discover(
     Ok(out)
 }
 
-/// Every regular file of the workspace that the discovery steps before the
-/// globs keep under `includes` (`.git` pruned; ignored paths, vendored and
-/// generated directories left out unless included), workspace-relative, in
-/// byte order, and the directories and entries the walk could not read, as
-/// discovery reports them. Symlinks are not followed. The token is checked
+/// What [`walk_workspace`] finds.
+pub struct WorkspaceEntries {
+    /// Every regular file, workspace-relative, in byte order.
+    pub files: Vec<String>,
+    /// Every regular file and every symlink that is no directory entry,
+    /// each at its own (written) path, in byte order.
+    pub entries: Vec<String>,
+    /// The directories and entries the walk could not read, as discovery
+    /// reports them.
+    pub skipped: Vec<Skip>,
+}
+
+/// The files and symlinks of the workspace that the discovery steps before
+/// the globs keep under `includes` (`.git` pruned; ignored paths, vendored
+/// and generated directories left out unless included), and the entries the
+/// walk could not read. Symlinks are not followed. The token is checked
 /// before each entry and before each marker read.
 pub fn walk_workspace(
     root: &Path,
     includes: &Includes,
     cancel: &CancellationToken,
-) -> Result<(Vec<String>, Vec<Skip>), AnalyzeError> {
+) -> Result<WorkspaceEntries, AnalyzeError> {
     struct Walker<'a> {
         root: &'a Path,
         includes: &'a Includes,
         cancel: &'a CancellationToken,
         files: Vec<String>,
+        links: Vec<String>,
         skipped: Vec<Skip>,
     }
     impl Walker<'_> {
@@ -202,6 +214,8 @@ pub fn walk_workspace(
                     }
                 } else if file_type.is_file() && !file_left_out(&path, rules, self.includes) {
                     self.files.push(rel_path(self.root, &path, false)?);
+                } else if file_type.is_symlink() && !file_left_out(&path, rules, self.includes) {
+                    self.links.push(rel_path(self.root, &path, false)?);
                 }
             }
             Ok(())
@@ -224,17 +238,25 @@ pub fn walk_workspace(
         includes,
         cancel,
         files: Vec::new(),
+        links: Vec::new(),
         skipped: Vec::new(),
     };
     walker.walk(root, &IgnoreRules::for_root(root))?;
     let Walker {
         mut files,
+        links,
         mut skipped,
         ..
     } = walker;
     files.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    let mut entries: Vec<String> = files.iter().cloned().chain(links).collect();
+    entries.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     skipped.sort_by(|a, b| a.file.file.as_bytes().cmp(b.file.file.as_bytes()));
-    Ok((files, skipped))
+    Ok(WorkspaceEntries {
+        files,
+        entries,
+        skipped,
+    })
 }
 
 fn check(cancel: &CancellationToken) -> Result<(), AnalyzeError> {

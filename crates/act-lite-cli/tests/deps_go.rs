@@ -1032,3 +1032,64 @@ fn a_well_formed_go_mod_is_complete() {
     assert!(inputs(&graph)[0].get("error").is_none());
     assert!(complete(root));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_go_mod_adds_its_module_path_at_the_link_directory() {
+    let ws = tempfile::tempdir().unwrap();
+    shop(ws.path());
+    fs::remove_file(ws.path().join("libs/db/go.mod")).unwrap();
+    write(
+        ws.path(),
+        "meta/db.mod",
+        "module example.com/shop/store/db\n",
+    );
+    std::os::unix::fs::symlink("../../meta/db.mod", ws.path().join("libs/db/go.mod")).unwrap();
+    let graph = graph(ws.path());
+    assert_eq!(
+        outcome(&graph, "store/store.go", "example.com/shop/store/db"),
+        Outcome::Resolved(vec!["libs/db/db.go".to_string()])
+    );
+    let listed = inputs(&graph);
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["file"] == "libs/db/go.mod" && i["error"].is_null()),
+        "{listed}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_go_mod_that_leaves_the_workspace_is_an_input_error() {
+    let outside = tempfile::tempdir().unwrap();
+    write(
+        outside.path(),
+        "db.mod",
+        "module example.com/shop/store/db\n",
+    );
+    let ws = tempfile::tempdir().unwrap();
+    shop(ws.path());
+    fs::remove_file(ws.path().join("libs/db/go.mod")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("db.mod"),
+        ws.path().join("libs/db/go.mod"),
+    )
+    .unwrap();
+    let graph = graph(ws.path());
+    assert_eq!(
+        outcome(&graph, "main.go", "fmt"),
+        Outcome::Unresolved("libs/db/go.mod could not be read".to_string())
+    );
+    let listed = inputs(&graph);
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["file"] == "libs/db/go.mod" && i["error"].is_string()),
+        "{listed}"
+    );
+}

@@ -193,7 +193,9 @@ fn the_workspace_walk_prunes_like_discovery() {
     write(ws.path(), "tests/t.ts", b"t\n");
     write(ws.path(), "a-b/c.ts", b"c\n");
     write(ws.path(), ".git/config", b"\n");
-    let (files, _) = walk_workspace(ws.path(), &Includes::default(), &token()).unwrap();
+    let files = walk_workspace(ws.path(), &Includes::default(), &token())
+        .unwrap()
+        .files;
     assert_eq!(files, ["a-b/c.ts", "src/a.ts", "tests/t.ts"]);
 }
 
@@ -551,7 +553,8 @@ fn unlock(ws: &Path) {
 fn walk_workspace_returns_walk_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = round2(tmp.path());
-    let (files, skipped) = walk_workspace(&ws, &Includes::default(), &token()).unwrap();
+    let walked = walk_workspace(&ws, &Includes::default(), &token()).unwrap();
+    let (files, skipped) = (walked.files, walked.skipped);
     unlock(&ws);
     assert!(!files.iter().any(|f| f.starts_with("locked/")), "{files:?}");
     assert!(!files.contains(&"secret.json".to_string()), "{files:?}");

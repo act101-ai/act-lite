@@ -17,7 +17,7 @@ pub mod python;
 pub mod rust;
 mod toml;
 
-use super::discovery::{Skip, walk_workspace};
+use super::discovery::{Skip, WorkspaceEntries, walk_workspace};
 use super::envelope::{AnalyzeError, LimitHit, Unresolved};
 use super::read::{
     DirEntry, EntryKind, FileSource, Parsed, RemovedRegion, SupportError, SymlinkTarget,
@@ -166,9 +166,6 @@ struct Input {
     error: Option<String>,
 }
 
-/// The workspace files and the entries the walk could not read.
-type Walked = (Vec<String>, Vec<Skip>);
-
 /// What resolution keeps for the whole build.
 #[derive(Default)]
 struct State {
@@ -182,7 +179,7 @@ struct State {
     /// reason it could not be read.
     reads: HashMap<String, Result<Vec<RemovedRegion>, String>>,
     /// The workspace walk under the request's includes, on first use.
-    workspace: OnceCell<Result<Walked, AnalyzeError>>,
+    workspace: OnceCell<Result<WorkspaceEntries, AnalyzeError>>,
     /// The analysis bounds that resolution reached, each once.
     limits: Vec<LimitHit>,
     cache: HashMap<TypeId, Box<dyn Any + Send>>,
@@ -284,11 +281,15 @@ impl ResolveCx<'_> {
     /// `details.resolution_inputs`. A read failure is listed with its
     /// `error`; the `Err` is the reason `<rel> could not be read`. A file
     /// that does not exist is not listed and is no failed input; the `Err`
-    /// is then the reason `<rel> does not exist`.
+    /// is then the reason `<rel> does not exist`. A broken symlink is a read
+    /// failure.
     pub fn input(&mut self, rel: &str, kind: InputKind) -> Result<&str, String> {
         if !self.state.inputs.contains_key(rel) {
             let (text, error) = match self.ctx.support.text(rel) {
                 Ok(text) => (Some(text), None),
+                Err(SupportError::NotFound(_)) if self.is_symlink(rel) => {
+                    (None, Some(format!("{rel}: symlink target does not exist")))
+                }
                 Err(SupportError::NotFound(_)) => return Err(format!("{rel} does not exist")),
                 Err(err) => (None, Some(err.to_string())),
             };
@@ -300,6 +301,24 @@ impl ResolveCx<'_> {
             Some(text) => Ok(text),
             None => Err(format!("{rel} could not be read")),
         }
+    }
+
+    /// Whether a lookup of the resolution input `rel` finds it: a file, or a
+    /// symlink whatever its target. Read it with `input` at `rel`, its
+    /// written path, which fails for a target that leaves the workspace or
+    /// is not a regular file.
+    pub fn has_input(&mut self, rel: &str) -> bool {
+        matches!(self.probe_file(rel), Probe::File(_)) || self.is_symlink(rel)
+    }
+
+    /// Whether the last name of `rel` is a symlink in its directory.
+    fn is_symlink(&mut self, rel: &str) -> bool {
+        let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+        self.list_dir(dir).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|e| e.name == name && e.kind == EntryKind::Symlink)
+        })
     }
 
     /// Records that the input `rel`, read with `input`, does not parse: its
@@ -324,13 +343,22 @@ impl ResolveCx<'_> {
     /// per build, on the first call. When the walk fails, this is empty and
     /// `build` fails with the walk's error after the current resolution.
     pub fn workspace_files(&self) -> &[String] {
-        self.walk().map_or(&[], |(files, _)| files)
+        self.walk().map_or(&[], |walked| &walked.files)
+    }
+
+    /// The candidate resolution inputs of the workspace: the files of
+    /// `workspace_files` and, at their own paths, the symlinks the same walk
+    /// finds, in byte order. A symlink is read through its target with
+    /// `input`, which refuses a target that leaves the workspace or is not a
+    /// regular file.
+    pub fn workspace_inputs(&self) -> &[String] {
+        self.walk().map_or(&[], |walked| &walked.entries)
     }
 
     /// The entries the workspace walk could not read, as discovery reports
     /// them: a target below one of them is missing evidence.
     pub fn workspace_skipped(&self) -> &[Skip] {
-        self.walk().map_or(&[], |(_, skipped)| skipped)
+        self.walk().map_or(&[], |walked| &walked.skipped)
     }
 
     /// Whether `rel` is inside a vendored directory: a directory component
@@ -355,7 +383,7 @@ impl ResolveCx<'_> {
         false
     }
 
-    fn walk(&self) -> Option<&Walked> {
+    fn walk(&self) -> Option<&WorkspaceEntries> {
         self.state
             .workspace
             .get_or_init(|| {

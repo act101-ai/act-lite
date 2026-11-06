@@ -621,7 +621,8 @@ fn dependency_files(cx: &mut ResolveCx<'_>, dir: &str) -> Vec<(String, InputKind
             n if n.starts_with("requirements") && n.ends_with(".txt") => InputKind::Requirements,
             _ => continue,
         };
-        if let Probe::File(path) = cx.probe_file(&join(dir, &name)) {
+        let path = join(dir, &name);
+        if cx.has_input(&path) {
             out.push((path, kind));
         }
     }

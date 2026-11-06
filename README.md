@@ -1122,7 +1122,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `details.resolution_inputs` (`{ "file", "kind" }`, at most 100, with
   `resolution_inputs_total`); one that cannot be read or parsed keeps its entry
   with an `error` key, and the relationships whose rule reads it are
-  `unresolved`, reason `<file> could not be read`.
+  `unresolved`, reason `<file> could not be read`. A resolution input that is
+  a symlink to a regular file inside the workspace is read through its target
+  and listed at the symlink's own path; its package or module directory is the
+  symlink's directory. A symlink whose target leaves the workspace, is not a
+  regular file, or does not exist is an input that cannot be read.
 
   | File | `kind` | Family | What is read |
   |---|---|---|---|
