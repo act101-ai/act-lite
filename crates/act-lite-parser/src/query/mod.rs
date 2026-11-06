@@ -2,8 +2,8 @@
 
 pub mod locals;
 
-use locals::{LocalDefinition, LocalScope, LocalsModel};
-pub use std::collections::{HashMap, HashSet};
+pub use locals::{LocalDefinition, LocalScope, LocalsModel};
+use std::collections::{HashMap, HashSet};
 
 use crate::{Grammar, NodeKind, SourceFile, error::Result};
 use act_lite_core::{Location, Range, Symbol, SymbolKind};
@@ -628,9 +628,9 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
 fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration> {
     let generic = |k: &str| k == "constant" || k == "variable";
     let mut kept: Vec<Option<Declaration>> = Vec::with_capacity(declarations.len());
-    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut groups: HashMap<(String, Range), Vec<usize>> = HashMap::new();
     for decl in declarations {
-        let key = (decl.name.clone(), format!("{:?}", decl.range));
+        let key = (decl.name.clone(), decl.range.clone());
         let group = groups.entry(key).or_default();
         let same_kind = group
             .iter()
@@ -769,10 +769,10 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
 /// Linear in the number of symbols.
 fn one_symbol_per_range(symbols: Vec<Symbol>, suppressed: &[(String, Range)]) -> Vec<Symbol> {
     let generic = |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
-    let key = |name: &str, range: &Range| (name.to_string(), format!("{range:?}"));
-    let suppressed: HashSet<(String, String)> = suppressed.iter().map(|(n, r)| key(n, r)).collect();
+    let key = |name: &str, range: &Range| (name.to_string(), range.clone());
+    let suppressed: HashSet<(String, Range)> = suppressed.iter().map(|(n, r)| key(n, r)).collect();
     let mut kept: Vec<Option<Symbol>> = Vec::with_capacity(symbols.len());
-    let mut groups: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut groups: HashMap<(String, Range), Vec<usize>> = HashMap::new();
     for symbol in symbols {
         let k = key(symbol.name(), symbol.range());
         if generic(symbol.kind()) && suppressed.contains(&k) {
