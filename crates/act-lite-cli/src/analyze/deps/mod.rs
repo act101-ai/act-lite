@@ -172,12 +172,13 @@ struct State {
     /// Listings by the directory's own path; `None` when it cannot be listed.
     dirs: HashMap<String, Option<Vec<DirEntry>>>,
     inputs: BTreeMap<String, Input>,
-    /// The support reads of the file being resolved; cleared before the
-    /// next file, so no tree outlives one file's resolution.
-    sources: HashMap<String, Parsed>,
-    /// Each support read of the build: its removed test regions, or the
-    /// reason it could not be read.
-    reads: HashMap<String, Result<Vec<RemovedRegion>, String>>,
+    /// The support reads of the file being resolved, by path and grammar;
+    /// cleared before the next file, so no tree outlives one file's
+    /// resolution.
+    sources: HashMap<(String, Grammar), Parsed>,
+    /// Each support read of the build, by path and grammar: its removed test
+    /// regions, or the reason it could not be read.
+    reads: HashMap<(String, Grammar), Result<Vec<RemovedRegion>, String>>,
     /// The workspace walk under the request's includes, on first use.
     workspace: OnceCell<Result<WorkspaceEntries, AnalyzeError>>,
     /// The analysis bounds that resolution reached, each once.
@@ -195,6 +196,8 @@ pub struct ResolveCx<'a> {
     state: &'a mut State,
     analyzable: &'a HashSet<String>,
     file: &'a str,
+    /// The grammar the file being resolved was analyzed with.
+    grammar: Grammar,
     removed: &'a [RemovedRegion],
     cancel: &'a CancellationToken,
 }
@@ -418,50 +421,52 @@ impl ResolveCx<'_> {
         lexical(base_dir, relative)
     }
 
-    /// The source file `rel`, read and parsed with its test regions blanked
-    /// as an analyzed read does. The parse lasts while the current file's
-    /// relationships are resolved; a later file reads it again. A failure
-    /// lasts the build; the `Err` is the reason `<rel> could not be read`,
-    /// or `<rel>: excluded as tests` for a whole-file test read while tests
-    /// are excluded.
-    pub fn source(&mut self, rel: &str) -> Result<&Parsed, String> {
-        if !self.state.sources.contains_key(rel) {
-            if let Some(Err(reason)) = self.state.reads.get(rel) {
+    /// The source file `rel`, read and parsed with `grammar` whatever its
+    /// extension, its test regions blanked as an analyzed read does. An
+    /// analyzed file is read again, so its analysis keeps its own language.
+    /// The parse lasts while the current file's relationships are resolved;
+    /// a later file reads it again. A failure lasts the build; the `Err` is
+    /// the reason `<rel> could not be read`, or `<rel>: excluded as tests`
+    /// for a whole-file test read while tests are excluded.
+    pub fn source(&mut self, rel: &str, grammar: Grammar) -> Result<&Parsed, String> {
+        let key = (rel.to_string(), grammar);
+        if !self.state.sources.contains_key(&key) {
+            if let Some(Err(reason)) = self.state.reads.get(&key) {
                 return Err(reason.clone());
             }
-            match self.ctx.support.source(rel) {
+            match self.ctx.support.source(rel, grammar) {
                 Ok(parsed) => {
                     let removed = Ok(parsed.removed.clone());
-                    self.state.reads.insert(rel.to_string(), removed);
-                    self.state.sources.insert(rel.to_string(), parsed);
+                    self.state.reads.insert(key.clone(), removed);
+                    self.state.sources.insert(key.clone(), parsed);
                 }
                 Err(err) => {
                     let reason = match err {
                         SupportError::TestFile(_) => err.to_string(),
                         _ => format!("{rel} could not be read"),
                     };
-                    self.state
-                        .reads
-                        .insert(rel.to_string(), Err(reason.clone()));
+                    self.state.reads.insert(key, Err(reason.clone()));
                     return Err(reason);
                 }
             }
         }
-        Ok(&self.state.sources[rel])
+        Ok(&self.state.sources[&key])
     }
 
-    /// Reads and parses each of `rels` as `source` does, several at a time,
-    /// and gives `f` of each parse in the order of `rels`. The parses are
-    /// not kept; each read is recorded for the build as `source` records
-    /// it, and a read that failed before fails again without a new read.
+    /// Reads and parses each of `rels` with `grammar` as `source` does,
+    /// several at a time, and gives `f` of each parse in the order of
+    /// `rels`. The parses are not kept; each read is recorded for the build
+    /// as `source` records it, and a read that failed before fails again
+    /// without a new read.
     pub fn read_each<T: Send>(
         &mut self,
         rels: &[String],
+        grammar: Grammar,
         f: impl Fn(&Parsed) -> T + Sync,
     ) -> Vec<Result<T, String>> {
         let mut out: Vec<Option<Result<T, String>>> = rels
             .iter()
-            .map(|rel| match self.state.reads.get(rel) {
+            .map(|rel| match self.state.reads.get(&(rel.clone(), grammar)) {
                 Some(Err(reason)) => Some(Err(reason.clone())),
                 _ => None,
             })
@@ -481,7 +486,7 @@ impl ResolveCx<'_> {
                     return done;
                 };
                 let result = support
-                    .source(&rels[i])
+                    .source(&rels[i], grammar)
                     .map(|parsed| (f(&parsed), parsed.removed));
                 done.push((i, result));
             }
@@ -503,7 +508,7 @@ impl ResolveCx<'_> {
             let rel = &rels[i];
             out[i] = Some(match result {
                 Ok((value, removed)) => {
-                    self.state.reads.insert(rel.clone(), Ok(removed));
+                    self.state.reads.insert((rel.clone(), grammar), Ok(removed));
                     Ok(value)
                 }
                 Err(err) => {
@@ -511,7 +516,9 @@ impl ResolveCx<'_> {
                         SupportError::TestFile(_) => err.to_string(),
                         _ => format!("{rel} could not be read"),
                     };
-                    self.state.reads.insert(rel.clone(), Err(reason.clone()));
+                    self.state
+                        .reads
+                        .insert((rel.clone(), grammar), Err(reason.clone()));
                     Err(reason)
                 }
             });
@@ -521,13 +528,14 @@ impl ResolveCx<'_> {
             .collect()
     }
 
-    /// The removed test regions of `file`: the file being resolved, or a
-    /// file read with `source` during the build; empty for any other.
-    pub fn removed(&self, file: &str) -> &[RemovedRegion] {
-        if file == self.file {
+    /// The removed test regions of `file` parsed with `grammar`: the file
+    /// being resolved in its analyzed grammar, or a file read with `source`
+    /// during the build; empty for any other.
+    pub fn removed(&self, file: &str, grammar: Grammar) -> &[RemovedRegion] {
+        if file == self.file && grammar == self.grammar {
             return self.removed;
         }
-        match self.state.reads.get(file) {
+        match self.state.reads.get(&(file.to_string(), grammar)) {
             Some(Ok(removed)) => removed,
             _ => &[],
         }
@@ -709,7 +717,8 @@ impl DepGraph {
                 source,
                 removed,
             } = parsed;
-            let family = Family::of(source.grammar());
+            let grammar = source.grammar();
+            let family = Family::of(grammar);
             let found = extract(&source);
             drop(source);
             if cancel.is_cancelled() {
@@ -725,6 +734,7 @@ impl DepGraph {
                             state: &mut state,
                             analyzable: &analyzable,
                             file: &file,
+                            grammar,
                             removed: &removed,
                             cancel,
                         };

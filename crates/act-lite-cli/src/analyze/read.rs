@@ -437,16 +437,11 @@ impl SupportReader {
         &self.includes
     }
 
-    /// Reads and parses a source file, blanking its test regions as an
-    /// analyzed read does. A file below a pruned directory is refused.
-    pub fn source(&self, rel: &str) -> Result<Parsed, SupportError> {
+    /// Reads a source file and parses it with `grammar`, whatever its
+    /// extension, blanking its test regions as an analyzed read does. A file
+    /// below a pruned directory is refused.
+    pub fn source(&self, rel: &str, grammar: Grammar) -> Result<Parsed, SupportError> {
         let (path, written) = self.resolve(rel, true)?;
-        let Some(grammar) = Grammar::from_path(&path) else {
-            return Err(SupportError::Unreadable(
-                rel.to_string(),
-                "no grammar recognizes the file".to_string(),
-            ));
-        };
         let file = Candidate {
             path,
             rel: written,

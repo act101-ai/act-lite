@@ -900,6 +900,50 @@ fn a_name_bound_in_a_symlinked_initializer_resolves_to_its_target() {
     assert_eq!(outcome(&graph, "pkg/k.py", ".m"), resolved(&["pkg/m.py"]));
 }
 
+/// The members of each cycle that `act-lite analyze cycles` reports in `root`.
+#[cfg(unix)]
+fn binary_cycles(root: &Path) -> Vec<Vec<String>> {
+    let config = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_act-lite"))
+        .env("ACT_CONFIG_DIR", config.path())
+        .arg("--workspace")
+        .arg(root)
+        .args(["analyze", "cycles"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            f["members"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["file"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_initializer_with_another_extension_is_read_as_python() {
+    let ws = symlinked_initializer("init.js", "n = 1\n", "from pkg import n\n");
+    let graph = build(ws.path(), &[]);
+    assert_eq!(outcome(&graph, "main.py", "pkg.n"), resolved(&["init.js"]));
+    assert!(!edges(&graph).contains(&("main.py".to_string(), "pkg/n.py".to_string())));
+    assert!(cycles(ws.path()).is_empty());
+    assert!(binary_cycles(ws.path()).is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlinked_package_directory_resolves_to_the_files_of_its_target() {

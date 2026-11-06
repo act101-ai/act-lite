@@ -714,7 +714,9 @@ fn names_of(cx: &mut ResolveCx<'_>, path: &str) -> Result<ModuleNames, String> {
     if let Some(known) = cx.cache::<PyCache>().names.get(path) {
         return known.clone();
     }
-    let result = cx.source(path).map(|parsed| module_names(&parsed.source));
+    let result = cx
+        .source(path, Grammar::Python)
+        .map(|parsed| module_names(&parsed.source));
     cx.cache::<PyCache>()
         .names
         .insert(path.to_string(), result.clone());

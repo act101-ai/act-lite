@@ -82,28 +82,28 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
     std::os::unix::fs::symlink(tmp.path().join("outside.rs"), root.join("link.rs")).unwrap();
 
     let support = SupportReader::new(&root, &Includes::default(), &token());
-    let parsed = support.source("other/x.rs").unwrap();
+    let parsed = support.source("other/x.rs", Grammar::Rust).unwrap();
     assert_eq!(parsed.rel, "other/x.rs");
     assert_eq!(parsed.removed.len(), 1, "blanked as an analyzed read is");
     assert!(matches!(
-        support.source("big.rs"),
+        support.source("big.rs", Grammar::Rust),
         Err(SupportError::TooLarge(_))
     ));
     assert!(matches!(
-        support.source("latin.rs"),
+        support.source("latin.rs", Grammar::Rust),
         Err(SupportError::NotUtf8(_))
     ));
     assert!(matches!(
-        support.source("../outside.rs"),
+        support.source("../outside.rs", Grammar::Rust),
         Err(SupportError::Refused(_))
     ));
     #[cfg(unix)]
     assert!(matches!(
-        support.source("link.rs"),
+        support.source("link.rs", Grammar::Rust),
         Err(SupportError::Refused(_))
     ));
     assert!(matches!(
-        support.source("nope.rs"),
+        support.source("nope.rs", Grammar::Rust),
         Err(SupportError::NotFound(_))
     ));
     assert_eq!(support.text("other/x.rs").unwrap(), WITH_TEST_MOD);
@@ -112,7 +112,7 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
     cancelled.cancel();
     let support = SupportReader::new(&root, &Includes::default(), &cancelled);
     assert!(matches!(
-        support.source("other/x.rs"),
+        support.source("other/x.rs", Grammar::Rust),
         Err(SupportError::Cancelled)
     ));
     assert!(matches!(
@@ -125,7 +125,7 @@ fn support_reads_have_the_read_bounds_and_stay_in_the_workspace() {
     ));
 
     let error = SupportReader::new(&root, &Includes::default(), &token())
-        .source("big.rs")
+        .source("big.rs", Grammar::Rust)
         .err()
         .unwrap()
         .to_string();
@@ -140,7 +140,7 @@ fn support_reads_refuse_pruned_directories_and_add_no_evidence() {
     write(ws.path(), "src/a.rs", b"fn a() {}\n");
     let support = SupportReader::new(ws.path(), &Includes::default(), &token());
     assert!(matches!(
-        support.source("node_modules/x.js"),
+        support.source("node_modules/x.js", Grammar::JavaScript),
         Err(SupportError::Refused(_))
     ));
     let mut reader = Reader::new(
@@ -160,7 +160,7 @@ fn support_reads_refuse_pruned_directories_and_add_no_evidence() {
         &token(),
     );
     while reader.next_file().unwrap().is_some() {}
-    let parsed = support.source("lib/broken.rs").unwrap();
+    let parsed = support.source("lib/broken.rs", Grammar::Rust).unwrap();
     assert!(parsed.source.tree().root_node().has_error());
     assert!(reader.finish().parse_failures.is_empty());
 }
@@ -501,7 +501,7 @@ fn support_reads_write_nothing() {
     write(ws.path(), "package.json", b"{\"name\":\"p\"}\n");
     let before = snapshot(ws.path());
     let support = SupportReader::new(ws.path(), &Includes::default(), &token());
-    support.source("src/lib.rs").unwrap();
+    support.source("src/lib.rs", Grammar::Rust).unwrap();
     support.text("package.json").unwrap();
     support.list_dir("src").unwrap();
     walk_workspace(ws.path(), &Includes::default(), &token()).unwrap();
@@ -610,7 +610,7 @@ fn a_whole_file_test_is_a_test_file_error() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = round2(tmp.path());
     let support = SupportReader::new(&ws, &Includes::default(), &token());
-    let err = support.source("src/t.rs").err().unwrap();
+    let err = support.source("src/t.rs", Grammar::Rust).err().unwrap();
     unlock(&ws);
     assert_eq!(err, SupportError::TestFile("src/t.rs".to_string()));
     assert_eq!(err.to_string(), "src/t.rs: excluded as tests");
@@ -642,13 +642,13 @@ fn support_reads_honour_the_request_includes() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = round2(tmp.path());
     let default = SupportReader::new(&ws, &Includes::default(), &token());
-    let refused = default.source("vendor/lib/a.js").err();
+    let refused = default.source("vendor/lib/a.js", Grammar::JavaScript).err();
     let vendored = Includes {
         vendored: true,
         ..Includes::default()
     };
     let read = SupportReader::new(&ws, &vendored, &token())
-        .source("vendor/lib/a.js")
+        .source("vendor/lib/a.js", Grammar::JavaScript)
         .map(|p| p.rel);
     unlock(&ws);
     assert!(
