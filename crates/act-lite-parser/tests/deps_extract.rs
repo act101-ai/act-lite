@@ -606,6 +606,18 @@ fn python_names_bound_at_top_level() {
 }
 
 #[test]
+fn python_import_binds_the_first_identifier_of_its_module_name() {
+    let file = parse(
+        Grammar::Python,
+        "import top \\\n .leaf\nimport a . b, c\nimport d \\\n . e as f\n",
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&["a", "c", "f", "top"])
+    );
+}
+
+#[test]
 fn python_annotation_without_a_value_binds_nothing() {
     let file = parse(
         Grammar::Python,

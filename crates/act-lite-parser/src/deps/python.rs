@@ -166,8 +166,8 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
                 match name.child_by_field_name("alias") {
                     Some(alias) => insert(names, alias),
                     None => {
-                        let dotted = text(name, source);
-                        let top = dotted.split('.').next().unwrap_or(dotted).trim();
+                        let dotted = module_name(name, source);
+                        let top = dotted.split('.').next().unwrap_or(&dotted);
                         names.names.insert(top.to_string());
                     }
                 }
@@ -175,7 +175,12 @@ fn bind_statement(statement: Node, source: &str, names: &mut ModuleNames) {
         }
         "import_from_statement" | "future_import_statement" => {
             for name in field_children(statement, "name") {
-                insert(names, name.child_by_field_name("alias").unwrap_or(name));
+                match name.child_by_field_name("alias") {
+                    Some(alias) => insert(names, alias),
+                    None => {
+                        names.names.insert(module_name(name, source));
+                    }
+                }
             }
             if has_child(statement, "wildcard_import") {
                 names.glob = true;
