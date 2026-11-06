@@ -342,6 +342,53 @@ fn a_target_named_by_a_variable_and_a_command_under_if_false_are_reported() {
     );
 }
 
+const DELIMITED: &str = "set(\"FOO\" 1)
+set([[BAR]] 2)
+function(\"qf\" a)
+endfunction()
+add_library(\"lib\" STATIC a.c)
+";
+
+#[test]
+fn quote_and_bracket_delimiters_are_not_part_of_a_name() {
+    let ws = workspace("CMakeLists.txt", DELIMITED);
+    let (_, list) = skeleton_declarations(ws.path(), "CMakeLists.txt");
+    let actual: BTreeSet<Triple> = list
+        .iter()
+        .map(|d| {
+            (
+                d["kind"].as_str().unwrap().to_string(),
+                d["name"].as_str().unwrap().to_string(),
+                span(&d["name_range"]),
+            )
+        })
+        .collect();
+    let expected: BTreeSet<Triple> = [
+        ("variable", "FOO", "1:6-1:9"),
+        ("variable", "BAR", "2:7-2:10"),
+        ("function", "qf", "3:11-3:13"),
+        ("class", "lib", "5:14-5:17"),
+    ]
+    .into_iter()
+    .map(|(k, n, r)| (k.into(), n.into(), r.into()))
+    .collect();
+    assert_eq!(actual, expected);
+    let (symbols, _) = symbol_triples(ws.path(), "CMakeLists.txt");
+    assert_eq!(symbols, expected);
+}
+
+#[test]
+fn a_quoted_argument_is_a_use_of_its_content() {
+    let ws = workspace(
+        "CMakeLists.txt",
+        "add_library(core a.c)\ntarget_link_libraries(app \"core\")\n",
+    );
+    assert_eq!(
+        sites(&reference_sites(ws.path(), "core", "1", "13")),
+        [(1, 13), (2, 28)].into_iter().collect()
+    );
+}
+
 fn reference_sites(ws: &std::path::Path, name: &str, line: &str, column: &str) -> Value {
     cli_json(
         ws,
