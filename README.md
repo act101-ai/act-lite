@@ -965,6 +965,8 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   value, a decorator or a base class, but not in a `def`, `lambda` or
   `class` body; `except … as n` does not bind, as `n` is deleted at the end
   of the handler; a module-level `del n` unbinds, a `del` inside a block
+  does not; a `del` runs its targets from left to right, and a `:=` in a
+  target binds: `del items[(n := 0)]` binds `n`, `del items[(n := 0)], n`
   does not; `global n` does not bind), else the submodule `X.n`, and also
   `X`'s file when it has a `from … import *`. A
   relative import (`.`, `..models`) resolves in the package of the file, and
