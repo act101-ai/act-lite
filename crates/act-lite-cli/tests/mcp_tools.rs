@@ -1118,6 +1118,25 @@ fn tools_list_is_the_readme_fifteen() {
 }
 
 #[test]
+fn patterns_description_counts_the_supported_languages() {
+    use act_lite_cli::analyze::patterns::PatternsAnalyzer;
+    use act_lite_cli::analyze::run::Analyzer;
+    let supported = act_lite_parser::Grammar::all()
+        .into_iter()
+        .filter(|g| PatternsAnalyzer.supports(*g))
+        .count();
+    let reply = serve_langs().request("tools/list", json!({}));
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    let patterns = tools
+        .iter()
+        .find(|t| t["name"] == "analyze_patterns")
+        .unwrap_or_else(|| panic!("no analyze_patterns in {reply}"));
+    let description = patterns["description"].as_str().unwrap();
+    let want = format!("Covers {supported} programming languages;");
+    assert!(description.contains(&want), "{want} not in {description}");
+}
+
+#[test]
 fn unknown_tool_is_an_error() {
     let message = serve_langs().err("no_such_tool", json!({}));
     assert!(!message.is_empty(), "the error must carry a message");
