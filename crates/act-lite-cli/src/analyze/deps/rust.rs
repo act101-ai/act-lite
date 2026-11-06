@@ -123,10 +123,20 @@ struct Module {
     names: Result<Names, String>,
     /// The module's file has been read; always true for an inline module.
     expanded: bool,
-    /// The reason the module's directory is unknown: the `#[path]` literal
-    /// of the module, or of an inline module around it, does not decode, is
-    /// absolute or leaves the workspace.
-    unknown_dir: Option<String>,
+    /// Why the module's directory is unknown: the `#[path]` literal of the
+    /// module, or of an inline module around it, does not decode or is
+    /// absolute (`Missing`), or leaves the workspace (`Outside`).
+    unknown_dir: Option<UnknownDir>,
+}
+
+/// An inline module's directory that no probe may read.
+#[derive(Clone)]
+enum UnknownDir {
+    /// The `mod` declarations inside are unresolved with this reason.
+    Missing(String),
+    /// The directory is outside the workspace: the declarations inside are
+    /// external, as a direct module's `#[path]` that leaves it.
+    Outside,
 }
 
 /// The module tree of one crate root, or of a file that no root reaches.
@@ -1039,10 +1049,11 @@ fn add_inline(tree: &mut Tree, idx: usize, inline: Vec<InlineModule>) {
         };
         let dir = lexical(&parent.dir, written).filter(|_| !is_absolute(written));
         let rejected = match &module.path_attribute {
-            Some(Err(_)) => Some(INVALID_LITERAL.to_string()),
-            Some(Ok(path)) if dir.is_none() => {
-                Some(format!("absolute path is not resolved: {path}"))
-            }
+            Some(Err(_)) => Some(UnknownDir::Missing(INVALID_LITERAL.to_string())),
+            Some(Ok(path)) if is_absolute(path) => Some(UnknownDir::Missing(format!(
+                "absolute path is not resolved: {path}"
+            ))),
+            Some(Ok(_)) if dir.is_none() => Some(UnknownDir::Outside),
             _ => None,
         };
         let unknown_dir = parent.unknown_dir.clone().or(rejected);
@@ -1147,8 +1158,10 @@ fn probe_mod(
     path_attribute: Option<&LiteralValue>,
     detached: bool,
 ) -> ModTarget {
-    if let Some(reason) = &module.unknown_dir {
-        return ModTarget::Missing(reason.clone());
+    match &module.unknown_dir {
+        Some(UnknownDir::Missing(reason)) => return ModTarget::Missing(reason.clone()),
+        Some(UnknownDir::Outside) => return ModTarget::Outside,
+        None => {}
     }
     if let Some(written) = path_attribute {
         let Ok(written) = written else {

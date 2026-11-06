@@ -1464,7 +1464,8 @@ fn an_inline_module_with_a_rejected_path_has_no_directory() {
     }
     assert_eq!(
         outcome(&graph, "src/lib.rs", "y"),
-        unresolved("absolute path is not resolved: ../../..")
+        Outcome::External,
+        "a path that leaves the workspace is outside, as for a direct module"
     );
     assert!(pairs(&graph).is_empty());
 }
