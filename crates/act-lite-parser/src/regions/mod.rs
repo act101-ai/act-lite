@@ -359,11 +359,12 @@ pub fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str
 
 /// Whether `node` lies in the start tag of `element`.
 fn within_start_tag(element: tree_sitter::Node, node: tree_sitter::Node) -> bool {
-    let mut cursor = element.walk();
-    element
-        .children(&mut cursor)
-        .filter(|child| matches!(child.kind(), "start_tag" | "self_closing_tag"))
-        .any(|tag| tag.start_byte() <= node.start_byte() && node.end_byte() <= tag.end_byte())
+    // The start tag is the element's first child.
+    element.child(0).is_some_and(|tag| {
+        matches!(tag.kind(), "start_tag" | "self_closing_tag")
+            && tag.start_byte() <= node.start_byte()
+            && node.end_byte() <= tag.end_byte()
+    })
 }
 
 /// The framework detector for a component grammar.

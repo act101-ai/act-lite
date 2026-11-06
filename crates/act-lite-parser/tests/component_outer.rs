@@ -175,3 +175,24 @@ fn the_position_index_agrees_with_position_at_at_every_byte() {
         }
     }
 }
+
+#[test]
+fn a_flat_vue_template_stays_linear_in_its_elements() {
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: set ACT_LITE_CHECK_PERF=1 to time 10,000 sibling elements");
+        return;
+    }
+    let mut text = String::from("<template>\n");
+    for i in 0..10_000 {
+        text.push_str(&format!("<p id=\"a{i}\" class=\"c\"></p>\n"));
+    }
+    text.push_str("</template>\n");
+    let source = load("Flat.vue", &text, Grammar::Vue);
+    let started = std::time::Instant::now();
+    let rows = skeleton(&source);
+    let symbols = symbols(&source);
+    let elapsed = started.elapsed();
+    assert_eq!(rows.len(), 1 + 3 * 10_000);
+    assert_eq!(symbols.len(), 1 + 3 * 10_000);
+    assert!(elapsed.as_secs_f64() < 3.0, "{elapsed:?}");
+}
