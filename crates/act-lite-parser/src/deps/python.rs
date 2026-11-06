@@ -60,7 +60,8 @@ pub(super) fn module_names(root: Node, source: &str) -> ModuleNames {
     let mut cursor = root.walk();
     for statement in root.named_children(&mut cursor) {
         if statement.kind() == "delete_statement" {
-            // Only a `del` that always runs leaves its names unbound.
+            // Only a `del` that always runs leaves its names unbound. Its
+            // targets run from left to right.
             let mut cursor = statement.walk();
             for target in statement.named_children(&mut cursor) {
                 unbind_target(target, source, &mut names);
@@ -288,7 +289,8 @@ fn bind_target(target: Node, source: &str, names: &mut ModuleNames) {
 }
 
 /// The names a `del` target or an `except … as` alias unbinds: a name, or
-/// the names of a tuple or list; not an attribute or a subscript.
+/// the names of a tuple or list, in order; an attribute or a subscript
+/// unbinds no name, and a `:=` in it binds.
 fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
     match target.kind() {
         "identifier" => {
@@ -300,7 +302,7 @@ fn unbind_target(target: Node, source: &str, names: &mut ModuleNames) {
                 unbind_target(child, source, names);
             }
         }
-        _ => {}
+        _ => bind_walrus(target, source, names),
     }
 }
 

@@ -1164,3 +1164,136 @@ fn a_file_of_another_package_resolves_with_the_package_of_its_tree() {
         unresolved("first path segment is not a module, crate or dependency: app")
     );
 }
+
+#[test]
+fn raw_identifiers_resolve_as_their_names() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(
+        root,
+        ".",
+        "app",
+        "\n[dependencies]\ndep = { path = \"dep\" }\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        "mod r#type;\nmod r#match;\nw! { mod r#gen; }\nmod r#inl {\n    mod r#x;\n}\nextern crate r#dep;\nuse crate::r#type::r#Foo;\nuse crate::r#type::r#run;\nuse r#type::{Bar};\nuse crate::r#gen::Z;\nuse r#dep::Y;\nuse crate::r#inl::r#x::W;\n",
+    );
+    write(
+        root,
+        "src/type.rs",
+        "pub struct r#Foo;\npub struct Bar;\npub fn r#run() {}\n",
+    );
+    write(root, "src/match/mod.rs", "");
+    write(root, "src/gen.rs", "pub struct Z;\n");
+    write(root, "src/inl/x.rs", "pub struct W;\n");
+    package(root, "dep", "dep", "");
+    write(root, "dep/src/lib.rs", "pub struct Y;\n");
+    let graph = graph(root);
+    for (target, files) in [
+        ("r#type", "src/type.rs"),
+        ("r#match", "src/match/mod.rs"),
+        ("r#gen", "src/gen.rs"),
+        ("r#x", "src/inl/x.rs"),
+        ("r#dep", "dep/src/lib.rs"),
+        ("crate::r#type::r#Foo", "src/type.rs"),
+        ("crate::r#type::r#run", "src/type.rs"),
+        ("r#type::Bar", "src/type.rs"),
+        ("crate::r#gen::Z", "src/gen.rs"),
+        ("r#dep::Y", "dep/src/lib.rs"),
+        ("crate::r#inl::r#x::W", "src/inl/x.rs"),
+    ] {
+        assert_eq!(
+            outcome(&graph, "src/lib.rs", target),
+            resolved(&[files]),
+            "{target}"
+        );
+    }
+    assert!(reasons(&graph).is_empty(), "{:?}", reasons(&graph));
+}
+
+#[test]
+fn a_raw_path_attribute_replaces_the_probe() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "#[r#path = \"other.rs\"]\nmod x;\nw! { #[r#path = \"other2.rs\"] mod y; }\n",
+    );
+    for file in ["src/other.rs", "src/other2.rs", "src/x.rs", "src/y.rs"] {
+        write(root, file, "");
+    }
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "x"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "y"),
+        resolved(&["src/other2.rs"])
+    );
+}
+
+#[test]
+fn a_comment_inside_a_path_attribute_keeps_it() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "#[/* a */ path /* c */ = \"other.rs\"]\nmod x;\nwrapper! { #[path /* c */ = \"other2.rs\"] mod y; }\n",
+    );
+    for file in ["src/other.rs", "src/other2.rs", "src/x.rs", "src/y.rs"] {
+        write(root, file, "");
+    }
+    let graph = graph(root);
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "x"),
+        resolved(&["src/other.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "y"),
+        resolved(&["src/other2.rs"])
+    );
+    assert_eq!(
+        pairs(&graph),
+        [
+            edge("src/lib.rs", "src/other.rs"),
+            edge("src/lib.rs", "src/other2.rs")
+        ]
+    );
+}
+
+#[test]
+fn comments_inside_include_and_use_tokens_are_skipped() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(
+        root,
+        "src/lib.rs",
+        "mod a;\nconst D: &str = include_str!(/* c */ \"data.txt\");\nconst E: &str = r#include_str!(\"data.txt\");\nuse crate::a::/* c */ B;\n",
+    );
+    write(root, "src/a.rs", "pub struct B;\n");
+    write(root, "src/data.txt", "");
+    let graph = graph(root);
+    assert_eq!(kinds_of(&graph, "src/lib.rs", "src/data.txt"), ["include"]);
+    assert_eq!(
+        graph
+            .edges()
+            .iter()
+            .find(|e| e.to == "src/data.txt")
+            .unwrap()
+            .evidence_total,
+        2
+    );
+    assert_eq!(
+        outcome(&graph, "src/lib.rs", "crate::a::B"),
+        resolved(&["src/a.rs"])
+    );
+    assert!(reasons(&graph).is_empty(), "{:?}", reasons(&graph));
+}

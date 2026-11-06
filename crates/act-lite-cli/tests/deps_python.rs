@@ -256,6 +256,8 @@ fn a_name_still_bound_in_the_package_file_beats_a_submodule() {
         "print([(n := x) for x in [1]])\n",
         "n = 0\nn += 1\n",
         "type n = int\n",
+        "items = [1]\ndel items[(n := 0)]\n",
+        "n = 1\nitems = [1]\ndel n, items[(n := 0)]\n",
     ] {
         let ws = tempfile::tempdir().unwrap();
         write(ws.path(), "pkg/__init__.py", init);
@@ -277,6 +279,7 @@ fn a_name_no_longer_bound_in_the_package_file_does_not_beat_a_submodule() {
         "class C:\n    m = (n := 1)\n",
         "try:\n    pass\nexcept ValueError as n:\n    n = 1\n",
         "n = 1\ndel n\n",
+        "items = [1]\ndel items[(n := 0)], n\n",
     ] {
         let ws = tempfile::tempdir().unwrap();
         write(ws.path(), "pkg/__init__.py", init);

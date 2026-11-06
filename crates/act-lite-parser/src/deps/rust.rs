@@ -8,9 +8,13 @@
 //! `pub(…)`: `mod <name> ;`, `use <tree> ;` (the text is parsed again as a
 //! `use` declaration), and an item keyword followed by a name. A
 //! `# [ path = "…" ]` among the attributes directly before a `mod` form is
-//! its `#[path]` value. A nested
+//! its `#[path]` value. A comment is no token. A nested
 //! token tree is read the same way when it is the body of a nested macro
 //! invocation (`name! { … }`).
+//!
+//! A raw identifier `r#name` is the identifier `name`: declared names,
+//! inline module names and attribute names are given without `r#`; a
+//! relationship's specifier keeps the written spelling.
 
 use act_lite_core::CompactRange;
 use tree_sitter::Node;
@@ -139,14 +143,14 @@ fn declared(container: Node, source: &str) -> ModuleNames {
                 if let Some(name) = item.child_by_field_name("name")
                     && text(name, source) != "_"
                 {
-                    names.names.insert(text(name, source).to_string());
+                    names.names.insert(unraw(text(name, source)).to_string());
                 }
             }
             "mod_item" => {
                 if let Some(body) = item.child_by_field_name("body")
                     && let Some(name) = item.child_by_field_name("name")
                 {
-                    let name = text(name, source).to_string();
+                    let name = unraw(text(name, source)).to_string();
                     names.names.insert(name.clone());
                     names.inline.push(InlineModule {
                         name,
@@ -158,7 +162,7 @@ fn declared(container: Node, source: &str) -> ModuleNames {
             }
             "extern_crate_declaration" => {
                 if let Some(alias) = item.child_by_field_name("alias") {
-                    names.names.insert(text(alias, source).to_string());
+                    names.names.insert(unraw(text(alias, source)).to_string());
                 }
             }
             "use_declaration" => {
@@ -182,7 +186,7 @@ fn declared(container: Node, source: &str) -> ModuleNames {
                 for item in items {
                     match item {
                         MacroItem::Mod(name, ..) | MacroItem::Name(name) => {
-                            names.names.insert(name);
+                            names.names.insert(unraw(&name).to_string());
                         }
                         MacroItem::Use(leaves, _) => {
                             for leaf in leaves {
@@ -207,7 +211,16 @@ fn declare_leaf(names: &mut ModuleNames, leaf: Leaf) {
         let last = leaf.path.rsplit("::").next().unwrap_or(&leaf.path);
         last.to_string()
     });
-    names.names.insert(name);
+    names.names.insert(unraw(&name).to_string());
+}
+
+/// The identifier that `name` spells: `r#type` is `type`.
+fn unraw(name: &str) -> &str {
+    name.strip_prefix("r#").unwrap_or(name)
+}
+
+fn is_comment(node: &Node) -> bool {
+    matches!(node.kind(), "line_comment" | "block_comment")
 }
 
 /// The names of the `mod x;` declarations at the top level of `text`.
@@ -220,7 +233,7 @@ pub(super) fn mods_in_text(text_: &str) -> Vec<String> {
     root.named_children(&mut cursor)
         .filter(|item| item.kind() == "mod_item" && item.child_by_field_name("body").is_none())
         .filter_map(|item| item.child_by_field_name("name"))
-        .map(|name| text(name, text_).to_string())
+        .map(|name| unraw(text(name, text_)).to_string())
         .collect()
 }
 
@@ -254,7 +267,7 @@ fn collect_leaves(node: Node, source: &str, prefix: &str, leaves: &mut Vec<Leaf>
         }
         "use_wildcard" => {
             let mut cursor = node.walk();
-            let path = match node.named_children(&mut cursor).next() {
+            let path = match node.named_children(&mut cursor).find(|c| !is_comment(c)) {
                 Some(path) => join(prefix, &path_text(path, source)),
                 None => prefix.to_string(),
             };
@@ -290,8 +303,18 @@ fn join(prefix: &str, rest: &str) -> String {
     }
 }
 
+/// The text of a path without its whitespace and comments.
 fn path_text(node: Node, source: &str) -> String {
-    text(node, source).split_whitespace().collect()
+    if is_comment(&node) {
+        return String::new();
+    }
+    if node.child_count() == 0 {
+        return text(node, source).split_whitespace().collect();
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .map(|child| path_text(child, source))
+        .collect()
 }
 
 /// The value of a `#[path = "…"]` attribute among the attributes before an
@@ -301,8 +324,8 @@ fn path_attribute(item: Node, source: &str) -> Option<String> {
     while let Some(node) = sibling {
         match node.kind() {
             "attribute_item" => {
-                if let Some(attribute) = node.named_child(0)
-                    && attribute.named_child(0).map(|p| text(p, source)) == Some("path")
+                if let Some(attribute) = first_named(node)
+                    && first_named(attribute).map(|p| unraw(text(p, source))) == Some("path")
                     && let Some(value) = attribute.child_by_field_name("value")
                     && let Some(path) = string_value(value, source)
                 {
@@ -315,6 +338,12 @@ fn path_attribute(item: Node, source: &str) -> Option<String> {
         sibling = node.prev_sibling();
     }
     None
+}
+
+/// The first named child that is no comment.
+fn first_named(node: Node) -> Option<Node> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).find(|c| !is_comment(c))
 }
 
 fn string_value(node: Node, source: &str) -> Option<String> {
@@ -332,12 +361,15 @@ fn string_value(node: Node, source: &str) -> Option<String> {
 /// the argument's text when it is not one.
 fn include(node: Node, source: &str) -> Option<Relationship> {
     let name = text(node.child_by_field_name("macro")?, source);
-    if !INCLUDE_MACROS.contains(&name.rsplit("::").next().unwrap_or(name)) {
+    if !INCLUDE_MACROS.contains(&unraw(name.rsplit("::").next().unwrap_or(name))) {
         return None;
     }
     let tree = token_tree(node)?;
     let mut cursor = tree.walk();
-    let arguments: Vec<Node> = tree.named_children(&mut cursor).collect();
+    let arguments: Vec<Node> = tree
+        .named_children(&mut cursor)
+        .filter(|c| !is_comment(c))
+        .collect();
     if let [only] = arguments.as_slice()
         && let Some(value) = string_value(*only, source)
     {
@@ -384,11 +416,7 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
     };
     // A comment is no token: it keeps a pending attribute and does not split
     // a declaration.
-    let tokens: Vec<Node> = tokens
-        .iter()
-        .copied()
-        .filter(|t| !matches!(t.kind(), "line_comment" | "block_comment"))
-        .collect();
+    let tokens: Vec<Node> = tokens.iter().copied().filter(|t| !is_comment(t)).collect();
     let kind_at = |j: usize| tokens.get(j).map(|t| t.kind());
     // The `#[path]` value among the attributes read since the last item.
     let mut attribute_path = None;
@@ -457,14 +485,17 @@ fn macro_items(tree: Node, source: &str, items: &mut Vec<MacroItem>) {
     }
 }
 
-/// The value of the attribute token tree `[path = "…"]`.
+/// The value of the attribute token tree `[path = "…"]`, comments skipped.
 fn path_in_attribute(attribute: Node, source: &str) -> Option<String> {
     let mut cursor = attribute.walk();
-    let tokens: Vec<Node> = attribute.children(&mut cursor).collect();
+    let tokens: Vec<Node> = attribute
+        .children(&mut cursor)
+        .filter(|t| !is_comment(t))
+        .collect();
     match tokens.as_slice() {
         [_, name, equals, value, _]
             if name.kind() == "identifier"
-                && text(*name, source) == "path"
+                && unraw(text(*name, source)) == "path"
                 && equals.kind() == "=" =>
         {
             string_value(*value, source)

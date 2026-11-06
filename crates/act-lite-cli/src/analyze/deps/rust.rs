@@ -16,7 +16,8 @@
 //! load it, and the files of one level of the trees are read in parallel;
 //! only what expansion needs of a file is kept, not its parse.
 //! `cfg` is not evaluated, so a name with several `mod` declarations or
-//! dependency entries resolves to every file it reaches.
+//! dependency entries resolves to every file it reaches. A raw identifier
+//! `r#name` is the identifier `name` in every probe and comparison.
 
 use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
@@ -256,7 +257,7 @@ fn outcome_in(
             let target = probe_mod(
                 cx,
                 &tree.modules[m],
-                &rel.specifier,
+                unraw(&rel.specifier),
                 rel.path_attribute.as_deref(),
                 tree.detached,
             );
@@ -266,12 +267,16 @@ fn outcome_in(
                 ModTarget::Missing(reason) => Outcome::Unresolved(reason),
             }
         }
-        RelationshipKind::ExternCrate => match crate_start(cx, package, is_lib, &rel.specifier) {
-            Some(CrateStart::Libs(roots)) => Outcome::Resolved(roots),
-            Some(CrateStart::External) => Outcome::External,
-            Some(CrateStart::Unresolved(reason)) => Outcome::Unresolved(reason),
-            None => Outcome::Unresolved(format!("{} is not a crate or dependency", rel.specifier)),
-        },
+        RelationshipKind::ExternCrate => {
+            match crate_start(cx, package, is_lib, unraw(&rel.specifier)) {
+                Some(CrateStart::Libs(roots)) => Outcome::Resolved(roots),
+                Some(CrateStart::External) => Outcome::External,
+                Some(CrateStart::Unresolved(reason)) => Outcome::Unresolved(reason),
+                None => {
+                    Outcome::Unresolved(format!("{} is not a crate or dependency", rel.specifier))
+                }
+            }
+        }
         _ => use_path(cx, &rel.specifier, package, tree, is_lib, m),
     }
 }
@@ -290,7 +295,7 @@ fn use_path(
         Some(rest) => (true, rest),
         None => (false, path),
     };
-    let segments: Vec<&str> = path.split("::").collect();
+    let segments: Vec<&str> = path.split("::").map(unraw).collect();
     let first = segments[0];
     if !global && matches!(first, "crate" | "self" | "super") {
         if tree.detached {
@@ -1031,8 +1036,13 @@ fn module_decls(file: &SourceFile) -> Vec<(String, CompactRange, Option<String>)
     extract(file)
         .into_iter()
         .filter(|r| r.kind == RelationshipKind::Module)
-        .map(|r| (r.specifier, r.range, r.path_attribute))
+        .map(|r| (unraw(&r.specifier).to_string(), r.range, r.path_attribute))
         .collect()
+}
+
+/// The identifier that `name` spells: `r#type` is `type`.
+fn unraw(name: &str) -> &str {
+    name.strip_prefix("r#").unwrap_or(name)
 }
 
 /// The text of a removed test region parsed at its own location in the
