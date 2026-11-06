@@ -1,5 +1,6 @@
 //! Query types and execution.
 
+mod compiled;
 pub mod locals;
 
 pub use locals::{LocalDefinition, LocalScope, LocalsModel};
@@ -467,7 +468,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
     check_source_format(source)?;
 
     let query_source = support.skeleton_query();
-    let query = tree_sitter::Query::new(&support.ts_language(), query_source)?;
+    let query = compiled::compiled(source.grammar(), query_source)?;
 
     let tree = source.tree();
     let root_node = tree.root_node();
@@ -667,7 +668,7 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
     check_source_format(source)?;
 
     let query_source = support.symbols_query();
-    let query = tree_sitter::Query::new(&support.ts_language(), query_source)?;
+    let query = compiled::compiled(source.grammar(), query_source)?;
 
     let tree = source.tree();
     let root_node = tree.root_node();
@@ -1248,7 +1249,7 @@ fn collect_reference_ranges_matching(
     let support = source.grammar().language_support();
 
     let query_source = support.references_query();
-    let query = tree_sitter::Query::new(&support.ts_language(), query_source)?;
+    let query = compiled::compiled(source.grammar(), query_source)?;
 
     let tree = source.tree();
     let root_node = tree.root_node();
@@ -1511,9 +1512,8 @@ pub struct RawMatch {
 /// captures (name, text, 1-indexed range). Used by the recipe match stage.
 /// Returns `Err` if the query does not compile for the grammar.
 pub fn execute_raw_query(source: &SourceFile, query_source: &str) -> Result<Vec<RawMatch>> {
-    let support = source.grammar().language_support();
     check_source_format(source)?;
-    let query = tree_sitter::Query::new(&support.ts_language(), query_source)?;
+    let query = compiled::compiled(source.grammar(), query_source)?;
 
     let tree = source.tree();
     let root_node = tree.root_node();
