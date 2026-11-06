@@ -195,6 +195,9 @@ struct RustState {
     /// What each module file read gives, shared by every tree and module
     /// that loads it; the `Err` is the reason it could not be read.
     summaries: HashMap<String, Arc<Result<ModuleFile, String>>>,
+    /// For each package directory, the crate names of each of its
+    /// dependency entries, in entry order.
+    dependency_names: HashMap<String, Arc<Vec<Vec<String>>>>,
 }
 
 impl Resolver for RustResolver {
@@ -700,13 +703,16 @@ fn crate_start(
         {
             return Some(CrateStart::Libs(vec![root]));
         }
+        let names = dependency_names(cx, package);
         let entries: Vec<&Dependency> = package
             .dependencies
             .iter()
-            .filter(|d| d.key.replace('-', "_") == name)
+            .zip(names.iter())
+            .filter(|(_, names)| names.iter().any(|n| n == name))
+            .map(|(d, _)| d)
             .collect();
         if !entries.is_empty() {
-            return Some(dependency_start(cx, package, &entries));
+            return Some(dependency_start(cx, package, &entries, name));
         }
     }
     BUILTIN_CRATES
@@ -714,21 +720,54 @@ fn crate_start(
         .then_some(CrateStart::External)
 }
 
-/// Where the entries of one dependency name start: the lib roots of the
-/// workspace crates they name, unless two of them share a lib name; else
-/// outside the workspace.
+/// The crate name of each dependency entry of `package`, as Cargo exposes
+/// it: the key with `-` replaced by `_` when the entry renames its package
+/// (`package = "…"`, also through the workspace entry it inherits) or names
+/// no workspace crate; else the lib name of each workspace crate it names.
+fn dependency_names(cx: &mut ResolveCx<'_>, package: &Manifest) -> Arc<Vec<Vec<String>>> {
+    if let Some(known) = cx.cache::<RustState>().dependency_names.get(&package.dir) {
+        return Arc::clone(known);
+    }
+    let names: Vec<Vec<String>> = package
+        .dependencies
+        .iter()
+        .map(|entry| {
+            let key = vec![entry.key.replace('-', "_")];
+            match dependency_crates(cx, package, entry) {
+                Ok((found, false)) => {
+                    let libs: Vec<String> = found.iter().filter_map(|c| c.lib_name()).collect();
+                    if libs.is_empty() { key } else { libs }
+                }
+                _ => key,
+            }
+        })
+        .collect();
+    let names = Arc::new(names);
+    cx.cache::<RustState>()
+        .dependency_names
+        .insert(package.dir.clone(), Arc::clone(&names));
+    names
+}
+
+/// Where the entries of the dependency name `name` start: the lib roots of
+/// the workspace crates they name by it, unless two of them share a lib
+/// name; else outside the workspace.
 fn dependency_start(
     cx: &mut ResolveCx<'_>,
     package: &Manifest,
     entries: &[&Dependency],
+    name: &str,
 ) -> CrateStart {
     let mut crates: BTreeMap<String, Arc<Manifest>> = BTreeMap::new();
     let mut first = None;
     for entry in entries {
         match dependency_crates(cx, package, entry) {
-            Ok(found) => {
+            Ok((found, renamed)) => {
                 for manifest in found {
-                    crates.insert(manifest.dir.clone(), manifest);
+                    let lib = manifest.lib_name();
+                    if renamed || lib.is_none() || lib.as_deref() == Some(name) {
+                        crates.insert(manifest.dir.clone(), manifest);
+                    }
                 }
             }
             Err(CrateStart::Unresolved(reason)) => {
@@ -771,13 +810,14 @@ fn dependency_start(
 }
 
 /// The workspace crates that one dependency entry names: the crate at its
-/// path, or the crates whose `[package] name` is its package name. The
-/// `Err` is `External` or `Unresolved`.
+/// path, or the crates whose `[package] name` is its package name; and
+/// whether the entry renames its package. The `Err` is `External` or
+/// `Unresolved`.
 fn dependency_crates(
     cx: &mut ResolveCx<'_>,
     package: &Manifest,
     entry: &Dependency,
-) -> Result<Vec<Arc<Manifest>>, CrateStart> {
+) -> Result<(Vec<Arc<Manifest>>, bool), CrateStart> {
     let mut entry = entry.clone();
     let mut base = package.dir.clone();
     if entry.workspace
@@ -791,6 +831,7 @@ fn dependency_crates(
         entry.package = entry.package.or_else(|| shared.package.clone());
         base = root.dir.clone();
     }
+    let renamed = entry.package.is_some();
     if let Some(path) = &entry.path {
         if is_absolute(path) {
             return Err(CrateStart::Unresolved(format!(
@@ -813,7 +854,7 @@ fn dependency_crates(
             }
         };
         return match read_manifest(cx, &join(&dir, "Cargo.toml")) {
-            Ok(manifest) => Ok(vec![manifest]),
+            Ok(manifest) => Ok((vec![manifest], renamed)),
             Err(reason) => Err(CrateStart::Unresolved(reason)),
         };
     }
@@ -823,7 +864,7 @@ fn dependency_crates(
         .filter(|c| c.package.as_ref() == Some(name))
         .collect();
     if !found.is_empty() {
-        return Ok(found);
+        return Ok((found, renamed));
     }
     match cx.workspace_skipped().first() {
         Some(skip) => Err(CrateStart::Unresolved(format!(

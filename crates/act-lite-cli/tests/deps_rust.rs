@@ -898,7 +898,7 @@ fn duplicates_are_decided_on_lib_names() {
     write(
         root,
         "app/src/lib.rs",
-        "use shared::Item;\nuse foo_bar::Z;\n",
+        "use one::Item;\nuse two::Item as Second;\nuse shared::Item as Third;\nuse foo_bar::Z;\n",
     );
     package(root, "one", "shared", "\n[lib]\nname = \"one\"\n");
     write(root, "one/src/lib.rs", "pub struct Item;\n");
@@ -910,8 +910,17 @@ fn duplicates_are_decided_on_lib_names() {
     write(root, "foo_bar/src/lib.rs", "pub struct Z;\n");
     let graph = graph(root);
     assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "one::Item"),
+        resolved(&["one/src/lib.rs"])
+    );
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "two::Item"),
+        resolved(&["two/src/lib.rs"])
+    );
+    assert_eq!(
         outcome(&graph, "app/src/lib.rs", "shared::Item"),
-        resolved(&["one/src/lib.rs", "two/src/lib.rs"])
+        unresolved("first path segment is not a module, crate or dependency: shared"),
+        "a dependency is named by the lib name of its crate"
     );
     assert_eq!(
         outcome(&graph, "app/src/lib.rs", "foo_bar::Z"),
@@ -1756,5 +1765,77 @@ fn use_bindings_of_a_body_reach_its_whole_block_nested_blocks_and_inline_modules
     assert_eq!(
         kinds_of(&graph, "src/lib.rs", "src/a.rs"),
         ["module", "use"]
+    );
+}
+
+#[test]
+fn a_dependency_is_named_by_its_lib_name_or_its_rename() {
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, "foo", "foo", "\n[lib]\nname = \"bar\"\n");
+    write(root, "foo/src/lib.rs", "pub struct Thing;\n");
+    package(
+        root,
+        "app",
+        "app",
+        "\n[dependencies]\nfoo = { path = \"../foo\" }\n",
+    );
+    write(
+        root,
+        "app/src/lib.rs",
+        "use bar::Thing;\nuse foo::Thing as Other;\nextern crate bar;\nextern crate foo;\n",
+    );
+    package(
+        root,
+        "renamed",
+        "renamed",
+        "\n[dependencies]\nbaz = { package = \"foo\", path = \"../foo\" }\n",
+    );
+    write(
+        root,
+        "renamed/src/lib.rs",
+        "use baz::Thing;\nuse bar::Thing as Other;\n",
+    );
+    package(
+        root,
+        "byname",
+        "byname",
+        "\n[dependencies]\nfoo = \"0.1\"\n",
+    );
+    write(
+        root,
+        "byname/src/lib.rs",
+        "use bar::Thing;\nuse foo::Thing as Other;\n",
+    );
+    let graph = graph(root);
+    let lib = resolved(&["foo/src/lib.rs"]);
+    let missing = |name: &str| {
+        unresolved(&format!(
+            "first path segment is not a module, crate or dependency: {name}"
+        ))
+    };
+    assert_eq!(outcome(&graph, "app/src/lib.rs", "bar::Thing"), lib);
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "foo::Thing"),
+        missing("foo")
+    );
+    assert_eq!(outcome(&graph, "app/src/lib.rs", "bar"), lib);
+    assert_eq!(
+        outcome(&graph, "app/src/lib.rs", "foo"),
+        unresolved("foo is not a crate or dependency")
+    );
+    assert_eq!(outcome(&graph, "renamed/src/lib.rs", "baz::Thing"), lib);
+    assert_eq!(
+        outcome(&graph, "renamed/src/lib.rs", "bar::Thing"),
+        missing("bar")
+    );
+    assert_eq!(
+        outcome(&graph, "byname/src/lib.rs", "bar::Thing"),
+        lib,
+        "a workspace crate named by its package name"
+    );
+    assert_eq!(
+        outcome(&graph, "byname/src/lib.rs", "foo::Thing"),
+        missing("foo")
     );
 }

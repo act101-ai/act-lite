@@ -1028,7 +1028,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
 - **Rust.** The crates are the `[package]` entries of the workspace's
   `Cargo.toml` files, with their roots (`[lib]`, else `src/lib.rs`; `[[bin]]`
   paths, else `src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`; `build.rs`;
-  `examples/*.rs`, `benches/*.rs`, `tests/*.rs`) and their dependency keys. The
+  `examples/*.rs`, `benches/*.rs`, `tests/*.rs`) and their dependencies. The
   module tree follows the Rust Reference: `mod x;` probes `<dir>/x.rs`, then
   `<dir>/x/mod.rs`, where `<dir>` is the module file's directory when the file
   is a crate root, a `mod.rs` or a `#[path]` file, else that directory plus the
@@ -1047,6 +1047,11 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   `build.rs`), a path dependency or a workspace crate that the crate depends
   on; it follows module segments, and its first remaining segment must be an
   item that the reached module's file declares (or the file has a glob `use`).
+  A dependency is named as Cargo names it: by its key when the entry renames
+  the package (`baz = { package = "foo", … }`, also through an inherited
+  `workspace = true` entry), else by the depended-on crate's lib name
+  (`[lib] name`, else its package name with `-` replaced by `_`); a
+  dependency outside the workspace is named by its key.
   A `use` inside a function, closure or other block body resolves as rustc
   does: an inline module or an item declared in that body, or in a block
   around it, is found first (`fn f() { mod x { … } use x::Y; }`). A `use`

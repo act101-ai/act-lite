@@ -1067,6 +1067,35 @@ fn a_use_through_a_use_binding_in_a_body_gives_no_edge_and_no_cycle() {
 }
 
 #[test]
+fn a_dependency_with_a_lib_name_is_used_by_that_name() {
+    let ws = workspace();
+    let root = ws.path();
+    write(
+        root,
+        "foo/Cargo.toml",
+        "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n\n[lib]\nname = \"bar\"\n",
+    );
+    write(root, "foo/src/lib.rs", "pub struct Thing;\n");
+    write(
+        root,
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nfoo = { path = \"../foo\" }\n",
+    );
+    write(root, "app/src/lib.rs", "use bar::Thing;\n");
+    write(root, "app/src/main.rs", "use foo::Thing;\n");
+    let v = graph(root, &[]);
+    assert_eq!(edges(&v), pairs(&[("app/src/lib.rs", "foo/src/lib.rs")]));
+    assert_eq!(
+        unresolved(&v),
+        triples(&[(
+            "app/src/main.rs",
+            "foo::Thing",
+            "first path segment is not a module, crate or dependency: foo"
+        )])
+    );
+}
+
+#[test]
 fn an_example_root_that_loads_a_source_file_gives_an_edge_from_its_tree() {
     let ws = workspace();
     let root = ws.path();
