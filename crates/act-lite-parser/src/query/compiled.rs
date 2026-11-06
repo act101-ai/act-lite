@@ -93,4 +93,16 @@ mod tests {
             assert_eq!(super::count::of(Grammar::Zig, query), 1);
         }
     }
+
+    /// A raw query that is not one of the grammar's own query files is not
+    /// kept: arbitrary query text must not accumulate for the process.
+    #[test]
+    fn a_custom_raw_query_is_not_cached() {
+        let custom = "(identifier) @custom_raw_query_probe";
+        let source =
+            SourceFile::from_content("c.zig", "const a = 1;\n".to_string(), Grammar::Zig).unwrap();
+        crate::execute_raw_query(&source, custom).unwrap();
+        crate::execute_raw_query(&source, custom).unwrap();
+        assert_eq!(super::count::of(Grammar::Zig, custom), 0);
+    }
 }

@@ -1513,7 +1513,24 @@ pub struct RawMatch {
 /// Returns `Err` if the query does not compile for the grammar.
 pub fn execute_raw_query(source: &SourceFile, query_source: &str) -> Result<Vec<RawMatch>> {
     check_source_format(source)?;
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    // Only the grammar's own query files are kept compiled; any other query
+    // text is compiled for this call, so arbitrary queries do not accumulate.
+    let support = source.grammar().language_support();
+    let builtin = [
+        support.skeleton_query(),
+        support.symbols_query(),
+        support.references_query(),
+        support.locals_query(),
+    ]
+    .contains(&query_source);
+    let query = if builtin {
+        compiled::compiled(source.grammar(), query_source)?
+    } else {
+        std::sync::Arc::new(tree_sitter::Query::new(
+            &support.ts_language(),
+            query_source,
+        )?)
+    };
 
     let tree = source.tree();
     let root_node = tree.root_node();

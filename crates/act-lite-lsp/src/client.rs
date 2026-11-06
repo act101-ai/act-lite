@@ -36,6 +36,27 @@ pub(crate) fn text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// A full-text `didChange` for `uri` at the next document version.
+pub(crate) fn full_text_change(uri: Uri, text: &str) -> lsp_types::DidChangeTextDocumentParams {
+    use std::sync::atomic::AtomicI32;
+    // ponytail: one process-wide counter keeps every document's versions
+    // strictly increasing past the `didOpen` version 1, across clients and
+    // calls; per-document counters only if a server ever objects to gaps.
+    // Taken under the document lock, so wire order follows version order.
+    static NEXT_VERSION: AtomicI32 = AtomicI32::new(2);
+    lsp_types::DidChangeTextDocumentParams {
+        text_document: lsp_types::VersionedTextDocumentIdentifier {
+            uri,
+            version: NEXT_VERSION.fetch_add(1, Ordering::Relaxed),
+        },
+        content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: text.to_string(),
+        }],
+    }
+}
+
 /// What a `did_open` actually did.
 ///
 /// The distinction is what makes the post-`didOpen` analysis wait affordable:
@@ -105,11 +126,13 @@ pub trait LspClientTrait: Send + Sync {
 
     async fn readiness(&self, uri: &Uri) -> Option<bool>;
 
-    /// Records `text` as the text the server holds for the open document
-    /// `uri`, and returns whether it differs from the text recorded before
-    /// (the `didOpen` text or a later recorded one). A caller that gets
-    /// `true` must send the server the text.
-    async fn record_text(&self, uri: &Uri, text: &str) -> bool;
+    /// Sends `text` as the full new text of the open document `uri` (a
+    /// `didChange` at the next version), unless the server was last sent
+    /// that text; returns whether it sent. The comparison, the send and the
+    /// record are one step under the per-client document lock, so concurrent
+    /// callers cannot leave the server and the record disagreeing. A
+    /// document that is not open is left alone (`false`).
+    async fn change_text(&self, uri: &Uri, text: &str) -> Result<bool>;
 
     /// The capabilities the server advertised in its `initialize` result;
     /// `None` when they are not known, and then every request is sent.
@@ -957,14 +980,15 @@ impl LspClientTrait for LspClient {
     }
 
     async fn did_open(&self, uri: Uri, language_id: String, text: String) -> Result<DocumentOpen> {
-        {
-            let mut opened = self.opened.lock().await;
-            if opened.contains_key(uri.as_str()) {
-                trace!("{} already open in {}", uri.as_str(), self.language);
-                return Ok(DocumentOpen::AlreadyOpen);
-            }
-            opened.insert(uri.as_str().to_string(), text_hash(&text));
+        // The lock is held across the send, so a concurrent `change_text`
+        // cannot reach the server before this `didOpen`.
+        let mut opened = self.opened.lock().await;
+        if opened.contains_key(uri.as_str()) {
+            trace!("{} already open in {}", uri.as_str(), self.language);
+            return Ok(DocumentOpen::AlreadyOpen);
         }
+        let key = uri.as_str().to_string();
+        let hash = text_hash(&text);
         self.notify::<DidOpenTextDocument>(DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri,
@@ -974,16 +998,25 @@ impl LspClientTrait for LspClient {
             },
         })
         .await?;
+        opened.insert(key, hash);
         Ok(DocumentOpen::Opened)
     }
 
-    async fn record_text(&self, uri: &Uri, text: &str) -> bool {
+    async fn change_text(&self, uri: &Uri, text: &str) -> Result<bool> {
         let hash = text_hash(text);
-        self.opened
-            .lock()
-            .await
-            .insert(uri.as_str().to_string(), hash)
-            != Some(hash)
+        let mut opened = self.opened.lock().await;
+        match opened.get(uri.as_str()) {
+            None => return Ok(false),
+            Some(sent) if *sent == hash => return Ok(false),
+            Some(_) => {}
+        }
+        self.notify::<lsp_types::notification::DidChangeTextDocument>(full_text_change(
+            uri.clone(),
+            text,
+        ))
+        .await?;
+        opened.insert(uri.as_str().to_string(), hash);
+        Ok(true)
     }
 
     fn is_initialized(&self) -> bool {

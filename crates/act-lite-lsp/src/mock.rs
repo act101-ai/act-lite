@@ -151,6 +151,19 @@ impl MockLspClient {
         self.diagnostics_waits.lock().unwrap().clone()
     }
 
+    /// Records a notification as sent, without an await, so a caller can do
+    /// it under a lock.
+    fn record_notification<N: Notification>(&self, params: N::Params)
+    where
+        N::Params: Serialize,
+    {
+        let params_value = serde_json::to_value(params).expect("failed to serialize params");
+        self.sent_notifications
+            .lock()
+            .unwrap()
+            .push((N::METHOD.to_string(), params_value));
+    }
+
     pub fn sent_notifications(&self) -> Vec<(String, serde_json::Value)> {
         self.sent_notifications.lock().unwrap().clone()
     }
@@ -238,13 +251,7 @@ impl LspClientTrait for MockLspClient {
     where
         N::Params: Serialize + Send,
     {
-        // Record the notification
-        let params_value = serde_json::to_value(params).expect("failed to serialize params");
-        self.sent_notifications
-            .lock()
-            .unwrap()
-            .push((N::METHOD.to_string(), params_value));
-
+        self.record_notification::<N>(params);
         Ok(())
     }
 
@@ -273,13 +280,19 @@ impl LspClientTrait for MockLspClient {
         self.readiness.lock().unwrap().get(uri.as_str()).copied()
     }
 
-    async fn record_text(&self, uri: &lsp_types::Uri, text: &str) -> bool {
+    async fn change_text(&self, uri: &lsp_types::Uri, text: &str) -> Result<bool> {
         let hash = crate::client::text_hash(text);
-        self.opened
-            .lock()
-            .unwrap()
-            .insert(uri.as_str().to_string(), hash)
-            != Some(hash)
+        let mut opened = self.opened.lock().unwrap();
+        match opened.get(uri.as_str()) {
+            None => return Ok(false),
+            Some(sent) if *sent == hash => return Ok(false),
+            Some(_) => {}
+        }
+        self.record_notification::<lsp_types::notification::DidChangeTextDocument>(
+            crate::client::full_text_change(uri.clone(), text),
+        );
+        opened.insert(uri.as_str().to_string(), hash);
+        Ok(true)
     }
 
     async fn did_open(
@@ -291,14 +304,13 @@ impl LspClientTrait for MockLspClient {
         // Deduplicated exactly as `LspClient` does it. A mock that re-opened a
         // document the real client would have skipped would model a server
         // state production can never reach.
-        {
-            let mut opened = self.opened.lock().unwrap();
-            if opened.contains_key(uri.as_str()) {
-                return Ok(DocumentOpen::AlreadyOpen);
-            }
-            opened.insert(uri.as_str().to_string(), crate::client::text_hash(&text));
+        // Under the document lock, as `LspClient` sends it.
+        let mut opened = self.opened.lock().unwrap();
+        if opened.contains_key(uri.as_str()) {
+            return Ok(DocumentOpen::AlreadyOpen);
         }
-        self.notify::<lsp_types::notification::DidOpenTextDocument>(
+        opened.insert(uri.as_str().to_string(), crate::client::text_hash(&text));
+        self.record_notification::<lsp_types::notification::DidOpenTextDocument>(
             lsp_types::DidOpenTextDocumentParams {
                 text_document: lsp_types::TextDocumentItem {
                     uri,
@@ -307,8 +319,7 @@ impl LspClientTrait for MockLspClient {
                     text,
                 },
             },
-        )
-        .await?;
+        );
         Ok(DocumentOpen::Opened)
     }
 
