@@ -33,8 +33,17 @@
   (rpc_name
     (identifier) @name)) @definition.method
 
-; Fields of messages; fields of extend blocks belong to another message
+; Fields of messages and of proto2 group bodies; fields of extend blocks
+; belong to another message
 (message
+  (message_body
+    [
+      (field (identifier) @name)
+      (map_field (identifier) @name)
+      (oneof (identifier) @name)
+    ] @definition.field))
+
+(group
   (message_body
     [
       (field (identifier) @name)

@@ -316,6 +316,36 @@ fn proto2_group_is_a_struct_and_a_field() {
     assert_eq!(result, vec!["field".to_string(), "struct".to_string()]);
 }
 
+const GROUP_BODY: &str = "message M {\n  optional group G = 1 {\n    optional int32 x = 2;\n    enum E { A = 0; }\n    message N {}\n  }\n}\n";
+
+#[test]
+fn a_proto2_group_body_declares_fields_enums_and_messages_like_a_message() {
+    let ws = workspace("g.proto", GROUP_BODY);
+    let symbols = cli_json(ws.path(), &["query", "symbols", "g.proto"]);
+    assert_eq!(
+        pairs(&symbols["symbols"]),
+        pair_set(&[
+            ("struct", "M"),
+            ("struct", "G"),
+            ("field", "G"),
+            ("field", "x"),
+            ("enum", "E"),
+            ("enum_member", "A"),
+            ("struct", "N"),
+        ])
+    );
+    let skeleton = cli_json(ws.path(), &["query", "skeleton", "g.proto"]);
+    assert_eq!(
+        pairs(&skeleton["declarations"]),
+        pair_set(&[
+            ("struct", "M"),
+            ("struct", "G"),
+            ("enum", "E"),
+            ("struct", "N"),
+        ])
+    );
+}
+
 #[test]
 fn extend_syntax_option_and_reserved_are_not_reported() {
     let ws = workspace(

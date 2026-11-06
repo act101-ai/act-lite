@@ -141,6 +141,15 @@ fn protobuf_field_type_resolves_to_the_nested_message_name() {
 }
 
 #[test]
+fn protobuf_group_body_field_is_a_declaration() {
+    let ws = workspace(&[(
+        "g.proto",
+        "message M {\n  optional group G = 1 {\n    optional int32 x = 2;\n  }\n}\n",
+    )]);
+    assert_found(ws.path(), "g.proto", "x", 3, 20, "x 3:20-3:21");
+}
+
+#[test]
 fn make_prerequisite_resolves_to_the_target() {
     assert_found(&fixture("make"), "Makefile", "app", 8, 6, "app 9:1-9:4");
 }
