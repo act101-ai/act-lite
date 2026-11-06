@@ -17,9 +17,9 @@ const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
 /// What is read of one `go.mod`.
 struct GoMod {
     module: String,
-    /// The module path and the workspace directory of each `replace` with a
-    /// relative path inside the workspace.
-    replaces: Vec<(String, String)>,
+    /// The module path of each `replace` and its workspace directory: `None`
+    /// when the replacement is not a relative path inside the workspace.
+    replaces: Vec<(String, Option<String>)>,
 }
 
 #[derive(Default)]
@@ -52,19 +52,30 @@ impl Resolver for GoResolver {
         let own_path = own_dir.as_deref().map(|dir| join(dir, "go.mod"));
         let own = own_path.as_deref().and_then(|path| read_mod(cx, path));
         let modules = Arc::clone(&cx.cache::<GoState>().modules);
-        let replaces: Vec<&(String, String)> = own.iter().flat_map(|m| m.replaces.iter()).collect();
+        let replaces: Vec<&(String, Option<String>)> =
+            own.iter().flat_map(|m| m.replaces.iter()).collect();
+        let under = |path: &str| {
+            import == path
+                || import
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
         // A replaced module path has only its replacement directories as
-        // candidates, as the go command uses no other module of that path.
+        // candidates, as the go command uses no other module of that path; a
+        // replacement outside the workspace leaves it none.
+        let replaced_away = replaces
+            .iter()
+            .any(|(old, dir)| dir.is_none() && under(old));
         let kept = modules
             .iter()
-            .filter(|(path, _)| !replaces.iter().any(|(old, _)| old == path));
+            .filter(|(path, _)| !replaces.iter().any(|(old, _)| old == path))
+            .map(|(path, dir)| (path.as_str(), dir.as_str()));
+        let local = replaces
+            .iter()
+            .filter_map(|(path, dir)| Some((path.as_str(), dir.as_deref()?)));
         let mut candidates: Vec<(&str, &str)> = Vec::new();
-        for (path, dir) in kept.chain(replaces.iter().copied()) {
-            let under = import == path
-                || import
-                    .strip_prefix(path.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'));
-            if under && !candidates.contains(&(path, dir)) {
+        for (path, dir) in kept.chain(local) {
+            if under(path) && !candidates.contains(&(path, dir)) {
                 candidates.push((path, dir));
             }
         }
@@ -105,6 +116,7 @@ impl Resolver for GoResolver {
         }
         match valid.len() {
             1 => Outcome::Resolved(valid.remove(0).1),
+            0 if replaced_away => Outcome::External,
             0 if !unvendored => {
                 let standard = import
                     .split('/')
@@ -214,7 +226,11 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
         let dir = dir_of(rel);
         let replaces = replaces
             .into_iter()
-            .filter_map(|(path, target)| Some((path, cx.normalize(dir, &target)?)))
+            .map(|(path, target)| {
+                let relative = target.starts_with("./") || target.starts_with("../");
+                let local = relative.then(|| cx.normalize(dir, &target)).flatten();
+                (path, local)
+            })
             .collect();
         Arc::new(GoMod { module, replaces })
     });
@@ -227,8 +243,8 @@ fn read_mod(cx: &mut ResolveCx<'_>, rel: &str) -> Option<Arc<GoMod>> {
     found
 }
 
-/// The `module` path and the `replace` directives with a relative path of a
-/// `go.mod`; `None` without a `module` directive.
+/// The `module` path and the module path and replacement of each `replace`
+/// directive of a `go.mod`; `None` without a `module` directive.
 fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
     let mut module = None;
     let mut replaces = Vec::new();
@@ -258,10 +274,7 @@ fn parse(text: &str) -> Option<(String, Vec<(String, String)>)> {
                     continue;
                 };
                 if let (Some(old), Some(new)) = (args.first(), args.get(arrow + 1)) {
-                    let new = unquote(new);
-                    if new.starts_with("./") || new.starts_with("../") {
-                        replaces.push((unquote(old).to_string(), new.to_string()));
-                    }
+                    replaces.push((unquote(old).to_string(), unquote(new).to_string()));
                 }
             }
             _ => {}

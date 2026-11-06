@@ -656,3 +656,39 @@ fn a_replace_directive_replaces_the_workspace_modules_of_its_path() {
         );
     }
 }
+
+#[test]
+fn a_replace_directive_outside_the_workspace_makes_its_path_external() {
+    for replace in [
+        "replace example.com/lib => ../../external-lib\n",
+        "replace example.com/lib v1.0.0 => ../../external-lib\n",
+        "replace example.com/lib => other.example/lib v1.2.3\n",
+    ] {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path();
+        write(root, "lib/go.mod", "module example.com/lib\n");
+        write(root, "lib/lib.go", "package lib\n");
+        write(root, "lib/sub/s.go", "package sub\n");
+        write(
+            root,
+            "app/go.mod",
+            &format!("module example.com/app\n\nrequire example.com/lib v1.0.0\n\n{replace}"),
+        );
+        write(
+            root,
+            "app/main.go",
+            "package main\n\nimport (\n\t\"example.com/lib\"\n\t\"example.com/lib/sub\"\n)\n",
+        );
+        let graph = graph(root);
+        let outcomes: Vec<Outcome> = ["example.com/lib", "example.com/lib/sub"]
+            .iter()
+            .map(|import| outcome(&graph, "app/main.go", import))
+            .collect();
+        assert_eq!(
+            outcomes,
+            [Outcome::External, Outcome::External],
+            "{replace}"
+        );
+        assert!(pairs(&graph).is_empty(), "{replace}");
+    }
+}

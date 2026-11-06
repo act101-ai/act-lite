@@ -901,8 +901,9 @@ the importing file's directory or an ancestor declares in a dependency table
 with a registry version, or a `node_modules/<package>/` directory there;
 Python, a top-level name that exists under none of the roots and is a
 standard-library module or a declared dependency; Go, a standard-library path
-(no `.` in the first path element), or a path under no workspace module from a
-file that belongs to a workspace module; Rust, a built-in crate name (`std`,
+(no `.` in the first path element), a path under no workspace module from a
+file that belongs to a workspace module, or a path under a module path that a
+`replace` of the file's `go.mod` replaces with a target outside the workspace; Rust, a built-in crate name (`std`,
 `core`, `alloc`, `proc_macro`, `test`) or a dependency key of the crate's
 `Cargo.toml`; every family, a path that leaves the workspace root. Two
 overrides apply: a name that the test would call `external` but that names a
@@ -984,10 +985,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   directories named `testdata` or starting with `_` or `.`). An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
-  directory. A `replace` with a relative path in the importing file's
-  `go.mod`, with or without a version, makes its directory the only
-  directory of that module path: other workspace modules that declare the
-  same path are not candidates. When exactly one such directory exists, belongs to that module and
+  directory. A `replace` in the importing file's `go.mod`, with or without a
+  version, replaces its module path whatever its target: other workspace
+  modules that declare the same path are never candidates. A relative path
+  inside the workspace makes its directory the only directory of that module
+  path; a relative path outside the workspace, or a module path with a
+  version, makes an import under the replaced path `external`. When exactly one such directory exists, belongs to that module and
   holds a `.go` file that is not a `*_test.go` file, the import has one edge to
   each such file in it. Two are `unresolved` (`ambiguous import: <module
   paths>`); none is `unresolved` (`no Go package files for <I> in the
@@ -1040,7 +1043,7 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   |---|---|---|---|
   | `package.json` | `package.json` | JS/TS | `name`, `main`, the presence of `exports`, the keys of `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies` |
   | `tsconfig.json`, `jsconfig.json`, and each file a relative `extends` names (comments and trailing commas accepted) | `tsconfig` | JS/TS | `compilerOptions.baseUrl`, `compilerOptions.paths`, `extends` |
-  | `go.mod` | `go.mod` | Go | `module`, `replace` lines with a relative path |
+  | `go.mod` | `go.mod` | Go | `module`, `replace` lines |
   | `Cargo.toml` | `Cargo.toml` | Rust | `[package] name`, `[lib] name` and `path`, `[[bin]] path`, the dependency table keys |
   | `pyproject.toml`, `requirements*.txt`, `setup.cfg` | `pyproject.toml`, `requirements`, `setup.cfg` | Python | the declared distribution names |
 
