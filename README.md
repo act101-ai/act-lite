@@ -794,26 +794,38 @@ the network.
 
 | Language | Relationship constructs | Static file rule | Supported | Reason when not supported |
 |---|---|---|---|---|
-| JavaScript, JSX, TypeScript, TSX | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| JavaScript | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| JSX | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| TypeScript | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
+| TSX | `import`, `export … from`, `import()`, `require()` | yes | yes | — |
 | Python | `import`, `from … import` | yes | yes | — |
 | Go | `import` | yes | yes | — |
 | Rust | `mod`, `use`, `extern crate`, `include!` | yes | yes | — |
 | Dart | `import`/`export` URIs | relative URIs yes; `package:` needs `.dart_tool/package_config.json`, which a tool generates | no | Later candidate: user value below the seven. |
 | Ruby | `require_relative` (relative to the file), `require` (`$LOAD_PATH` at run time) | `require_relative` only | no | Later candidate; `require` has no static rule. |
 | Bash | `source`, `.` | no: the path is relative to the shell's working directory or `PATH` at run time | no | No static rule. |
-| C, C++ | `#include "…"`, `#include <…>` | no: search paths come from compiler flags | no | Needs build-system input. |
+| C | `#include "…"`, `#include <…>` | no: search paths come from compiler flags | no | Needs build-system input. |
+| C++ | `#include "…"`, `#include <…>` | no: search paths come from compiler flags | no | Needs build-system input. |
 | C# | `using` | no: names a namespace, not a file | no | Not a file relationship. |
-| Java, Kotlin, Scala | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Java | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Kotlin | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
+| Scala | `import` | no: names a type or package; files of one package use each other without an import; source roots come from the build tool | no | Not a file relationship without build input. |
 | Swift | `import` | no: names a module (a build target); files of one module see each other | no | Not a file relationship. |
 | PHP | `use`, `require`/`include` | no: `use` names a namespace (autoload maps it through `composer.json`); `require` paths are often computed | no | Needs Composer autoload configuration. |
 | Elixir | `alias`, `import`, `use`, `require` | no: names modules; the build compiles every file | no | Not a file relationship. |
 | Lua | `require` | no: searched through `package.path` at run time | no | No static rule. |
-| CSS, SCSS | `@import`, `@use`, `@forward` | CSS relative URLs yes; Sass load paths come from configuration | no | Later candidate: data and style formats are outside the supported set. |
+| CSS | `@import`, `@use`, `@forward` | CSS relative URLs yes; Sass load paths come from configuration | no | Later candidate: data and style formats are outside the supported set. |
+| SCSS | `@import`, `@use`, `@forward` | CSS relative URLs yes; Sass load paths come from configuration | no | Later candidate: data and style formats are outside the supported set. |
 | HCL/Terraform | module `source = "./…"` | yes for local paths (a directory) | no | Later candidate (directory targets). |
 | HTML | `<script src>`, `<link href>` | no: URLs resolve against a server root | no | Not a file relationship. |
 | Dockerfile | `FROM`, `COPY` | no: image names and build-context paths | no | Not a code dependency. |
-| JSON, YAML, TOML, Markdown, SQL | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
-| JSONC, XML | none (no build-system semantics for XML) | — | no | No relationship construct modeled. |
+| JSON | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| YAML | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| TOML | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| Markdown | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| SQL | none in the format (links and `$ref` are conventions of other tools) | — | no | No relationship construct. |
+| JSONC | none in the format | — | no | No relationship construct modeled. |
+| XML | none (no build-system semantics for XML) | — | no | No relationship construct modeled. |
 | GraphQL | none in the specification | — | no | No relationship construct. |
 | Protocol Buffers | `import "x.proto"` | no: resolved against `--proto_path` flags | no | Needs build input. |
 | Make | `include` | no: relative to make's working directory and `-I` | no | Needs build input. |
@@ -1500,7 +1512,7 @@ the reverse; a user with both binaries sees one set of secrets per project.
 ## Claude Code plugin
 
 The `plugin/` directory is a Claude Code plugin that registers the MCP server
-and adds eight skills: seven that you invoke and one shared skill.
+and adds nine skills: eight that you invoke and one shared skill.
 
 - `define-work` turns a request into an approved design before code is
   written: repo recon, one question at a time, three fresh reads of the
@@ -1512,11 +1524,16 @@ and adds eight skills: seven that you invoke and one shared skill.
 - `diagnose-defect` finds the root cause of a defect and fixes it with a test
   that failed first.
 - `review-change` reviews a diff, branch or pull request for code health: the
-  structural problems in the changed functions and the duplication that
-  touches the change, as a report with no edit.
+  structural problems in the changed functions, the duplication that
+  touches the change, the files exposed to it (impact) and the dependency
+  cycles that involve it, as a report with no edit.
 - `audit-debt` audits a repository or directory for technical debt: the files
   where complexity concentrates, the functions over structural thresholds in
-  them, and the largest duplicated code, as a report with no edit.
+  them, the largest duplicated code, the dependency cycles and the most coupled
+  files, as a report with no edit.
+- `map-repo` maps a repository for orientation: its languages and size, the
+  files where complexity concentrates, and how those files connect to the rest,
+  as a report with no edit.
 
 `work-graph` is a shared skill, not one you invoke. It defines the work-graph
 format that `plan-work` writes and `execute-work` runs, and holds the script
