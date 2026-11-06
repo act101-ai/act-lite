@@ -966,7 +966,12 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   workspace root, and `src/` when it is a directory. A module name is
   resolved as its identifiers joined by `.`, without the whitespace and line
   continuations between them (`import pkg . sub` resolves `pkg.sub`); the
-  `specifier` keeps the written text. `a.b.c` exists under a
+  `specifier` keeps the written text. Identifiers are compared, and module
+  files probed, after NFKC normalization, as Python reads them (PEP 3131):
+  the names a module binds and unbinds, the segments of a module name and
+  the `n` of `from X import n`. `K = 1` written with the Kelvin sign
+  (U+212A) binds `K`, so `from pkg import K` targets that `pkg/__init__.py`,
+  not `pkg/K.py`; `import ｐkg` (fullwidth `ｐ`) probes `pkg`. `a.b.c` exists under a
   root as `a/b/c/__init__.py`, else `a/b/c.py`; a directory without
   `__init__.py` is a namespace package (it exists, with no file). The name is
   found segment by segment, as Python imports it: each segment before the last
@@ -1009,7 +1014,14 @@ that is outside `paths`: the relationship is `resolved` and the edge has
   decoded by Go's escapes, or raw `` `…` ``) is one word, and `//` starts a
   comment only outside a string, in a single-line directive and in a
   `replace ( … )` block; `replace example.com/lib => "./local lib"` replaces
-  with the directory `./local lib`. An import path
+  with the directory `./local lib`. A `go.mod` that the go command rejects
+  is an input error (its `resolution_inputs` entry gets `error`, and the
+  result is incomplete): a string not closed on its line or that does not
+  decode, a `( … )` block not closed, a `module` directive without exactly
+  one path or a second `module` directive, a `replace` directive that is not
+  `old [version] => new [version]`, or no `module` directive. Every import of
+  a file whose own `go.mod` is such a file, except `C`, is `unresolved`
+  (`<go.mod> could not be read`). An import path
   under a module path (or under a `replace` directive with a relative path
   inside the workspace) names the package directory below that module's
   directory. A `replace` in the importing file's `go.mod`, with or without a

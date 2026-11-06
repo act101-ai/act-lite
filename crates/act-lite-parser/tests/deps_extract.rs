@@ -1312,6 +1312,50 @@ fn a_python_module_name_is_its_identifiers_joined_by_dots() {
 }
 
 #[test]
+fn python_names_are_compared_after_nfkc_normalization() {
+    // U+212A KELVIN SIGN is NFKC `K`; U+FF4B FULLWIDTH SMALL K is `k`;
+    // U+FB01 LATIN SMALL LIGATURE FI is `fi`.
+    let file = parse(
+        Grammar::Python,
+        "\u{212A} = 1\n\
+         \u{FF4B}x = 2\n\
+         de\u{FB01}ne = 3\n\
+         del define\n\
+         import \u{FF50}kg.sub\n\
+         from m import \u{212A}2 as \u{FF41}lias, \u{FF57}\n",
+    );
+    assert_eq!(
+        deps::module_names(&file).names,
+        names(&["K", "alias", "kx", "pkg", "w"])
+    );
+
+    let relationships: Vec<(String, LiteralValue, Option<String>)> = deps::extract(&file)
+        .into_iter()
+        .map(|r| (r.specifier, r.value, r.imported))
+        .collect();
+    assert_eq!(
+        relationships,
+        [
+            (
+                "\u{FF50}kg.sub".to_string(),
+                Ok("pkg.sub".to_string()),
+                None
+            ),
+            (
+                "m.\u{212A}2".to_string(),
+                Ok("m.K2".to_string()),
+                Some("K2".to_string())
+            ),
+            (
+                "m.\u{FF57}".to_string(),
+                Ok("m.w".to_string()),
+                Some("w".to_string())
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_rust_path_attribute_is_decoded() {
     let file = parse(
         Grammar::Rust,
