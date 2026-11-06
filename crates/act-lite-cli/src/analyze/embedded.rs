@@ -19,9 +19,13 @@ pub struct TestRegions {
     pub regions: Vec<TestRegion>,
 }
 
-/// Finds the test code of a Rust file; every other grammar has none.
+/// Finds the test code of a Rust or Zig file; every other grammar has none.
 pub fn test_regions(source: &SourceFile) -> TestRegions {
     let mut found = TestRegions::default();
+    if source.grammar() == Grammar::Zig {
+        collect_zig(source.tree().root_node(), &mut found.regions);
+        return found;
+    }
     if source.grammar() != Grammar::Rust {
         return found;
     }
@@ -50,33 +54,62 @@ pub fn blank(content: &str, regions: &[TestRegion]) -> String {
     String::from_utf8(bytes).expect("blanking a UTF-8 span keeps the text UTF-8")
 }
 
-fn collect(parent: Node, content: &str, regions: &mut Vec<TestRegion>) {
-    let mut cursor = parent.walk();
-    let mut first_attribute: Option<Node> = None;
-    let mut is_test = false;
-    let mut is_cfg_test_item = false;
-    for node in parent.children(&mut cursor) {
+fn collect(root: Node, content: &str, regions: &mut Vec<TestRegion>) {
+    // One entry per level being walked: its first attribute, and whether the
+    // attributes since then mark a test function or a `cfg(test)` item.
+    let mut levels: Vec<(Option<Node>, bool, bool)> = vec![(None, false, false)];
+    let mut cursor = root.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    loop {
+        let node = cursor.node();
+        let (first_attribute, is_test, is_cfg_test_item) =
+            levels.last_mut().expect("a level is open while walking");
         match node.kind() {
             "attribute_item" => {
                 first_attribute.get_or_insert(node);
                 let attribute = attribute(node);
-                is_cfg_test_item |= is_cfg_test(attribute, content);
-                is_test |= is_test_attribute(attribute, content);
+                *is_cfg_test_item |= is_cfg_test(attribute, content);
+                *is_test |= is_test_attribute(attribute, content);
             }
             kind if kind.contains("comment") => {}
             kind => {
-                if let Some(first) = first_attribute.take()
-                    && (is_cfg_test_item || (is_test && kind == "function_item"))
+                let first = first_attribute.take();
+                let is_region = *is_cfg_test_item || (*is_test && kind == "function_item");
+                *is_test = false;
+                *is_cfg_test_item = false;
+                if let Some(first) = first
+                    && is_region
                 {
                     regions.push(region(first.start_position(), first.start_byte(), node));
-                    is_test = false;
-                    is_cfg_test_item = false;
+                } else if cursor.goto_first_child() {
+                    levels.push((None, false, false));
                     continue;
                 }
-                is_test = false;
-                is_cfg_test_item = false;
-                collect(node, content, regions);
             }
+        }
+        while !cursor.goto_next_sibling() {
+            levels.pop();
+            if levels.is_empty() || !cursor.goto_parent() {
+                return;
+            }
+        }
+    }
+}
+
+/// One region per Zig `test_declaration`, from `test` to its closing `}`.
+fn collect_zig(root: Node, regions: &mut Vec<TestRegion>) {
+    let mut cursor = root.walk();
+    let mut stack: Vec<Node> = root.named_children(&mut cursor).collect();
+    stack.reverse();
+    while let Some(node) = stack.pop() {
+        if node.kind() == "test_declaration" {
+            regions.push(region(node.start_position(), node.start_byte(), node));
+        } else {
+            let start = stack.len();
+            stack.extend(node.named_children(&mut cursor));
+            stack[start..].reverse();
         }
     }
 }
@@ -138,27 +171,39 @@ fn is_comment(kind: &str) -> bool {
     kind == "line_comment" || kind == "block_comment"
 }
 
+/// Whether `list`, the arguments of `all`, holds `test` directly or inside a
+/// nested `all(…)`. The nested lists are read from a heap stack, so the
+/// nesting depth does not grow the thread stack.
 fn list_has_test(list: Node, content: &str) -> bool {
-    let mut cursor = list.walk();
-    let items: Vec<Node> = list
-        .named_children(&mut cursor)
-        .filter(|n| !is_comment(n.kind()))
-        .collect();
-    items.iter().enumerate().any(|(i, item)| match item.kind() {
-        "identifier" => {
-            text(*item, content) == "test"
-                && items
-                    .get(i + 1)
-                    .is_none_or(|next| next.kind() != "token_tree")
+    let mut lists = vec![list];
+    while let Some(list) = lists.pop() {
+        let mut cursor = list.walk();
+        let items: Vec<Node> = list
+            .named_children(&mut cursor)
+            .filter(|n| !is_comment(n.kind()))
+            .collect();
+        for (i, item) in items.iter().enumerate() {
+            match item.kind() {
+                "identifier"
+                    if text(*item, content) == "test"
+                        && items
+                            .get(i + 1)
+                            .is_none_or(|next| next.kind() != "token_tree") =>
+                {
+                    return true;
+                }
+                "token_tree"
+                    if i > 0
+                        && items[i - 1].kind() == "identifier"
+                        && text(items[i - 1], content) == "all" =>
+                {
+                    lists.push(*item);
+                }
+                _ => {}
+            }
         }
-        "token_tree" => {
-            i > 0
-                && items[i - 1].kind() == "identifier"
-                && text(items[i - 1], content) == "all"
-                && list_has_test(*item, content)
-        }
-        _ => false,
-    })
+    }
+    false
 }
 
 fn text<'a>(node: Node, content: &'a str) -> &'a str {
@@ -284,6 +329,37 @@ mod tests {
         for file in [go, py, ts] {
             assert_eq!(test_regions(&file), TestRegions::default());
         }
+    }
+
+    #[test]
+    fn zig_test_declarations_are_one_region_each() {
+        let content = "const std = @import(\"std\");\n\
+            fn add(a: u8, b: u8) u8 {\n\
+            \x20   return a + b;\n\
+            }\n\
+            test \"n\" {\n\
+            \x20   try std.testing.expect(add(1, 2) == 3);\n\
+            }\n\
+            test add {\n\
+            \x20   _ = add(0, 0);\n\
+            }\n\
+            const S = struct {\n\
+            \x20   x: u8,\n\
+            \x20   test {}\n\
+            };\n";
+        let found = test_regions(&parse(content, Grammar::Zig));
+        assert!(!found.whole_file);
+        assert_eq!(ranges(&found), ["5:1-7:2", "8:1-10:2", "13:5-13:12"]);
+        let starts: Vec<&str> = found
+            .regions
+            .iter()
+            .map(|r| &content[r.bytes.clone()])
+            .collect();
+        assert!(
+            starts
+                .iter()
+                .all(|t| t.starts_with("test") && t.ends_with('}'))
+        );
     }
 
     #[test]

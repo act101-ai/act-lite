@@ -154,7 +154,7 @@ async fn skeleton_on_unsupported_extension_lists_languages() {
 }
 
 #[tokio::test]
-async fn status_lists_thirty_languages() {
+async fn status_lists_every_language() {
     let client = connect(&fixtures()).await;
     let result = client
         .call_tool(CallToolRequestParams::new("status"))
@@ -164,7 +164,7 @@ async fn status_lists_thirty_languages() {
     let languages = value["languages"]
         .as_array()
         .unwrap_or_else(|| panic!("no languages in {value}"));
-    assert_eq!(languages.len(), 30, "{value}");
+    assert_eq!(languages.len(), 40, "{value}");
     let lsp = value["lsp"]
         .as_object()
         .unwrap_or_else(|| panic!("no lsp object in {value}"));

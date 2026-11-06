@@ -3,6 +3,7 @@
 pub mod locals;
 
 pub use locals::{LocalDefinition, LocalScope, LocalsModel};
+use std::collections::{HashMap, HashSet};
 
 use crate::{Grammar, NodeKind, SourceFile, error::Result};
 use act_lite_core::{Location, Range, Symbol, SymbolKind};
@@ -152,8 +153,8 @@ pub struct ReferencesWalk {
     pub skipped: Vec<SkippedFile>,
 }
 
-fn path_is_reference_sibling(path: &Path, grammar: Grammar) -> bool {
-    Grammar::from_path(path) == Some(grammar)
+fn path_is_reference_sibling(anchor: &Path, path: &Path, grammar: Grammar) -> bool {
+    grammar.walk_reads(anchor, path)
 }
 
 pub fn walk_reference_siblings(
@@ -192,7 +193,7 @@ pub fn walk_reference_siblings(
         };
         let path = entry.path();
         if entry.depth() > 0 && entry.path_is_symlink() {
-            let family_relevant = path_is_reference_sibling(path, grammar);
+            let family_relevant = path_is_reference_sibling(anchor, path, grammar);
             let reason = match std::fs::metadata(path) {
                 Err(err) => Some(format!("symlink target unreadable: {err}")),
                 Ok(meta) if meta.is_file() && !family_relevant => None,
@@ -206,7 +207,7 @@ pub fn walk_reference_siblings(
             }
             continue;
         }
-        if !entry.file_type().is_file() || !path_is_reference_sibling(path, grammar) {
+        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammar) {
             continue;
         }
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -243,7 +244,7 @@ pub fn walk_reference_siblings(
             });
             continue;
         }
-        match SourceFile::load(&path) {
+        match SourceFile::load_within(&path, root) {
             Ok(source) => siblings.push(source),
             Err(err) => skipped.push(SkippedFile {
                 file: path,
@@ -616,7 +617,45 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
+    let declarations = one_declaration_per_range(declarations);
     Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+}
+
+/// Two patterns that report the same node: an identical kind is reported
+/// once, and a specific kind replaces `constant`/`variable`. Two distinct
+/// specific kinds at one node are both kept (a proto2 group is a struct and
+/// a field). Linear in the number of declarations.
+fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration> {
+    let generic = |k: &str| k == "constant" || k == "variable";
+    let mut kept: Vec<Option<Declaration>> = Vec::with_capacity(declarations.len());
+    let mut groups: HashMap<(String, Range), Vec<usize>> = HashMap::new();
+    for decl in declarations {
+        let key = (decl.name.clone(), decl.range.clone());
+        let group = groups.entry(key).or_default();
+        let same_kind = group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|d| d.kind == decl.kind));
+        if same_kind {
+            continue;
+        }
+        if !generic(&decl.kind) {
+            if let Some(&i) = group
+                .iter()
+                .find(|&&i| kept[i].as_ref().is_some_and(|d| generic(&d.kind)))
+            {
+                kept[i] = Some(decl);
+                continue;
+            }
+        } else if group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|d| !generic(&d.kind)))
+        {
+            continue;
+        }
+        group.push(kept.len());
+        kept.push(Some(decl));
+    }
+    kept.into_iter().flatten().collect()
 }
 
 /// Executes a symbols query on a source file.
@@ -636,6 +675,7 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
     let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
 
     let mut symbols = Vec::new();
+    let mut suppressed: Vec<(String, Range)> = Vec::new();
 
     while let Some(match_) = matches.next() {
         let mut name = None;
@@ -644,6 +684,7 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         let mut is_class_attribute = false;
         let mut definition_node = None;
         let mut kinded_definition = None;
+        let mut suppress = false;
 
         for capture in match_.captures {
             let capture_name = &query.capture_names()[capture.index as usize];
@@ -679,8 +720,16 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
                 dotted if dotted.starts_with("definition.") => {
                     kinded_definition = Some((node, &dotted["definition.".len()..]));
                 }
+                "suppress" => suppress = true,
                 _ => {}
             }
+        }
+
+        if suppress {
+            if let (Some(name), Some(range)) = (name, range) {
+                suppressed.push((name, range));
+            }
+            continue;
         }
 
         let resolved = match definition_node {
@@ -709,7 +758,51 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
+    let symbols = one_symbol_per_range(symbols, &suppressed);
     Ok(QueryResult::Symbols { symbols })
+}
+
+/// Two patterns that report the same name node: an identical kind is
+/// reported once, and a specific kind replaces `Constant`/`Variable`. Two
+/// distinct specific kinds at one node are both kept. A name node a
+/// `@suppress` pattern matched (an import) reports no generic symbol.
+/// Linear in the number of symbols.
+fn one_symbol_per_range(symbols: Vec<Symbol>, suppressed: &[(String, Range)]) -> Vec<Symbol> {
+    let generic = |k: SymbolKind| matches!(k, SymbolKind::Constant | SymbolKind::Variable);
+    let key = |name: &str, range: &Range| (name.to_string(), range.clone());
+    let suppressed: HashSet<(String, Range)> = suppressed.iter().map(|(n, r)| key(n, r)).collect();
+    let mut kept: Vec<Option<Symbol>> = Vec::with_capacity(symbols.len());
+    let mut groups: HashMap<(String, Range), Vec<usize>> = HashMap::new();
+    for symbol in symbols {
+        let k = key(symbol.name(), symbol.range());
+        if generic(symbol.kind()) && suppressed.contains(&k) {
+            continue;
+        }
+        let group = groups.entry(k).or_default();
+        let same_kind = group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|s| s.kind() == symbol.kind()));
+        if same_kind {
+            continue;
+        }
+        if !generic(symbol.kind()) {
+            if let Some(&i) = group
+                .iter()
+                .find(|&&i| kept[i].as_ref().is_some_and(|s| generic(s.kind())))
+            {
+                kept[i] = Some(symbol);
+                continue;
+            }
+        } else if group
+            .iter()
+            .any(|&i| kept[i].as_ref().is_some_and(|s| !generic(s.kind())))
+        {
+            continue;
+        }
+        group.push(kept.len());
+        kept.push(Some(symbol));
+    }
+    kept.into_iter().flatten().collect()
 }
 
 /// The `.` or `#` token that precedes a CSS class or id name node.
@@ -969,12 +1062,17 @@ pub(crate) enum ComposedReference {
 
 fn heredoc_delimiter_quoted(node: tree_sitter::Node, source_bytes: &[u8]) -> bool {
     fn find_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
-        if node.kind() == kind {
-            return Some(node);
-        }
         let mut cursor = node.walk();
-        node.children(&mut cursor)
-            .find_map(|child| find_kind(child, kind))
+        let mut stack = vec![node];
+        while let Some(node) = stack.pop() {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            let start = stack.len();
+            stack.extend(node.children(&mut cursor));
+            stack[start..].reverse();
+        }
+        None
     }
     node.parent()
         .and_then(|block| block.prev_sibling())
@@ -1346,10 +1444,10 @@ pub fn execute_symbol(source: &SourceFile, name: &str) -> Result<QueryResult> {
     let symbols_result = execute_symbols(source)?;
     match symbols_result {
         QueryResult::Symbols { symbols } => {
-            // JSON keeps the string quotes and Markdown the heading's leading space in
+            // JSON and JSONC keep the string quotes and Markdown the heading's leading space in
             // a symbol's name; the bare name finds the same declaration.
             let bare = |s: &Symbol| match source.grammar() {
-                Grammar::Json => s.name().trim_matches('"') == name,
+                Grammar::Json | Grammar::Jsonc => s.name().trim_matches('"') == name,
                 Grammar::Markdown => s.name().trim() == name,
                 _ => false,
             };
@@ -1506,6 +1604,7 @@ fn symbol_kind_from_suffix(suffix: &str) -> Option<SymbolKind> {
         "module" | "namespace" | "package" | "program" | "unit" => SymbolKind::Module,
         "variable" | "loop_variable" | "global" | "storage" => SymbolKind::Variable,
         "constant" => SymbolKind::Constant,
+        "enum_member" => SymbolKind::EnumMember,
         "field" | "property" | "port" => SymbolKind::Field,
         "parameter" => SymbolKind::Parameter,
         "constructor" => SymbolKind::Constructor,
@@ -3389,6 +3488,14 @@ func main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enum_member_suffix_maps_to_enum_member() {
+        assert_eq!(
+            symbol_kind_from_suffix("enum_member"),
+            Some(SymbolKind::EnumMember)
+        );
+    }
 
     #[test]
     fn tree_sitter_only() {

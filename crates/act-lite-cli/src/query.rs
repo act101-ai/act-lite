@@ -126,8 +126,13 @@ pub async fn execute(
                 let pool = LspPool::new(workspace_root.clone());
                 if let Some(client) = pool.get_query_client(source.grammar()).await {
                     let location = Location::new(file.clone(), *line, *column);
-                    if let Ok(lsp_refs) =
-                        act_lite_lsp::query_references(client.as_ref(), file, &location).await
+                    if let Ok(lsp_refs) = act_lite_lsp::query_references(
+                        client.as_ref(),
+                        file,
+                        &location,
+                        Some(source.content()),
+                    )
+                    .await
                     {
                         let result = lsp_references_result(lsp_refs.ranges);
                         output(&result, format)?;
@@ -179,10 +184,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callers").await?;
-            let position = find_symbol_position(file, name)?;
-            let result = act_lite_lsp::query_callers(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query callers of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_callers(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query callers of '{}'", name))?;
             let qr = QueryResult::Callers {
                 callers: result.callers,
             };
@@ -194,10 +205,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "callees").await?;
-            let position = find_symbol_position(file, name)?;
-            let result = act_lite_lsp::query_callees(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query callees of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_callees(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query callees of '{}'", name))?;
             let qr = QueryResult::Callees {
                 callees: result.callees,
             };
@@ -209,10 +226,16 @@ pub async fn execute(
             let (pool, grammar, file) = create_lsp_pool(file, workspace)?;
             let file = &file;
             let client = get_lsp_client(&pool, grammar, workspace, "implementations").await?;
-            let position = find_symbol_position(file, name)?;
-            let result = act_lite_lsp::query_implementations(client.as_ref(), file, &position)
-                .await
-                .with_context(|| format!("failed to query implementations of '{}'", name))?;
+            let source = load_source(file, workspace)?;
+            let position = find_symbol_position(&source, name)?;
+            let result = act_lite_lsp::query_implementations(
+                client.as_ref(),
+                file,
+                &position,
+                Some(source.content()),
+            )
+            .await
+            .with_context(|| format!("failed to query implementations of '{}'", name))?;
             let qr = QueryResult::Implementations {
                 locations: result.locations,
             };
@@ -335,8 +358,11 @@ fn load_source(file: &Path, workspace: Option<&Path>) -> Result<act_lite_parser:
     if grammar_for_file(file).is_none() {
         return Err(unsupported_language_error(file));
     }
-    act_lite_parser::SourceFile::load(file)
-        .with_context(|| format!("failed to parse {}", file.display()))
+    match workspace {
+        Some(root) => act_lite_parser::SourceFile::load_within(file, root),
+        None => act_lite_parser::SourceFile::load(file),
+    }
+    .with_context(|| format!("failed to parse {}", file.display()))
 }
 
 /// Get the grammar for a file: filename conventions first, then extension.
@@ -444,13 +470,11 @@ pub(crate) fn lsp_install_hint_once(grammar: Grammar, pool: &LspPool) -> Option<
 }
 
 /// Find a symbol's position in a file by name using tree-sitter.
-fn find_symbol_position(file: &Path, name: &str) -> Result<Location> {
-    let source = act_lite_parser::SourceFile::load(file)
-        .with_context(|| format!("failed to parse {}", file.display()))?;
-    let result = act_lite_parser::execute_symbol(&source, name)?;
+fn find_symbol_position(source: &act_lite_parser::SourceFile, name: &str) -> Result<Location> {
+    let result = act_lite_parser::execute_symbol(source, name)?;
     match result {
         QueryResult::Symbol(sym) => Ok(sym.symbol.range().start().clone()),
-        _ => bail!("symbol '{}' not found in {}", name, file.display()),
+        _ => bail!("symbol '{}' not found in {}", name, source.path().display()),
     }
 }
 
@@ -577,8 +601,8 @@ pub fn execute_repo_outline(
             break;
         }
 
-        // Count lines
-        let line_count = match std::fs::File::open(path) {
+        // Count lines, from the file the root check opened.
+        let line_count = match act_lite_parser::open_regular_within(path, &canonical_root) {
             Ok(f) => std::io::BufReader::new(f).lines().count(),
             Err(_) => 0,
         };
@@ -587,7 +611,7 @@ pub fn execute_repo_outline(
         // file rather than swallowed.
         let mut per_file_error = None;
         let symbol_names = if symbols {
-            match act_lite_parser::SourceFile::load(path) {
+            match act_lite_parser::SourceFile::load_within(path, &canonical_root) {
                 Ok(source) => match act_lite_parser::execute_skeleton(&source) {
                     Ok(QueryResult::Skeleton(sk)) => {
                         Some(sk.declarations.into_iter().map(|d| d.name).collect())
@@ -739,7 +763,7 @@ pub fn execute_symbols_batch_by_files(
         if Grammar::from_path(file).is_none() {
             return Err(unsupported_language_error(file));
         }
-        let source = act_lite_parser::SourceFile::load(file)
+        let source = act_lite_parser::SourceFile::load_within(file, workspace_root)
             .with_context(|| format!("failed to load {}", file.display()))?;
 
         let skeleton = act_lite_parser::execute_skeleton(&source)?;
@@ -803,7 +827,7 @@ pub fn execute_symbols_batch_by_ids(
 
     for (file_path, id_list) in &file_ids {
         let full_path = workspace_root.join(file_path);
-        let source = act_lite_parser::SourceFile::load(&full_path)
+        let source = act_lite_parser::SourceFile::load_within(&full_path, workspace_root)
             .with_context(|| format!("failed to load {}", file_path))?;
 
         let skeleton = act_lite_parser::execute_skeleton(&source)?;
@@ -1107,14 +1131,14 @@ mod tests {
 
     #[test]
     fn test_grammar_for_file_no_extension() {
-        assert!(grammar_for_file(&PathBuf::from("/some/Makefile")).is_none());
+        assert!(grammar_for_file(&PathBuf::from("/some/LICENSE")).is_none());
     }
 
     #[test]
     fn test_unsupported_language_error_without_extension() {
-        let err = unsupported_language_error(Path::new("/some/Makefile")).to_string();
+        let err = unsupported_language_error(Path::new("/some/LICENSE")).to_string();
         assert!(err.contains("no extension"), "{err}");
-        assert!(err.contains("/some/Makefile"), "{err}");
+        assert!(err.contains("/some/LICENSE"), "{err}");
         assert!(err.contains("TypeScript"), "{err}");
     }
 
@@ -1266,7 +1290,8 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function myFunc() { return 1; }").unwrap();
-        let result = find_symbol_position(&file_path, "myFunc");
+        let source = act_lite_parser::SourceFile::load(&file_path).unwrap();
+        let result = find_symbol_position(&source, "myFunc");
         assert!(
             result.is_ok(),
             "find_symbol_position should succeed: {:?}",
@@ -1279,13 +1304,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test.ts");
         std::fs::write(&file_path, "function foo() {}").unwrap();
-        let result = find_symbol_position(&file_path, "nonexistent");
+        let source = act_lite_parser::SourceFile::load(&file_path).unwrap();
+        let result = find_symbol_position(&source, "nonexistent");
         assert!(result.is_err(), "a missing symbol has no position");
     }
 
     #[test]
     fn test_find_symbol_position_file_not_found() {
-        let result = find_symbol_position(Path::new("/nonexistent/file.ts"), "foo");
+        let result = load_source(Path::new("/nonexistent/file.ts"), None);
         assert!(result.is_err());
     }
 

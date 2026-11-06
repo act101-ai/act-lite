@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use act_lite_parser::{Grammar, SourceFile};
+use act_lite_parser::{Grammar, QueryResult, SourceFile};
 use tree_sitter::Node;
 
 pub(crate) fn is_identifier_kind(kind: &str) -> bool {
@@ -104,7 +104,7 @@ fn is_data_name_leaf(node: Node<'_>, grammar: Grammar, source: &str) -> bool {
                         .is_some_and(|name| name_text(name, grammar, source) == "id")
             })
         }
-        (Grammar::Json, "string_content") => node
+        (Grammar::Json | Grammar::Jsonc, "string_content") => node
             .parent()
             .and_then(|string| string.parent().map(|pair| (string, pair)))
             .is_some_and(|(string, pair)| {
@@ -221,7 +221,7 @@ fn declaration_name<'a>(node: Node<'a>, grammar: Grammar, source: &str) -> Optio
             }
             _ => None,
         },
-        Grammar::Json => match kind {
+        Grammar::Json | Grammar::Jsonc => match kind {
             "pair" => first_named_chain(node.child_by_field_name("key")?, "string_content"),
             _ => None,
         },
@@ -362,10 +362,115 @@ pub(crate) fn find_symbol_name_at_location(
     Some(name_text(name_node, grammar, text).to_string())
 }
 
+/// Grammars whose declarations are the entries `symbols` reports, and whose
+/// names at a position are the captures of their references and symbols
+/// queries.
+fn named_by_queries(grammar: Grammar) -> bool {
+    matches!(
+        grammar,
+        Grammar::Xml
+            | Grammar::GraphQl
+            | Grammar::Protobuf
+            | Grammar::Make
+            | Grammar::CMake
+            | Grammar::Nix
+            | Grammar::Zig
+            | Grammar::R
+            | Grammar::Julia
+    )
+}
+
+/// The names at the 1-indexed position: the identifier there, else the
+/// innermost `@reference` or `@name` capture that contains it; then, in Nix
+/// and Julia, the names around that identifier (each enclosing `attrpath`,
+/// or Julia `field_expression`, `parametrized_type_expression` or
+/// `parenthesized_expression`, climbing through a `typed_expression`),
+/// innermost first.
+fn names_at(source: &SourceFile, line: u32, column: u32) -> Vec<String> {
+    let tree = source.tree();
+    let bytes = tree.source().as_bytes();
+    let point = tree_sitter::Point {
+        row: line.saturating_sub(1) as usize,
+        column: column.saturating_sub(1) as usize,
+    };
+    let Some(leaf) = tree.root_node().descendant_for_point_range(point, point) else {
+        return Vec::new();
+    };
+    if !is_identifier_kind(leaf.kind()) {
+        return innermost_capture(source, line, column)
+            .into_iter()
+            .collect();
+    }
+    let mut names: Vec<String> = leaf
+        .utf8_text(bytes)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    let enclosing: &[&str] = match source.grammar() {
+        Grammar::Nix => &["attrpath"],
+        Grammar::Julia => &[
+            "field_expression",
+            "parametrized_type_expression",
+            "parenthesized_expression",
+            "typed_expression",
+        ],
+        _ => return names,
+    };
+    let mut node = leaf;
+    while let Some(parent) = node
+        .parent()
+        .filter(|parent| enclosing.contains(&parent.kind()))
+    {
+        if parent.kind() != "typed_expression"
+            && let Ok(text) = parent.utf8_text(bytes)
+        {
+            names.push(text.to_string());
+        }
+        node = parent;
+    }
+    names
+}
+
+/// The text of the innermost `@reference` (`references.scm`) or `@name`
+/// (`symbols.scm`) capture that contains the 1-indexed position.
+fn innermost_capture(source: &SourceFile, line: u32, column: u32) -> Option<String> {
+    let support = source.grammar().language_support();
+    let at = (line, column);
+    [support.references_query(), support.symbols_query()]
+        .into_iter()
+        .filter_map(|query| act_lite_parser::execute_raw_query(source, query).ok())
+        .flatten()
+        .flat_map(|found| found.captures)
+        .filter(|capture| {
+            let (start, end) = (capture.range.start(), capture.range.end());
+            matches!(capture.name.as_str(), "reference" | "name")
+                && (start.line(), start.column()) <= at
+                && at < (end.line(), end.column())
+        })
+        .min_by_key(|capture| {
+            let (start, end) = (capture.range.start(), capture.range.end());
+            (
+                std::cmp::Reverse((start.line(), start.column())),
+                (end.line(), end.column()),
+            )
+        })
+        .map(|capture| capture.text)
+}
+
 pub(crate) fn collect_definition_ranges_in_source(
     source: &SourceFile,
     symbol_name: &str,
 ) -> Vec<act_lite_core::Range> {
+    if named_by_queries(source.grammar()) {
+        return match act_lite_parser::execute_symbols(source) {
+            Ok(QueryResult::Symbols { symbols }) => symbols
+                .into_iter()
+                .filter(|symbol| symbol.name() == symbol_name)
+                .map(|symbol| symbol.range().clone())
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
     let tree = source.tree();
     let mut stack = vec![tree.root_node()];
     let mut ranges = Vec::new();
@@ -408,17 +513,28 @@ pub(crate) fn range_priority(
     }
 }
 
-/// Every file under `root` in `grammar`, skipping `.git`, `target` and
+/// Every file under `root` that a walk from `anchor`, a file in `grammar`,
+/// reads ([`Grammar::walk_reads`]), skipping `.git`, `target` and
 /// `node_modules`. Unreadable directories contribute nothing. A symlink is
-/// followed only while its target stays inside `root`.
-pub(crate) fn collect_workspace_paths(root: &Path, grammar: Grammar, paths: &mut Vec<PathBuf>) {
+/// followed only while its target stays inside `root`, and each directory is
+/// entered once, by its canonical path. Files over
+/// [`act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES`] are skipped.
+pub(crate) fn collect_workspace_paths(
+    root: &Path,
+    anchor: &Path,
+    grammar: Grammar,
+    paths: &mut Vec<PathBuf>,
+) {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    collect_paths_inside(root, &canonical_root, grammar, paths);
+    let mut visited = std::collections::HashSet::from([canonical_root.clone()]);
+    collect_paths_inside(root, &canonical_root, &mut visited, anchor, grammar, paths);
 }
 
 fn collect_paths_inside(
     dir: &Path,
     canonical_root: &Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    anchor: &Path,
     grammar: Grammar,
     paths: &mut Vec<PathBuf>,
 ) {
@@ -427,21 +543,26 @@ fn collect_paths_inside(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path
+        let Some(canonical) = path
             .canonicalize()
-            .is_ok_and(|canonical| canonical.starts_with(canonical_root))
-        {
+            .ok()
+            .filter(|canonical| canonical.starts_with(canonical_root))
+        else {
             continue;
-        }
+        };
         if path.is_dir() {
             let skip = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"));
-            if !skip {
-                collect_paths_inside(&path, canonical_root, grammar, paths);
+            if !skip && visited.insert(canonical) {
+                collect_paths_inside(&path, canonical_root, visited, anchor, grammar, paths);
             }
-        } else if path.is_file() && Grammar::from_path(&path) == Some(grammar) {
+        } else if path.is_file()
+            && grammar.walk_reads(anchor, &path)
+            && std::fs::metadata(&path)
+                .is_ok_and(|meta| meta.len() <= act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES)
+        {
             paths.push(path);
         }
     }
@@ -458,10 +579,14 @@ pub(crate) enum DefinitionError {
 
 /// Resolves the definition of a symbol used at `line`/`column` of `source`.
 ///
-/// The symbol name is the non-blank `symbol` argument, else the identifier
-/// at the position. Candidates are the declarations in the queried file plus
-/// every same-grammar file under `root` (unreadable siblings skipped), and
-/// the winner is the range closest to the position by [`range_priority`].
+/// The names at the position are the identifier there and, in Nix and
+/// Julia, the dotted names around it ([`names_at`]). A non-blank `symbol`
+/// argument that is none of them is looked up as given, except in the
+/// grammars of [`named_by_queries`], where it is not found. Otherwise the
+/// symbol is the outermost name at the position that has a declaration,
+/// else the innermost. Candidates are the declarations in the queried file
+/// plus every same-grammar file under `root` (unreadable siblings skipped),
+/// and the winner is the range closest to the position by [`range_priority`].
 pub(crate) fn resolve_definition(
     source: &SourceFile,
     root: &Path,
@@ -469,32 +594,35 @@ pub(crate) fn resolve_definition(
     line: u32,
     column: u32,
 ) -> Result<(String, act_lite_core::Range), DefinitionError> {
-    let location_symbol = find_symbol_name_at_location(source, line, column)
-        .ok_or(DefinitionError::NoSymbolAtPosition)?;
-    let symbol_name = if symbol.trim().is_empty() || symbol == location_symbol {
-        location_symbol
+    let names = if named_by_queries(source.grammar()) {
+        names_at(source, line, column)
     } else {
-        symbol.to_string()
+        find_symbol_name_at_location(source, line, column)
+            .into_iter()
+            .collect()
     };
+    if names.is_empty() {
+        return Err(DefinitionError::NoSymbolAtPosition);
+    }
+    let lookup = if symbol.trim().is_empty() || names.iter().any(|name| name == symbol) {
+        names
+    } else if named_by_queries(source.grammar()) {
+        return Err(DefinitionError::NotFound {
+            symbol: symbol.to_string(),
+        });
+    } else {
+        vec![symbol.to_string()]
+    };
+    let found = workspace_candidates(source, root, &lookup);
+    let (symbol_name, candidates) = lookup
+        .iter()
+        .cloned()
+        .zip(found)
+        .rev()
+        .find(|(_, candidates)| !candidates.is_empty())
+        .unwrap_or_else(|| (lookup[0].clone(), Vec::new()));
 
     let path = source.path();
-    let mut candidates = collect_definition_ranges_in_source(source, &symbol_name);
-    let mut workspace_paths = Vec::new();
-    collect_workspace_paths(root, source.grammar(), &mut workspace_paths);
-    for other in workspace_paths {
-        if other == path {
-            continue;
-        }
-        // A sibling that cannot be read or parsed has no definitions to offer.
-        let Ok(other_source) = SourceFile::load(&other) else {
-            continue;
-        };
-        candidates.extend(collect_definition_ranges_in_source(
-            &other_source,
-            &symbol_name,
-        ));
-    }
-
     let best = candidates
         .into_iter()
         .min_by_key(|range| range_priority(range, path, line, column))
@@ -502,6 +630,35 @@ pub(crate) fn resolve_definition(
             symbol: symbol_name.clone(),
         })?;
     Ok((symbol_name, best))
+}
+
+/// The declarations of each of `names`, in order, in `source` and in every
+/// same-grammar file under `root`; each file is read and parsed once.
+fn workspace_candidates(
+    source: &SourceFile,
+    root: &Path,
+    names: &[String],
+) -> Vec<Vec<act_lite_core::Range>> {
+    let path = source.path();
+    let mut candidates: Vec<_> = names
+        .iter()
+        .map(|name| collect_definition_ranges_in_source(source, name))
+        .collect();
+    let mut workspace_paths = Vec::new();
+    collect_workspace_paths(root, path, source.grammar(), &mut workspace_paths);
+    for other in workspace_paths {
+        if other == path {
+            continue;
+        }
+        // A sibling that cannot be read or parsed has no definitions to offer.
+        let Ok(other_source) = SourceFile::load_within(&other, root) else {
+            continue;
+        };
+        for (name, ranges) in names.iter().zip(&mut candidates) {
+            ranges.extend(collect_definition_ranges_in_source(&other_source, name));
+        }
+    }
+    candidates
 }
 
 /// The definition payload: `{"symbol", "definition": {file, line, column,
@@ -543,6 +700,27 @@ pub(crate) fn not_found_text(symbol: &str, file: &Path, line: u32, column: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn each_file_is_collected_once_despite_symlinks_back_to_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in ["a.py", "b.py"] {
+            std::fs::write(dir.path().join(file), "x = 1\n").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for link in ["up", "up2"] {
+            std::os::unix::fs::symlink("..", dir.path().join("sub").join(link)).unwrap();
+        }
+        let mut paths = Vec::new();
+        collect_workspace_paths(
+            dir.path(),
+            &dir.path().join("a.py"),
+            Grammar::Python,
+            &mut paths,
+        );
+        assert_eq!(paths.len(), 2, "{paths:?}");
+    }
 
     #[test]
     fn ruby_singleton_method_is_found_from_its_call_site() {
