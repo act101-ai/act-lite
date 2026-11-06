@@ -50,7 +50,7 @@ impl LocalsModel {
             return Ok(None);
         }
 
-        let query = tree_sitter::Query::new(&support.ts_language(), query_source)?;
+        let query = super::compiled::compiled(source.grammar(), query_source)?;
         let tree = source.tree();
         let bytes = tree.source().as_bytes();
         let mut cursor = tree_sitter::QueryCursor::new();
