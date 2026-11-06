@@ -270,6 +270,7 @@ a file that breaks them is analyzed region by region, without an error.
 | Astro `<script>` | no attribute, or only `src` (Astro processes the script) | TypeScript |
 | Astro `<script>` | any other attribute, such as `is:inline`, `type="module"` or `define:vars` (Astro sends the script unchanged) | JavaScript |
 | Astro `<script>` | a `type` that is not empty, not `module` and not a JavaScript MIME type, such as `application/ld+json` | a data block: reported as a block, not code |
+| Astro `<script>` | a `type` written as an expression, such as `type={kind}` or a backtick string (its value is known only when the page runs) | an unsupported language: not read, listed in `regions_not_analyzed` |
 | `<style>` | no `lang`, or `lang="css"` / `"scss"` | CSS / SCSS |
 | Vue `<template>` | no `lang`, or `lang="html"` | its elements are structure |
 

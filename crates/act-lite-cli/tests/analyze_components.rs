@@ -744,3 +744,19 @@ fn a_clone_reread_stays_linear_in_the_regions_not_analyzed() {
     assert_eq!(out["details"]["regions_not_analyzed_total"], 64_000);
     assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
 }
+
+#[test]
+fn an_astro_script_type_written_as_an_expression_is_listed_not_measured() {
+    let ws = workspace(&[(
+        "E.astro",
+        "<script type={\"text/plain\"}>\nfunction f(a, b, c, d, e, g) { return a; }\n</script>\n",
+    )]);
+    let out = patterns(ws.path(), &[]);
+    assert_eq!(out["total"], 0, "{out}");
+    assert_eq!(
+        out["details"]["regions_not_analyzed"],
+        json!([{"file": "E.astro", "range": "1:1-1:29", "reason": "unsupported script language: {\"text/plain\"}"}]),
+        "{out}"
+    );
+    assert_eq!(out["status"], "unsupported", "{out}");
+}

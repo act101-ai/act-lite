@@ -132,3 +132,46 @@ fn markup_beside_an_error_is_still_reported() {
         ])
     );
 }
+
+#[test]
+fn the_position_index_agrees_with_position_at_at_every_byte() {
+    use act_lite_parser::regions::{PositionIndex, position_at};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../act-lite-cli/tests/fixtures/components");
+    let mut files: Vec<(String, String, Grammar)> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter_map(|path| {
+            let grammar = match path.extension()?.to_str()? {
+                "vue" => Grammar::Vue,
+                "svelte" => Grammar::Svelte,
+                "astro" => Grammar::Astro,
+                _ => return None,
+            };
+            let name = path.file_name()?.to_str()?.to_string();
+            Some((name, std::fs::read_to_string(&path).ok()?, grammar))
+        })
+        .collect();
+    assert!(files.len() >= 3);
+    files.push((
+        "Err.svelte".into(),
+        "<div>\n<p id=\"a\">\n{#if x}\n<span id=\"s\">{y}</span>\n</div>\n".into(),
+        Grammar::Svelte,
+    ));
+    files.push((
+        "Mixed.vue".into(),
+        "<template><p :id=\"a\">{{ b }}</p></template>\n<script lang=\"coffee\">x = 1</script>\n<script>let c = 1;</script>\n<style>p{}</style>\n".into(),
+        Grammar::Vue,
+    ));
+    for (name, text, grammar) in files {
+        let source = SourceFile::from_content(&name, text.clone(), grammar).unwrap();
+        let index = PositionIndex::new(&source);
+        for byte in 0..=text.len() {
+            assert_eq!(
+                index.at(byte),
+                position_at(&source, byte),
+                "{name} byte {byte}"
+            );
+        }
+    }
+}

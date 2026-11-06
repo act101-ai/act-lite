@@ -615,3 +615,33 @@ fn the_outer_references_query_matches_data_and_href_values() {
         ]
     );
 }
+
+#[test]
+fn a_script_type_written_as_an_expression_is_an_unsupported_region() {
+    for type_attr in ["type={\"text/plain\"}", "type=`text/plain`"] {
+        let text = format!("<script {type_attr}>function f(a) {{ return a; }}</script>\n");
+        let source = SourceFile::from_content("E.astro", text.clone(), Grammar::Astro).unwrap();
+        let regions = source.regions();
+        assert_eq!(regions.len(), 1, "{type_attr}");
+        assert_eq!(regions[0].kind, RegionKind::Script);
+        assert_eq!(
+            regions[0].language,
+            RegionLanguage::Unsupported(type_attr["type=".len()..].to_string()),
+            "{type_attr}"
+        );
+        assert!(source.region_trees().is_empty(), "{type_attr}");
+        let QueryResult::Skeleton(skeleton) = execute_skeleton(&source).unwrap() else {
+            panic!("not a skeleton");
+        };
+        let rows: Vec<(String, String)> = skeleton
+            .declarations
+            .into_iter()
+            .map(|d| (d.kind, d.name))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("module".to_string(), format!("<script {type_attr}>"))],
+            "{type_attr}"
+        );
+    }
+}

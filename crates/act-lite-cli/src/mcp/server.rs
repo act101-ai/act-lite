@@ -951,12 +951,13 @@ fn component_symbol_position(
     source: &act_lite_parser::SourceFile,
     symbol: &str,
 ) -> Option<(u32, u32)> {
-    use act_lite_parser::regions::{Position, position_at};
+    use act_lite_parser::regions::{Position, PositionIndex};
+    let index = PositionIndex::new(source);
     if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source) {
         let in_region = |start: &act_lite_core::Location| {
             start
                 .byte_offset()
-                .is_some_and(|byte| matches!(position_at(source, byte), Position::Region(_)))
+                .is_some_and(|byte| matches!(index.at(byte), Position::Region(_)))
         };
         let named: Vec<_> = symbols.iter().filter(|s| s.name() == symbol).collect();
         if let Some(found) = named
@@ -984,9 +985,7 @@ fn component_symbol_position(
                 .next_back()
                 .is_none_or(|c| !is_ident(c));
             let after_ok = line[end..].chars().next().is_none_or(|c| !is_ident(c));
-            if before_ok
-                && after_ok
-                && position_at(source, line_start + start) != Position::TemplateExpression
+            if before_ok && after_ok && index.at(line_start + start) != Position::TemplateExpression
             {
                 return Some((line_idx as u32 + 1, start as u32 + 1));
             }

@@ -129,28 +129,43 @@ fn frontmatter(node: Node) -> Region {
     )
 }
 
-/// Each attribute of a start tag as (name, value as written); an attribute
-/// without a literal value has the value "".
-fn attributes<'s>(tag: Node, source: &'s str) -> Vec<(&'s str, &'s str)> {
+/// An attribute value: a literal (`""` when the attribute has none) or an
+/// expression (`{…}` or a backtick string), whose value is not known
+/// before the page runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Value<'s> {
+    Literal(&'s str),
+    Expression(&'s str),
+}
+
+/// Each attribute of a start tag as (name, value).
+fn attributes<'s>(tag: Node, source: &'s str) -> Vec<(&'s str, Value<'s>)> {
     let text = |n: Node| n.utf8_text(source.as_bytes()).unwrap_or_default();
     let mut cursor = tag.walk();
     tag.children(&mut cursor)
         .filter(|c| c.kind() == "attribute")
         .map(|attribute| {
             let name = child(attribute, "attribute_name").map_or("", text);
-            let value = child(attribute, "attribute_value")
-                .or_else(|| {
-                    child(attribute, "quoted_attribute_value")
-                        .and_then(|q| child(q, "attribute_value"))
-                })
-                .map_or("", text);
+            let expression = child(attribute, "attribute_interpolation")
+                .or_else(|| child(attribute, "attribute_backtick_string"));
+            let value = match expression {
+                Some(node) => Value::Expression(text(node)),
+                None => Value::Literal(
+                    child(attribute, "attribute_value")
+                        .or_else(|| {
+                            child(attribute, "quoted_attribute_value")
+                                .and_then(|q| child(q, "attribute_value"))
+                        })
+                        .map_or("", text),
+                ),
+            };
             (name, value)
         })
         .collect()
 }
 
-/// The value of the first attribute named `name`, as written.
-fn first<'s>(attributes: &[(&str, &'s str)], name: &str) -> Option<&'s str> {
+/// The value of the first attribute named `name`.
+fn first<'s>(attributes: &[(&str, Value<'s>)], name: &str) -> Option<Value<'s>> {
     attributes.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
 }
 
@@ -167,9 +182,14 @@ fn is_data_block(value: &str) -> bool {
 
 /// The language of a script that is not a data block, or `None` for a
 /// data block.
-fn script_language(attributes: &[(&str, &str)]) -> Option<RegionLanguage> {
-    if first(attributes, "type").is_some_and(is_data_block) {
-        return None;
+fn script_language(attributes: &[(&str, Value)]) -> Option<RegionLanguage> {
+    match first(attributes, "type") {
+        // The type is known only when the page runs: the script is not read.
+        Some(Value::Expression(written)) => {
+            return Some(RegionLanguage::Unsupported(written.to_string()));
+        }
+        Some(Value::Literal(value)) if is_data_block(value) => return None,
+        _ => {}
     }
     let grammar = if attributes.iter().all(|(name, _)| *name == "src") {
         Grammar::TypeScript
@@ -179,11 +199,13 @@ fn script_language(attributes: &[(&str, &str)]) -> Option<RegionLanguage> {
     Some(RegionLanguage::Supported(grammar))
 }
 
-fn style_language(attributes: &[(&str, &str)]) -> RegionLanguage {
+fn style_language(attributes: &[(&str, Value)]) -> RegionLanguage {
     match first(attributes, "lang") {
-        None | Some("css") => RegionLanguage::Supported(Grammar::Css),
-        Some("scss") => RegionLanguage::Supported(Grammar::Scss),
-        Some(other) => RegionLanguage::Unsupported(other.to_string()),
+        None | Some(Value::Literal("css")) => RegionLanguage::Supported(Grammar::Css),
+        Some(Value::Literal("scss")) => RegionLanguage::Supported(Grammar::Scss),
+        Some(Value::Literal(other) | Value::Expression(other)) => {
+            RegionLanguage::Unsupported(other.to_string())
+        }
     }
 }
 

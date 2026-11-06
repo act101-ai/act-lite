@@ -162,6 +162,142 @@ pub fn position_at(file: &crate::SourceFile, byte: usize) -> Position {
     Position::Outer
 }
 
+/// [`position_at`] for many bytes of one file: built from one walk of the
+/// outer tree, then each lookup is a binary search.
+pub struct PositionIndex {
+    component: bool,
+    /// The content range of each parsed region, in document order.
+    regions: Vec<(Range<usize>, usize)>,
+    /// Disjoint segments of the outer document, by start byte: the position
+    /// of each byte from a segment's start to the next segment's start.
+    segments: Vec<(usize, Position)>,
+}
+
+impl PositionIndex {
+    pub fn new(file: &crate::SourceFile) -> Self {
+        let grammar = file.grammar();
+        if !grammar.is_component() {
+            return PositionIndex {
+                component: false,
+                regions: Vec::new(),
+                segments: Vec::new(),
+            };
+        }
+        let regions = file
+            .region_trees()
+            .iter()
+            .filter_map(|tree| {
+                let content = file.regions()[tree.region].content.clone()?;
+                Some((content, tree.region))
+            })
+            .collect();
+        // The nodes whose position differs from their parent's, in
+        // preorder: they nest, and each byte takes the position of the
+        // innermost one that holds it.
+        let mut marks: Vec<(usize, usize, Position)> = Vec::new();
+        let mut cursor = file.tree().root_node().walk();
+        let mut labels = vec![Position::Outer];
+        loop {
+            let node = cursor.node();
+            let inherited = *labels.last().unwrap_or(&Position::Outer);
+            let label = node_position(grammar, node).unwrap_or(inherited);
+            if label != inherited {
+                marks.push((node.start_byte(), node.end_byte(), label));
+            }
+            if cursor.goto_first_child() {
+                labels.push(label);
+                continue;
+            }
+            loop {
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+                if !cursor.goto_parent() {
+                    let segments = segments_of(&marks);
+                    return PositionIndex {
+                        component: true,
+                        regions,
+                        segments,
+                    };
+                }
+                labels.pop();
+            }
+        }
+    }
+
+    /// Where `byte` lies: the same answer as [`position_at`].
+    pub fn at(&self, byte: usize) -> Position {
+        if !self.component {
+            return Position::Outer;
+        }
+        let i = self
+            .regions
+            .partition_point(|(range, _)| range.start <= byte);
+        if let Some((range, region)) = i.checked_sub(1).map(|i| &self.regions[i])
+            && range.contains(&byte)
+        {
+            return Position::Region(*region);
+        }
+        let i = self.segments.partition_point(|(start, _)| *start <= byte);
+        i.checked_sub(1)
+            .map_or(Position::Outer, |i| self.segments[i].1)
+    }
+}
+
+/// The position a node gives the bytes it holds, or `None` when it keeps
+/// its parent's (the rule [`position_at`] applies walking up).
+fn node_position(grammar: Grammar, node: tree_sitter::Node) -> Option<Position> {
+    let kind = node.kind();
+    let unparsed_content = matches!(kind, "raw_text" | "frontmatter_js_block")
+        && node.parent().is_some_and(|parent| {
+            matches!(
+                parent.kind(),
+                "script_element" | "style_element" | "frontmatter"
+            )
+        });
+    if unparsed_content || expression_kinds(grammar).contains(&kind) {
+        Some(Position::TemplateExpression)
+    } else if matches!(kind, "element" | "template_element") {
+        Some(Position::Outer)
+    } else {
+        None
+    }
+}
+
+/// Disjoint segments from nested marks in preorder.
+fn segments_of(marks: &[(usize, usize, Position)]) -> Vec<(usize, Position)> {
+    let mut segments = vec![(0, Position::Outer)];
+    let mut open: Vec<(usize, Position)> = vec![(usize::MAX, Position::Outer)];
+    let push = |segments: &mut Vec<(usize, Position)>, start: usize, label: Position| {
+        if segments.last().is_some_and(|(s, _)| *s == start) {
+            segments.pop();
+        }
+        if segments.last().is_none_or(|(_, l)| *l != label) {
+            segments.push((start, label));
+        }
+    };
+    for &(start, end, label) in marks {
+        if start >= end {
+            continue;
+        }
+        while let Some(&(close, _)) = open.last()
+            && close <= start
+        {
+            open.pop();
+            let outer = open.last().map_or(Position::Outer, |(_, l)| *l);
+            push(&mut segments, close, outer);
+        }
+        push(&mut segments, start, label);
+        open.push((end, label));
+    }
+    while open.len() > 1 {
+        let (close, _) = open.pop().unwrap_or((usize::MAX, Position::Outer));
+        let outer = open.last().map_or(Position::Outer, |(_, l)| *l);
+        push(&mut segments, close, outer);
+    }
+    segments
+}
+
 /// The outer-tree node kinds whose content is a template expression.
 fn expression_kinds(grammar: Grammar) -> &'static [&'static str] {
     match grammar {

@@ -453,3 +453,45 @@ fn outer_references_skip_custom_blocks_other_templates_and_error_content() {
     let answer = references(ws.path(), "x", "U.astro", 1, 8);
     assert_eq!(sites(&answer), vec![at("U.astro", 1, 8)], "{answer}");
 }
+
+/// An Astro file with `n` script regions and `n` template expressions that
+/// use `zz`, a name no region declares.
+fn many_expressions(n: usize) -> String {
+    let mut text = String::new();
+    for i in 0..n {
+        text.push_str(&format!("<script>let v{i} = 1;</script>\n<p>{{zz}}</p>\n"));
+    }
+    text
+}
+
+#[test]
+fn mcp_references_to_a_template_only_name_say_not_found() {
+    let ws = workspace(&[("Many.astro", &many_expressions(50))]);
+    let message = Mcp::start_with_env(ws.path(), DISABLED)
+        .call(
+            "references",
+            json!({ "symbol": "zz", "file": "Many.astro" }),
+        )
+        .unwrap_err();
+    assert!(
+        message.contains("Symbol 'zz' not found in Many.astro"),
+        "{message}"
+    );
+}
+
+#[test]
+fn mcp_references_to_a_template_only_name_stay_linear_in_the_regions() {
+    if std::env::var("ACT_LITE_CHECK_PERF").as_deref() != Ok("1") {
+        eprintln!("skipped: set ACT_LITE_CHECK_PERF=1 to time 8,000 regions and expressions");
+        return;
+    }
+    let ws = workspace(&[("Many.astro", &many_expressions(8_000))]);
+    let mut mcp = Mcp::start_with_env(ws.path(), DISABLED);
+    let args = json!({ "symbol": "zz", "file": "Many.astro" });
+    let _ = mcp.call("references", args.clone());
+    let started = std::time::Instant::now();
+    let message = mcp.call("references", args).unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(message.contains("not found"), "{message}");
+    assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
+}

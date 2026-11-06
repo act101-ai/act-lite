@@ -173,7 +173,7 @@ fn the_region_elements_and_language_rules_are_stated() {
         "Attribute values are compared byte for byte and case-sensitively, except Astro's `type`, which follows HTML: surrounding whitespace is removed and the comparison ignores ASCII case. When an element has the attribute twice, the first one counts.",
     ]);
     let rows = table(&section_source(), "| Region | Attribute | Language |");
-    let expected: [(&str, &str, &str); 8] = [
+    let expected: [(&str, &str, &str); 9] = [
         (
             "Vue `<script>`",
             "no `lang`, or `lang=\"js\"` / `\"jsx\"` / `\"ts\"` / `\"tsx\"`",
@@ -199,6 +199,11 @@ fn the_region_elements_and_language_rules_are_stated() {
             "Astro `<script>`",
             "a `type` that is not empty, not `module` and not a JavaScript MIME type, such as `application/ld+json`",
             "a data block: reported as a block, not code",
+        ),
+        (
+            "Astro `<script>`",
+            "a `type` written as an expression, such as `type={kind}` or a backtick string (its value is known only when the page runs)",
+            "an unsupported language: not read, listed in `regions_not_analyzed`",
         ),
         (
             "`<style>`",
