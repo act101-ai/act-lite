@@ -390,3 +390,72 @@ fn callers_needs_a_language_server_on_cli_and_mcp() {
         "{message}"
     );
 }
+
+const EXTENSIONS: &str = "extend type T { t: Int }\nextend enum Role { X }\nextend interface Node { n: ID }\nextend input NewUser { u: String }\nextend union Item = Extra\nextend scalar Date @tag\n";
+
+#[test]
+fn every_type_extension_is_a_declaration_of_its_base_kind() {
+    let ws = workspace(&[("a.graphql", EXTENSIONS)]);
+    let skeleton = cli_json(ws.path(), &["query", "skeleton", "a.graphql"]);
+    assert_eq!(
+        kind_names(&skeleton, "declarations"),
+        pairs(&[
+            ("class", "T"),
+            ("enum", "Role"),
+            ("interface", "Node"),
+            ("struct", "NewUser"),
+            ("union", "Item"),
+            ("type_alias", "Date"),
+        ])
+    );
+    let symbols = cli_json(ws.path(), &["query", "symbols", "a.graphql"]);
+    assert_eq!(
+        kind_names(&symbols, "symbols"),
+        pairs(&[
+            ("class", "T"),
+            ("field", "t"),
+            ("enum", "Role"),
+            ("enum_member", "X"),
+            ("interface", "Node"),
+            ("field", "n"),
+            ("struct", "NewUser"),
+            ("field", "u"),
+            ("enum", "Item"),
+            ("type_alias", "Date"),
+        ])
+    );
+    assert!(symbols.get("parse_error").is_none(), "{symbols}");
+}
+
+#[test]
+fn references_at_an_extension_name_list_it_as_a_site() {
+    let ws = workspace(&[("a.graphql", EXTENSIONS)]);
+    for (line, column, name) in [
+        (1, 13, "T"),
+        (2, 13, "Role"),
+        (3, 18, "Node"),
+        (4, 14, "NewUser"),
+        (5, 14, "Item"),
+        (6, 15, "Date"),
+    ] {
+        let answer = cli_json(
+            ws.path(),
+            &[
+                "query",
+                "references",
+                name,
+                "--file",
+                "a.graphql",
+                "--line",
+                &line.to_string(),
+                "--column",
+                &column.to_string(),
+            ],
+        );
+        let sites: BTreeSet<(u64, u64)> = items(&answer, "references")
+            .iter()
+            .map(|r| (r["line"].as_u64().unwrap(), r["column"].as_u64().unwrap()))
+            .collect();
+        assert!(sites.contains(&(line, column)), "{name}: {answer}");
+    }
+}

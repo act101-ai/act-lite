@@ -5,24 +5,39 @@
 (object_type_extension
   (name) @name) @definition.class
 
-; Interfaces
+; Interfaces and their extensions
 (interface_type_definition
   (name) @name) @definition.interface
 
-; Input objects
+(interface_type_extension
+  (name) @name) @definition.interface
+
+; Input objects and their extensions
 (input_object_type_definition
   (name) @name) @definition.struct
 
-; Enums
+(input_object_type_extension
+  (name) @name) @definition.struct
+
+; Enums and their extensions
 (enum_type_definition
   (name) @name) @definition.enum
 
-; Unions
+(enum_type_extension
+  (name) @name) @definition.enum
+
+; Unions and their extensions
 (union_type_definition
   (name) @name) @definition.union
 
-; Scalars
+(union_type_extension
+  (name) @name) @definition.union
+
+; Scalars and their extensions
 (scalar_type_definition
+  (name) @name) @definition.type_alias
+
+(scalar_type_extension
   (name) @name) @definition.type_alias
 
 ; Directive definitions
