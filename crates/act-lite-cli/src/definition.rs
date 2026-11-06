@@ -714,7 +714,7 @@ fn resolve_component_definition(
     };
     if grammar == component
         && leaf_at(root_node, line, column)
-            .is_none_or(|leaf| outside_structure(grammar, leaf, text))
+            .is_none_or(|leaf| outside_structure(grammar, root_node, leaf, text))
     {
         return Err(DefinitionError::NoSymbolAtPosition);
     }

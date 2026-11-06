@@ -495,3 +495,43 @@ fn mcp_references_to_a_template_only_name_stay_linear_in_the_regions() {
     assert!(message.contains("not found"), "{message}");
     assert!(elapsed.as_secs_f64() < 2.0, "{elapsed:?}");
 }
+
+/// The lines of the references MCP gives for `symbol` in `file`.
+fn mcp_lines(ws: &Path, symbol: &str, file: &str) -> Vec<u64> {
+    let result = Mcp::start_with_env(ws, DISABLED)
+        .call("references", json!({ "symbol": symbol, "file": file }))
+        .unwrap();
+    let text = result.to_string();
+    let mut lines: Vec<u64> =
+        serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap_or(&text))
+            .ok()
+            .and_then(|v| v["references"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r["line"].as_u64().or(r["range"]["start"]["line"].as_u64()))
+            .collect();
+    lines.sort_unstable();
+    lines
+}
+
+#[test]
+fn mcp_prefers_a_script_use_to_template_text_or_a_custom_block() {
+    for (name, text) in [
+        (
+            "Text.vue",
+            "<template><p>foo</p></template>\n<script>foo()</script>\n",
+        ),
+        ("Docs.vue", "<docs>foo</docs>\n<script>foo()</script>\n"),
+    ] {
+        let ws = workspace(&[(name, text)]);
+        let cli = references(ws.path(), "foo", name, 2, 9);
+        let cli_lines: Vec<u64> = cli["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["line"].as_u64().unwrap())
+            .collect();
+        assert_eq!(cli_lines, vec![2], "{name}: {cli}");
+        assert_eq!(mcp_lines(ws.path(), "foo", name), vec![2], "{name}");
+    }
+}

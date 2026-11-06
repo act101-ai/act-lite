@@ -246,7 +246,7 @@ fn the_structure_filter_agrees_with_outside_structure_on_every_node() {
         let mut stack = vec![root];
         let mut hidden = 0;
         while let Some(node) = stack.pop() {
-            let want = outside_structure(grammar, node, &text);
+            let want = outside_structure(grammar, root, node, &text);
             hidden += usize::from(want);
             assert_eq!(
                 filter.hides(node),
@@ -255,6 +255,16 @@ fn the_structure_filter_agrees_with_outside_structure_on_every_node() {
                 node.kind(),
                 node.byte_range()
             );
+            if node.child_count() == 0 {
+                for byte in node.byte_range() {
+                    let deepest = act_lite_parser::regions::node_at_byte(root, byte);
+                    assert_eq!(
+                        filter.hides_byte(byte),
+                        filter.hides(deepest),
+                        "{name} byte {byte}"
+                    );
+                }
+            }
             let mut cursor = node.walk();
             stack.extend(node.children(&mut cursor));
         }

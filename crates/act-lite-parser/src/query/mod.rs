@@ -1202,7 +1202,7 @@ fn component_references_across(
     line: u32,
     column: u32,
 ) -> Result<QueryResult> {
-    use crate::regions::{Position, node_at_byte, outside_structure, position_at};
+    use crate::regions::{Position, ancestors_of, node_at_byte, outside_structure, position_at};
     let byte = byte_at_position(anchor, line, column).ok_or_else(|| {
         crate::ParserError::InvalidPosition {
             file: anchor.path().to_path_buf(),
@@ -1216,22 +1216,20 @@ fn component_references_across(
     };
     let text = anchor.content();
     let component = anchor.grammar();
-    let anchored = |grammar: Grammar, mut node: tree_sitter::Node| loop {
-        if node_declares_name(grammar, node, text.as_bytes(), name) {
-            return true;
-        }
-        match node.parent() {
-            Some(parent) => node = parent,
-            None => return false,
-        }
+    // Whether the node or one of its ancestors declares `name`.
+    let anchored = |grammar: Grammar, root: tree_sitter::Node, node: tree_sitter::Node| {
+        std::iter::once(node)
+            .chain(ancestors_of(root, node).into_iter().rev())
+            .any(|n| node_declares_name(grammar, n, text.as_bytes(), name))
     };
     let files = std::iter::once(anchor).chain(siblings);
     let mut references = Vec::new();
     match position_at(anchor, byte) {
         Position::TemplateExpression => return Err(not_found()),
         Position::Outer => {
-            let node = node_at_byte(anchor.tree().root_node(), byte);
-            if outside_structure(component, node, text) || !anchored(component, node) {
+            let root = anchor.tree().root_node();
+            let node = node_at_byte(root, byte);
+            if outside_structure(component, root, node, text) || !anchored(component, root, node) {
                 return Err(not_found());
             }
             for file in files.filter(|file| file.grammar() == component) {
@@ -1245,7 +1243,8 @@ fn component_references_across(
                 .find(|tree| tree.region == index)
                 .ok_or_else(not_found)?;
             let language = tree.grammar;
-            if !anchored(language, node_at_byte(tree.tree.root_node(), byte)) {
+            let root = tree.tree.root_node();
+            if !anchored(language, root, node_at_byte(root, byte)) {
                 return Err(not_found());
             }
             for file in files {

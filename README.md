@@ -338,8 +338,10 @@ From a plain file (`.ts`, `.js`), `references` and `definition` do not read
 component files, so the uses of a TypeScript export inside components are
 found only from a component file. MCP `references` takes `symbol` and `file`:
 in a component file it uses the first region symbol with that name, then the
-first template symbol, else the first whole-word match outside template
-expressions.
+first template symbol, else the first whole-word match in a script region,
+else the first whole-word match in the reported template structure (not in a
+template expression, a custom block, a template in another language or a parse
+error).
 
 **Code-health analyzers.** `analyze_patterns`, `analyze_hotspots` and
 `analyze_clones` analyze the well-formed script and frontmatter regions in

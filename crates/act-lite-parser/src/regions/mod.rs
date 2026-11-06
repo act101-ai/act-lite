@@ -140,24 +140,13 @@ pub fn position_at(file: &crate::SourceFile, byte: usize) -> Position {
             return Position::Region(tree.region);
         }
     }
-    let mut node = Some(node_at_byte(file.tree().root_node(), byte));
-    while let Some(current) = node {
-        let kind = current.kind();
-        let parent = current.parent();
-        let unparsed_content = matches!(kind, "raw_text" | "frontmatter_js_block")
-            && parent.is_some_and(|parent| {
-                matches!(
-                    parent.kind(),
-                    "script_element" | "style_element" | "frontmatter"
-                )
-            });
-        if unparsed_content || expression_kinds(grammar).contains(&kind) {
-            return Position::TemplateExpression;
+    let path = path_at_byte(file.tree().root_node(), byte);
+    for (i, current) in path.iter().enumerate().rev() {
+        let parent_kind = i.checked_sub(1).map(|p| path[p].kind());
+        match node_position(grammar, *current, parent_kind) {
+            Some(position) => return position,
+            None => continue,
         }
-        if matches!(kind, "element" | "template_element") {
-            return Position::Outer;
-        }
-        node = parent;
     }
     Position::Outer
 }
@@ -321,41 +310,65 @@ fn expression_kinds(grammar: Grammar) -> &'static [&'static str] {
 /// The innermost node below `root` whose byte range holds `byte` (start
 /// inclusive, end exclusive); `root` when no child holds it.
 pub fn node_at_byte(root: tree_sitter::Node<'_>, byte: usize) -> tree_sitter::Node<'_> {
+    path_at_byte(root, byte).pop().unwrap_or(root)
+}
+
+/// The nodes from `root` down to the deepest node that holds `byte`.
+fn path_at_byte(root: tree_sitter::Node<'_>, byte: usize) -> Vec<tree_sitter::Node<'_>> {
+    let mut path = vec![root];
     let mut node = root;
     'descend: loop {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.start_byte() <= byte && byte < child.end_byte() {
                 node = child;
+                path.push(child);
                 continue 'descend;
             }
         }
-        return node;
+        return path;
     }
+}
+
+/// The strict ancestors of `node` below and including `root`, from `root`
+/// down, found by one descent (a node's `parent` walks down from the root
+/// each time, so walking up costs the square of the depth).
+pub fn ancestors_of<'t>(
+    root: tree_sitter::Node<'t>,
+    node: tree_sitter::Node<'t>,
+) -> Vec<tree_sitter::Node<'t>> {
+    let mut path = Vec::new();
+    let mut current = root;
+    while current.id() != node.id() {
+        path.push(current);
+        match current.child_with_descendant(node) {
+            Some(next) => current = next,
+            None => return Vec::new(),
+        }
+    }
+    path
 }
 
 /// Whether a node of a component file's outer tree lies where nothing is
 /// reported: below an ERROR node, or, in a Vue file, inside a custom block
 /// or a `<template>` whose first `lang` is not `html`. The block itself (the
 /// top-level element) and its start tag are not inside it.
-pub fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str) -> bool {
-    let mut top = None;
-    let mut ancestor = node.parent();
-    while let Some(current) = ancestor {
-        if current.kind() == "ERROR" {
-            return true;
-        }
-        if current.parent().is_some() {
-            top = Some(current);
-        }
-        ancestor = current.parent();
+pub fn outside_structure(
+    grammar: Grammar,
+    root: tree_sitter::Node,
+    node: tree_sitter::Node,
+    source: &str,
+) -> bool {
+    let ancestors = ancestors_of(root, node);
+    if ancestors.iter().any(|a| a.kind() == "ERROR") {
+        return true;
     }
-    match (grammar, top) {
-        (Grammar::Vue, Some(block)) if within_start_tag(block, node) => false,
+    match (grammar, ancestors.get(1)) {
+        (Grammar::Vue, Some(block)) if within_start_tag(*block, node) => false,
         (Grammar::Vue, Some(block)) => match block.kind() {
             "element" => true,
             "template_element" => {
-                vue::template_lang(block, source).is_some_and(|lang| lang != "html")
+                vue::template_lang(*block, source).is_some_and(|lang| lang != "html")
             }
             _ => false,
         },
@@ -367,13 +380,20 @@ pub fn outside_structure(grammar: Grammar, node: tree_sitter::Node, source: &str
 /// walk: a lookup does not walk the node's ancestors.
 pub struct StructureFilter {
     hidden: std::collections::HashSet<usize>,
+    /// The byte range of each hidden node whose parent is not hidden, by
+    /// start: a byte is hidden when it lies in one.
+    hidden_ranges: Vec<Range<usize>>,
 }
 
 impl StructureFilter {
     pub fn new(grammar: Grammar, root: tree_sitter::Node, source: &str) -> Self {
         let mut hidden = std::collections::HashSet::new();
+        let mut hidden_ranges = Vec::new();
         if !grammar.is_component() {
-            return StructureFilter { hidden };
+            return StructureFilter {
+                hidden,
+                hidden_ranges,
+            };
         }
         /// What the strict ancestors of a node decide: below an ERROR node;
         /// inside a top-level Vue block whose content is not structure; in
@@ -385,15 +405,19 @@ impl StructureFilter {
             in_start_tag: bool,
         }
         // (node, the context its ancestors give it, whether it is a child of
-        // the root).
-        let mut stack: Vec<(tree_sitter::Node, Context, bool)> = Vec::new();
+        // the root, whether its parent is hidden).
+        let mut stack: Vec<(tree_sitter::Node, Context, bool, bool)> = Vec::new();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
-            stack.push((child, Context::default(), true));
+            stack.push((child, Context::default(), true, false));
         }
-        while let Some((node, context, top_level)) = stack.pop() {
-            if context.in_error || (context.hidden_block && !context.in_start_tag) {
+        while let Some((node, context, top_level, parent_hidden)) = stack.pop() {
+            let is_hidden = context.in_error || (context.hidden_block && !context.in_start_tag);
+            if is_hidden {
                 hidden.insert(node.id());
+                if !parent_hidden {
+                    hidden_ranges.push(node.byte_range());
+                }
             }
             let mut inner = Context {
                 in_error: context.in_error || node.kind() == "ERROR",
@@ -416,10 +440,23 @@ impl StructureFilter {
                     child_context.in_start_tag =
                         i == 0 && matches!(child.kind(), "start_tag" | "self_closing_tag");
                 }
-                stack.push((child, child_context, false));
+                stack.push((child, child_context, false, is_hidden));
             }
         }
-        StructureFilter { hidden }
+        hidden_ranges.sort_by_key(|range| range.start);
+        StructureFilter {
+            hidden,
+            hidden_ranges,
+        }
+    }
+
+    /// Whether the deepest node that holds `byte` is hidden.
+    pub fn hides_byte(&self, byte: usize) -> bool {
+        let i = self
+            .hidden_ranges
+            .partition_point(|range| range.start <= byte);
+        i.checked_sub(1)
+            .is_some_and(|i| self.hidden_ranges[i].contains(&byte))
     }
 
     /// Whether `node` lies where nothing is reported.

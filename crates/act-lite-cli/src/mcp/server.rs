@@ -951,7 +951,7 @@ fn component_symbol_position(
     source: &act_lite_parser::SourceFile,
     symbol: &str,
 ) -> Option<(u32, u32)> {
-    use act_lite_parser::regions::{Position, PositionIndex};
+    use act_lite_parser::regions::{Position, PositionIndex, StructureFilter};
     let index = PositionIndex::new(source);
     if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source) {
         let in_region = |start: &act_lite_core::Location| {
@@ -974,6 +974,10 @@ fn component_symbol_position(
     }
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
     let content = source.content();
+    let filter = StructureFilter::new(source.grammar(), source.tree().root_node(), content);
+    // The first match in a parsed region wins; else the first match in the
+    // outer document that is reported structure.
+    let mut outer = None;
     let mut line_start = 0;
     for (line_idx, line) in content.split('\n').enumerate() {
         let mut from = 0;
@@ -985,15 +989,22 @@ fn component_symbol_position(
                 .next_back()
                 .is_none_or(|c| !is_ident(c));
             let after_ok = line[end..].chars().next().is_none_or(|c| !is_ident(c));
-            if before_ok && after_ok && index.at(line_start + start) != Position::TemplateExpression
-            {
-                return Some((line_idx as u32 + 1, start as u32 + 1));
+            if before_ok && after_ok {
+                let byte = line_start + start;
+                let at = (line_idx as u32 + 1, start as u32 + 1);
+                match index.at(byte) {
+                    Position::Region(_) => return Some(at),
+                    Position::Outer if outer.is_none() && !filter.hides_byte(byte) => {
+                        outer = Some(at);
+                    }
+                    _ => {}
+                }
             }
             from = end;
         }
         line_start += line.len() + 1;
     }
-    None
+    outer
 }
 
 /// Finds the first whole-identifier occurrence of `symbol` (1-indexed line
