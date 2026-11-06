@@ -1297,3 +1297,64 @@ fn comments_inside_include_and_use_tokens_are_skipped() {
     );
     assert!(reasons(&graph).is_empty(), "{:?}", reasons(&graph));
 }
+
+/// The Rust resolver, cancelling `cancel` before its second resolution and
+/// recording each outcome by specifier.
+struct Cancelling {
+    cancel: CancellationToken,
+    outcomes: Mutex<Vec<(String, Outcome)>>,
+}
+
+impl Resolver for Cancelling {
+    fn family(&self) -> Family {
+        Family::Rust
+    }
+
+    fn resolve(&self, file: &str, rel: &Relationship, cx: &mut ResolveCx<'_>) -> Outcome {
+        if !self.outcomes.lock().unwrap().is_empty() {
+            self.cancel.cancel();
+        }
+        let outcome = RustResolver.resolve(file, rel, cx);
+        let entry = (rel.specifier.clone(), outcome.clone());
+        self.outcomes.lock().unwrap().push(entry);
+        outcome
+    }
+}
+
+#[test]
+fn a_cancelled_token_stops_the_module_expansion_from_read_files() {
+    // No tree reaches `src/x.rs` or `src/y.rs`, so both are read before the
+    // first relationship of `src/x.rs` resolves; the token is cancelled
+    // before the second, whose `use` needs the module `y` expanded.
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    package(root, ".", "app", "");
+    write(root, "src/lib.rs", "pub struct L;\n");
+    write(root, "src/x.rs", "#[path = \"y.rs\"]\nmod y;\nuse y::Y;\n");
+    write(root, "src/y.rs", "pub struct Y;\n");
+    let cancel = CancellationToken::new();
+    let resolver = Cancelling {
+        cancel: cancel.clone(),
+        outcomes: Mutex::new(Vec::new()),
+    };
+    let request = Request::new(root, &[], &[], &[], Includes::default(), 100).unwrap();
+    let ctx = RunContext {
+        root: root.to_path_buf(),
+        discovered: discover(root, &request.scope, &supports, &cancel).unwrap(),
+        support: SupportReader::new(root, &Includes::default(), &cancel),
+    };
+    let mut reader = Reader::new(&ctx.discovered.files, &supports, false, &cancel);
+    let result = DepGraph::build_with(&mut reader, &ctx, &[&resolver], &cancel);
+    assert!(matches!(
+        result,
+        Err(act_lite_cli::analyze::envelope::AnalyzeError::Cancelled)
+    ));
+    let outcomes = resolver.outcomes.lock().unwrap();
+    assert_eq!(outcomes[0], ("y".to_string(), resolved(&["src/y.rs"])));
+    assert_eq!(outcomes[1].0, "y::Y");
+    assert!(
+        !matches!(outcomes[1].1, Outcome::Resolved(_)),
+        "the module y was expanded after the cancel: {:?}",
+        outcomes[1].1
+    );
+}

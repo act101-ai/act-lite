@@ -200,7 +200,7 @@ impl Analyzer for ImpactAnalyzer {
                 || (u.family == Family::Rust && u.kind == RelationshipKind::Include)
         };
         let unresolved = graph.unresolved(&relevant);
-        let limits_hit: Vec<LimitHit> = traversal
+        let mut limits_hit: Vec<LimitHit> = traversal
             .file_limit_hit
             .map(|n| LimitHit {
                 limit: "max_depth".to_string(),
@@ -212,6 +212,7 @@ impl Analyzer for ImpactAnalyzer {
             })
             .into_iter()
             .collect();
+        limits_hit.extend_from_slice(graph.limits_hit());
         let findings = dependents(&traversal, cancel)?;
         let direct = findings.iter().filter(|f| f.depth == 1).count();
         let mut details = graph.common_details();

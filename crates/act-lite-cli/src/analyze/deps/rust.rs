@@ -21,6 +21,7 @@
 
 use super::toml::{first_error, is_key, key_path, toml_pair, unquote};
 use super::{Family, InputKind, Outcome, Probe, ResolveCx, Resolver, join, lexical};
+use crate::analyze::envelope::LimitHit;
 use crate::analyze::read::{Parsed, RemovedRegion};
 use act_lite_core::CompactRange;
 use act_lite_parser::deps::{InlineModule, Relationship, RelationshipKind, extract, module_names};
@@ -40,6 +41,10 @@ const BUILTIN_CRATES: [&str; 5] = ["alloc", "core", "proc_macro", "std", "test"]
 const TEST_DIRS: [&str; 5] = ["test", "tests", "__tests__", "spec", "testdata"];
 
 const DEPENDENCY_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// The most module instances of one tree: past it, the tree's other modules
+/// are not expanded and the analysis reports the limit.
+const MAX_MODULE_INSTANCES: usize = 10_000;
 
 /// The directories whose `*.rs` files are example, bench and test roots.
 const ROOT_GROUPS: [&str; 3] = ["examples", "benches", "tests"];
@@ -125,6 +130,9 @@ struct Tree {
     detached: bool,
     /// Every module file of the tree has been read.
     complete: bool,
+    /// A module was not expanded because the tree reached
+    /// `MAX_MODULE_INSTANCES`.
+    cut: bool,
 }
 
 /// What a `mod x;` declaration loads.
@@ -740,6 +748,7 @@ fn with_tree<'a, R>(
                 files: HashMap::new(),
                 detached,
                 complete: false,
+                cut: false,
             };
             add_file(&mut tree, root, None, !detached || is_mod_rs(root));
             tree
@@ -849,10 +858,13 @@ fn members(
 /// Reads every module file of the trees of `roots`, one level of the trees
 /// at a time: the files of a level are read together, several at once, and
 /// each file once. Modules are expanded in the order of their index, as a
-/// one-by-one expansion would.
+/// one-by-one expansion would. A cancel stops it before the next level.
 fn complete(cx: &mut ResolveCx<'_>, roots: &[Root]) {
     let mut next: Vec<usize> = vec![0; roots.len()];
     loop {
+        if cx.cancelled() {
+            return;
+        }
         let mut files = Vec::new();
         for (root, _) in roots {
             with_tree(cx, root, false, |_, tree| {
@@ -902,9 +914,11 @@ fn summarize(cx: &mut ResolveCx<'_>, mut files: Vec<String>) {
 }
 
 /// Reads the file of the module `idx` once: its names, inline modules and
-/// `mod` declarations, each probed.
+/// `mod` declarations, each probed. Nothing is expanded after a cancel, and
+/// a module whose modules would take the tree past `MAX_MODULE_INSTANCES`
+/// is not expanded.
 fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
-    if tree.modules[idx].expanded {
+    if tree.modules[idx].expanded || cx.cancelled() {
         return;
     }
     tree.modules[idx].expanded = true;
@@ -918,6 +932,21 @@ fn expand(cx: &mut ResolveCx<'_>, tree: &mut Tree, idx: usize) {
             return;
         }
     };
+    if tree.modules.len() + inline_count(inline) + mods.len() > MAX_MODULE_INSTANCES {
+        let root = tree.modules[0].file.clone();
+        let reached =
+            format!("the module tree of {root} reached {MAX_MODULE_INSTANCES} module instances");
+        tree.modules[idx].names = Err(reached.clone());
+        if !tree.cut {
+            tree.cut = true;
+            cx.limit_hit(LimitHit {
+                limit: "rust_module_instances".to_string(),
+                value: MAX_MODULE_INSTANCES as u64,
+                detail: format!("{reached}; its other modules were not expanded"),
+            });
+        }
+        return;
+    }
     tree.modules[idx].names = Ok(Arc::clone(names));
     for module in inline {
         // A removed region's inline module can lie inside an inline module
@@ -981,6 +1010,14 @@ fn add_file(tree: &mut Tree, file: &str, parent: Option<usize>, owns: bool) -> u
     let idx = tree.modules.len() - 1;
     tree.files.entry(file.to_string()).or_default().push(idx);
     idx
+}
+
+/// The number of `inline` modules and of the inline modules inside them.
+fn inline_count(inline: &[InlineModule]) -> usize {
+    inline
+        .iter()
+        .map(|m| 1 + inline_count(&m.names.inline))
+        .sum()
 }
 
 /// Adds the inline modules of the module `idx`, and theirs.

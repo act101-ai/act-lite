@@ -646,3 +646,43 @@ fn the_limit_cuts_findings_but_not_the_file_count() {
     assert_eq!(v["truncated"], true);
     assert_eq!(v["details"]["files"], 8);
 }
+
+#[test]
+fn a_rust_module_tree_stops_at_ten_thousand_module_instances() {
+    // Each file loads the next twice, under two names, so the module tree
+    // of `src/lib.rs` doubles at each level: 2^17 - 1 modules in full.
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    );
+    let loads =
+        |next: &str| format!("#[path = \"{next}\"]\nmod a;\n#[path = \"{next}\"]\nmod b;\n");
+    write(root, "src/lib.rs", &loads("f01.rs"));
+    for k in 1..16 {
+        write(
+            root,
+            &format!("src/f{k:02}.rs"),
+            &loads(&format!("f{:02}.rs", k + 1)),
+        );
+    }
+    write(root, "src/f16.rs", "pub struct End;\n");
+    let started = std::time::Instant::now();
+    let v = ok(graph(root, &[], &[], None, None));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        v["incomplete"]["limits_hit"],
+        json!([{
+            "limit": "rust_module_instances",
+            "value": 10000,
+            "detail": "the module tree of src/lib.rs reached 10000 module instances; its other modules were not expanded"
+        }])
+    );
+    assert_eq!(v["complete"], false);
+}

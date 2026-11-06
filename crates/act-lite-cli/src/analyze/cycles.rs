@@ -155,7 +155,7 @@ impl Analyzer for CyclesAnalyzer {
         Ok(Analysis {
             findings,
             unresolved: graph.unresolved(&|u| u.kind != RelationshipKind::Module),
-            limits_hit: Vec::new(),
+            limits_hit: graph.limits_hit().to_vec(),
             details: Some(details),
         })
     }

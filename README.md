@@ -1243,9 +1243,15 @@ A `--max-depth` that is not an integer from 0 to 4294967295 is rejected with
 exit 2.
 
 **Bounds.** These analyzers read every in-scope file of up to 8 MiB and have no
-hard time or memory cap; cancel a run to bound its time. The only analysis
-bound is `max_depth`, so the `limits_hit` of `analyze_cycles` and
-`analyze_coupling` is always empty. Nested lists are cut at: `evidence` 5,
+hard time or memory cap; cancel a run to bound its time. The analysis bounds
+are `max_depth` and the Rust module tree: one module tree holds at most 10,000
+module instances (a file that several `mod` declarations load is one instance
+for each). Past that, the tree's other modules are not expanded, the files only
+they load are not reached, and `limits_hit` has
+`{"limit":"rust_module_instances","value":10000,"detail":"the module tree of
+<root> reached 10000 module instances; its other modules were not expanded"}`,
+so `complete` is `false`. That is the only `limits_hit` entry of
+`analyze_cycles` and `analyze_coupling`. Nested lists are cut at: `evidence` 5,
 `members`, `path` and `chain` 20, `focus`, `focus_not_analyzed` and
 `focus_files_not_analyzed` 30, `resolution_inputs` and `not_followed` 100. They
 start and use no language server: `evidence` is
