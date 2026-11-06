@@ -1,0 +1,8 @@
+{
+  // line comment
+  "compilerOptions": {
+    /* block */
+    "strict": true,
+  },
+  "files": ["a", "b",],
+}

@@ -492,6 +492,76 @@ const SWIFT: Row = Row {
     ],
 };
 
+const ZIG: Row = Row {
+    functions: &["function_declaration", "test_declaration"],
+    ifs: &["if_statement", "if_expression"],
+    else_ifs: NONE,
+    multiways: &["switch_expression"],
+    arms: &["switch_case"],
+    loops: &[
+        "while_statement",
+        "while_expression",
+        "for_statement",
+        "for_expression",
+    ],
+    tries: NONE,
+    handlers: NONE,
+    conditionals: &["catch_expression"],
+    logical: &["binary_expression"],
+    operators: &["and", "or"],
+    named: &["parameters", "parameter"],
+    strings: &["string", "multiline_string"],
+};
+
+const R: Row = Row {
+    functions: &["function_definition"],
+    ifs: &["if_statement"],
+    else_ifs: NONE,
+    multiways: NONE,
+    arms: NONE,
+    loops: &["for_statement", "while_statement", "repeat_statement"],
+    tries: NONE,
+    handlers: NONE,
+    conditionals: NONE,
+    logical: &["binary_operator"],
+    operators: &["&&", "||"],
+    named: &["parameters", "parameter"],
+    strings: &["string"],
+};
+
+const JULIA: Row = Row {
+    functions: &[
+        "function_definition",
+        "assignment",
+        "macro_definition",
+        "arrow_function_expression",
+        "do_clause",
+    ],
+    ifs: &["if_statement"],
+    else_ifs: &["elseif_clause"],
+    multiways: NONE,
+    arms: NONE,
+    loops: &["for_statement", "while_statement"],
+    tries: &["try_statement"],
+    handlers: &["catch_clause"],
+    conditionals: &["ternary_expression"],
+    logical: &["binary_expression"],
+    operators: &["&&", "||"],
+    named: &[
+        "signature",
+        "argument_list",
+        "call_expression",
+        "typed_expression",
+        "where_expression",
+    ],
+    strings: &[
+        "string_literal",
+        "prefixed_string_literal",
+        "command_literal",
+        "prefixed_command_literal",
+    ],
+};
+
 /// The row of a supported grammar; `None` for the `Data` formats.
 pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
     Some(match grammar {
@@ -503,16 +573,19 @@ pub(super) fn row(grammar: Grammar) -> Option<&'static Row> {
         Grammar::Elixir => &ELIXIR,
         Grammar::Go => &GO,
         Grammar::Java => &JAVA,
+        Grammar::Julia => &JULIA,
         Grammar::JavaScript | Grammar::Jsx => &JAVASCRIPT,
         Grammar::TypeScript | Grammar::Tsx => &TYPESCRIPT,
         Grammar::Kotlin => &KOTLIN,
         Grammar::Lua => &LUA,
         Grammar::Php => &PHP,
         Grammar::Python => &PYTHON,
+        Grammar::R => &R,
         Grammar::Ruby => &RUBY,
         Grammar::Rust => &RUST,
         Grammar::Scala => &SCALA,
         Grammar::Swift => &SWIFT,
+        Grammar::Zig => &ZIG,
         _ => return None,
     })
 }
@@ -723,8 +796,36 @@ impl Ctx<'_> {
                 }
                 _ => true,
             },
+            Grammar::Zig if kind == "function_declaration" => body(),
+            Grammar::Julia => match kind {
+                "arrow_function_expression" | "do_clause" => true,
+                _ => self.julia_head(node).is_some_and(|h| {
+                    h.kind() == "call_expression"
+                        || (kind != "assignment" && h.kind() == "argument_list")
+                }),
+            },
             _ => true,
         }
+    }
+
+    /// The head of a Julia definition, inside any `typed_expression` or
+    /// `where_expression`: the `signature`'s content, or an assignment's left
+    /// side. A method has a `call_expression` head, an anonymous `function` an
+    /// `argument_list`.
+    fn julia_head<'t>(&self, node: Node<'t>) -> Option<Node<'t>> {
+        let mut head = match node.kind() {
+            "assignment" => *named_children(node).first()?,
+            _ => {
+                let signature = children(node)
+                    .into_iter()
+                    .find(|c| c.kind() == "signature")?;
+                *named_children(signature).first()?
+            }
+        };
+        while matches!(head.kind(), "typed_expression" | "where_expression") {
+            head = *named_children(head).first()?;
+        }
+        Some(head)
     }
 
     /// The `function_body` that follows a Dart top-level getter or setter signature.
@@ -861,6 +962,7 @@ impl Ctx<'_> {
                     && !has_child(node, "guard")
             }
             Grammar::Swift => has_child(node, "default_keyword"),
+            Grammar::Zig => has_child(node, "else"),
             _ => false,
         };
         if default { Role::DefaultArm } else { Role::Arm }
@@ -1086,6 +1188,33 @@ impl Ctx<'_> {
                 }
                 _ => 0,
             },
+            Grammar::Zig => named_children(node)
+                .iter()
+                .filter(|c| c.kind() == "parameters")
+                .map(|l| count_kinds(*l, &["parameter"]))
+                .sum(),
+            Grammar::R => field("parameters").map_or(0, |l| count_kinds(l, &["parameter"])),
+            Grammar::Julia => {
+                let list = match kind {
+                    "arrow_function_expression" => match named_children(node).first() {
+                        Some(p) if p.kind() == "argument_list" => Some(*p),
+                        Some(_) => return Some(1),
+                        None => None,
+                    },
+                    "do_clause" => named_children(node).first().copied(),
+                    _ => self.julia_head(node).and_then(|h| {
+                        if h.kind() == "argument_list" {
+                            Some(h)
+                        } else {
+                            children(h)
+                                .into_iter()
+                                .find(|c| c.kind() == "argument_list")
+                        }
+                    }),
+                };
+                list.filter(|l| l.kind() == "argument_list")
+                    .map_or(0, |l| named_children(l).len() as u32)
+            }
             _ => 0,
         };
         Some(count)
@@ -1260,6 +1389,14 @@ impl Ctx<'_> {
                 "function_declaration" => self.name_field(node),
                 _ => None,
             },
+            Grammar::Zig if kind == "test_declaration" => {
+                self.last_identifier_before(node, &["block"], &[])
+            }
+            Grammar::R => self.r_assigned_name(node),
+            Grammar::Julia => match kind {
+                "arrow_function_expression" | "do_clause" => None,
+                _ => self.last_identifier_before(node, &["argument_list"], &["curly_expression"]),
+            },
             _ => match kind {
                 "block" | "static_initializer" | "lambda_expression" | "class_static_block"
                 | "arrow_function" | "func_literal" | "anonymous_function" | "lambda"
@@ -1267,6 +1404,27 @@ impl Ctx<'_> {
                 _ => self.name_field(node),
             },
         }
+    }
+
+    /// The name an R function takes from the `<-`, `=` or `<<-` assignment
+    /// whose right side it is: the identifier as written, or a string's
+    /// content. Its own `name` field is the `function` keyword.
+    fn r_assigned_name(&self, node: Node) -> Option<String> {
+        let assignment = node
+            .parent()
+            .filter(|p| p.kind() == "binary_operator")
+            .filter(|p| p.child_by_field_name("rhs") == Some(node))
+            .filter(|p| {
+                p.child_by_field_name("operator")
+                    .is_some_and(|o| matches!(text(o, self.source), "<-" | "=" | "<<-"))
+            })?;
+        let lhs = assignment.child_by_field_name("lhs")?;
+        let name = match lhs.kind() {
+            "identifier" => lhs,
+            "string" => lhs.child_by_field_name("content")?,
+            _ => return None,
+        };
+        Some(text(name, self.source).to_string())
     }
 
     /// The text of the first identifier token of the `name` field.
@@ -1356,6 +1514,9 @@ mod tests {
                 "function_body",
                 "else",
             ],
+            Grammar::Zig => &["block", "else_clause"],
+            Grammar::R => &["identifier", "string"],
+            Grammar::Julia => &["curly_expression"],
             _ => &[],
         }
     }

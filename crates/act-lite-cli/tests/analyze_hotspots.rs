@@ -395,5 +395,5 @@ fn every_language_over_fixture_through_top_functions() {
         }
         languages += 1;
     }
-    assert_eq!(languages, 20);
+    assert_eq!(languages, 23);
 }
