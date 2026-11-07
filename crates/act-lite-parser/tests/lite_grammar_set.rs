@@ -47,6 +47,9 @@ fn grammar_set_is_exactly_the_lite_set() {
         "Zig",
         "R",
         "Julia",
+        "Vue",
+        "Svelte",
+        "Astro",
     ]
     .into_iter()
     .collect();
@@ -55,7 +58,7 @@ fn grammar_set_is_exactly_the_lite_set() {
 
 #[test]
 fn dropped_extensions_are_unsupported() {
-    for ext in ["cob", "vue", "hs", "sol", "f90", "cu", "svelte"] {
+    for ext in ["cob", "hs", "sol", "f90", "cu"] {
         assert!(
             Grammar::from_extension(ext).is_none(),
             "extension `{ext}` belongs to a dropped grammar but still routes to {:?}",

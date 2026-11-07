@@ -64,6 +64,10 @@ impl Analyzer for HotspotsAnalyzer {
         function_model::supports(grammar)
     }
 
+    fn reports_regions(&self) -> bool {
+        true
+    }
+
     fn analyze(
         &self,
         files: &mut dyn FileSource,
@@ -73,7 +77,18 @@ impl Analyzer for HotspotsAnalyzer {
         let mut measured: u64 = 0;
         while let Some(file) = files.next_file()? {
             let mut functions = Vec::new();
-            let mut iter = function_model::functions(&file.source);
+            let code = file.code();
+            let lines = code
+                .first()
+                .map(|unit| function_model::LineStarts::new(unit.source));
+            let mut iter = code.iter().flat_map(|unit| {
+                function_model::functions_in_lines(
+                    unit.grammar,
+                    unit.tree,
+                    unit.source,
+                    lines.as_ref().expect("a unit implies line starts"),
+                )
+            });
             loop {
                 if cancel.is_cancelled() {
                     return Err(AnalyzeError::Cancelled);

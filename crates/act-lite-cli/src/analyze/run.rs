@@ -34,6 +34,13 @@ pub trait Analyzer: Send + Sync {
     /// Whether the analyzer reads files of `grammar`.
     fn supports(&self, grammar: Grammar) -> bool;
 
+    /// Whether `details` disclose the script regions of component files
+    /// that are not analyzed (`regions_not_analyzed`, its total and
+    /// `files_without_analyzed_code`). By default `false`.
+    fn reports_regions(&self) -> bool {
+        false
+    }
+
     /// Pulls each file with [`FileSource::next_file`], analyzes it and drops
     /// it before it pulls the next one. Checks `cancel` between steps.
     fn analyze(
@@ -160,7 +167,9 @@ fn run_named<A: Analyzer>(
         files: 0,
     };
     let mut analysis = analyzer.analyze_in(&mut counted, &ctx, cancel)?;
-    let analyzed_files = counted.files;
+    // A component file whose script code is all in languages that are not
+    // parsed holds no code the analyzer reads: it is not an analyzed file.
+    let analyzed_files = counted.files - reader.files_without_analyzed_code();
     if cancel.is_cancelled() {
         return Err(AnalyzeError::Cancelled);
     }
@@ -201,11 +210,21 @@ fn run_named<A: Analyzer>(
         })
         .collect();
     let removed_supported = discovered.removed_supported || !test_files.is_empty();
-    let no_supported_file = !languages.iter().any(|l| l.supported);
+    // A file without analyzed code counts as a file of a language that is
+    // not supported.
+    let supported_files: u64 = languages
+        .iter()
+        .filter(|l| l.supported)
+        .map(|l| l.files)
+        .sum();
+    let no_supported_file = supported_files <= read.files_without_analyzed_code;
     let no_recognized_file = languages.is_empty();
     let coverage = Coverage::new(languages, analyzed_files, discovered.unrecognized);
     if let Some(details) = analysis.details.as_mut() {
         analyzer.finish_details(details, &coverage.languages);
+        if analyzer.reports_regions() {
+            region_details(details, &read);
+        }
     }
 
     let tests = read.test_exclusions.iter().map(|entry| Exclusion {
@@ -261,6 +280,30 @@ fn run_named<A: Analyzer>(
         Evidence::new(sources, Vec::new()),
         analysis.details,
     )
+}
+
+/// The most entries of `details.regions_not_analyzed`.
+const MAX_REGIONS_NOT_ANALYZED: usize = 30;
+
+/// Adds the script regions not analyzed, at most
+/// [`MAX_REGIONS_NOT_ANALYZED`] in location order, their total, and the
+/// number of component files that hold no analyzed code.
+fn region_details(details: &mut serde_json::Map<String, serde_json::Value>, read: &ReadOutcome) {
+    let listed: Vec<serde_json::Value> = read
+        .regions_not_analyzed
+        .iter()
+        .take(MAX_REGIONS_NOT_ANALYZED)
+        .map(|r| serde_json::json!({"file": r.file, "range": r.range, "reason": r.reason}))
+        .collect();
+    details.insert("regions_not_analyzed".to_string(), listed.into());
+    details.insert(
+        "regions_not_analyzed_total".to_string(),
+        read.regions_not_analyzed.len().into(),
+    );
+    details.insert(
+        "files_without_analyzed_code".to_string(),
+        read.files_without_analyzed_code.into(),
+    );
 }
 
 /// A [`FileSource`] that counts the files it gives.

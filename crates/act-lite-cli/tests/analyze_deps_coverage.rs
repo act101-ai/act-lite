@@ -1,7 +1,7 @@
-//! The coverage of the dependency analyzers over the 40 languages: for one
+//! The coverage of the dependency analyzers over the 43 languages: for one
 //! fixture per language, `act-lite analyze coupling` lists the language as
 //! supported for the seven that have a file-dependency rule and as unsupported
-//! for the other 33, and the README's language table says the same.
+//! for the other 36, and the README's language table says the same.
 
 use act_lite_parser::Grammar;
 use serde_json::Value;
@@ -21,7 +21,8 @@ const SUPPORTED: [&str; 7] = [
 ];
 
 /// Every language with its fixture, relative to `tests/fixtures/`.
-const ENTRIES: [(&str, &str); 40] = [
+const ENTRIES: [(&str, &str); 43] = [
+    ("Astro", "components/a.astro"),
     ("Bash", "langs/bash/fixture.sh"),
     ("C", "langs/c/fixture.c"),
     ("CMake", "langs-added/cmake/CMakeLists.txt"),
@@ -55,10 +56,12 @@ const ENTRIES: [(&str, &str); 40] = [
     ("Scala", "langs/scala/fixture.scala"),
     ("SQL", "langs/sql/fixture.sql"),
     ("SCSS", "langs/scss/fixture.scss"),
+    ("Svelte", "components/a.svelte"),
     ("Swift", "langs/swift/fixture.swift"),
     ("TOML", "langs/toml/fixture.toml"),
     ("TSX", "langs/tsx/fixture.tsx"),
     ("TypeScript", "langs/typescript/fixture.ts"),
+    ("Vue", "components/a.vue"),
     ("XML", "langs-added/xml/pom.xml"),
     ("YAML", "langs/yaml/fixture.yaml"),
     ("Zig", "langs-added/zig/point.zig"),
@@ -101,9 +104,9 @@ fn coupling_of(rel: &str) -> Value {
 fn the_entry_table_has_one_entry_per_grammar() {
     let grammars: BTreeSet<&str> = Grammar::all().iter().map(|g| g.name()).collect();
     let entries: BTreeSet<&str> = ENTRIES.iter().map(|(name, _)| *name).collect();
-    assert_eq!(Grammar::all().len(), 40);
-    assert_eq!(ENTRIES.len(), 40);
-    assert_eq!(entries.len(), 40, "an entry name repeats");
+    assert_eq!(Grammar::all().len(), 43);
+    assert_eq!(ENTRIES.len(), 43);
+    assert_eq!(entries.len(), 43, "an entry name repeats");
     assert_eq!(entries, grammars);
     assert_eq!(SUPPORTED.iter().filter(|n| entries.contains(*n)).count(), 7);
 }
@@ -177,7 +180,7 @@ fn the_readme_table_has_the_same_rows_and_values() {
         v.sort();
         v
     }
-    assert_eq!(rows.len(), 40, "rows: {names:?}");
+    assert_eq!(rows.len(), 43, "rows: {names:?}");
     assert_eq!(sorted(&names), sorted(&expected));
     for (name, value, reason) in &rows {
         if supported(name) {
@@ -190,4 +193,24 @@ fn the_readme_table_has_the_same_rows_and_values() {
             );
         }
     }
+}
+
+#[test]
+fn the_readme_rows_of_the_component_entries() {
+    let text = std::fs::read_to_string(manifest().join("../../README.md"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    for name in ["Vue", "Svelte", "Astro"] {
+        let row = format!(
+            "| {name} | `import`, `export … from`, `import()` and `require()` inside script regions | yes | no | Later candidate: dependencies between component files are outside the initial component support. |"
+        );
+        assert!(text.contains(&row), "README lacks: {row}");
+    }
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flat.contains(
+            "The other 36 languages are listed in `coverage.languages` with `supported: false`"
+        ),
+        "README states the 36 unsupported languages"
+    );
 }

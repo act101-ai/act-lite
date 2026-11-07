@@ -18,7 +18,7 @@ tree-sitter 0.25.10 — registry — MIT
   https://github.com/tree-sitter/tree-sitter
   Copyright (c) 2018 Max Brunsfeld (Cargo.toml authors: Max Brunsfeld, Amaan Qureshi)
 
-Grammars (40 languages)
+Grammars (43 languages)
 -----------------------
 Bash — tree-sitter-bash 0.25.1 — registry — MIT
   https://github.com/tree-sitter/tree-sitter-bash
@@ -167,3 +167,16 @@ YAML — tree-sitter-yaml 0.7.2 — registry — MIT
 Zig — tree-sitter-zig 1.1.2 — registry — MIT
   https://github.com/tree-sitter-grammars/tree-sitter-zig
   Copyright (c) Amaan Qureshi (Cargo.toml authors)
+
+Astro — tree-sitter-astro-next 0.1.1 — registry — MIT OR Apache-2.0 (Apache-2.0 text); derived from tree-sitter-astro — MIT, and tree-sitter-html (listed above)
+  https://github.com/PRRPCHT/tree-sitter-astro-next
+  https://github.com/virchau13/tree-sitter-astro
+  Copyright (c) 2022 Vir Chaudhury (upstream LICENSE)
+
+Svelte — tree-sitter-svelte-ng 1.0.2 — registry — MIT; derived from tree-sitter-html (listed above)
+  https://github.com/tree-sitter-grammars/tree-sitter-svelte
+  Copyright (c) Amaan Qureshi (Cargo.toml authors)
+
+Vue — tree-sitter-vue-next 0.1.0 — registry — MIT; derived from ikatyang/tree-sitter-vue and tree-sitter-html (listed above); its LICENSE keeps the upstream line
+  https://github.com/jamie8johnson/tree-sitter-vue
+  Copyright (c) 2024 Amaan Qureshi

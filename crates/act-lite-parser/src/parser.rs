@@ -47,6 +47,61 @@ impl Parser {
         Ok(SyntaxTree::new(tree, source.to_string()))
     }
 
+    /// Parses `source` with `grammar` and one included range, `content`: the
+    /// tree of that range alone, whose nodes carry their positions in
+    /// `source`. Returns a bare tree, so the text is not copied.
+    pub fn parse_region(
+        &mut self,
+        source: &str,
+        grammar: Grammar,
+        content: std::ops::Range<usize>,
+    ) -> Result<tree_sitter::Tree> {
+        let range = crate::regions::LineStarts::new(source).ts_range(content);
+        self.parse_included(source, grammar, range)
+    }
+
+    /// [`Parser::parse_region`] with the range's points already known.
+    pub(crate) fn parse_included(
+        &mut self,
+        source: &str,
+        grammar: Grammar,
+        range: tree_sitter::Range,
+    ) -> Result<tree_sitter::Tree> {
+        if range.start_byte > range.end_byte || range.end_byte > source.len() {
+            return Err(ParserError::ParseFailed {
+                file: "<source>".into(),
+                reason: format!(
+                    "region {}..{} is outside the {}-byte text",
+                    range.start_byte,
+                    range.end_byte,
+                    source.len()
+                ),
+            });
+        }
+        self.set_grammar(grammar)?;
+        self.inner
+            .set_included_ranges(&[range])
+            .map_err(|e| ParserError::ParseFailed {
+                file: "<source>".into(),
+                reason: format!("invalid included range: {e}"),
+            })?;
+        let tree = self.parse_bounded(source, Path::new("<source>"));
+        // An empty list restores the parse of the whole text.
+        let _ = self.inner.set_included_ranges(&[]);
+        tree
+    }
+
+    /// Parses the whole of `source` and returns a bare tree, so the caller
+    /// can keep the one copy of the text.
+    pub(crate) fn parse_tree(
+        &mut self,
+        source: &str,
+        grammar: Grammar,
+    ) -> Result<tree_sitter::Tree> {
+        self.set_grammar(grammar)?;
+        self.parse_bounded(source, Path::new("<source>"))
+    }
+
     /// Runs the tree-sitter parse under the configured deadline. A deadline
     /// breach cancels parsing (via the progress callback) so the call always
     /// terminates.
@@ -73,6 +128,11 @@ impl Parser {
         let tree = self
             .inner
             .parse_with_options(&mut input, None, Some(options));
+        if tree.is_none() {
+            // A halted parse is resumed by the next call unless the parser is
+            // reset, so the next text would get this text's partial tree.
+            self.inner.reset();
+        }
 
         match tree {
             Some(t) => Ok(t),
@@ -146,6 +206,35 @@ impl Default for Parser {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_parse_after_a_timeout_starts_from_the_new_text() {
+        // A large region times out; the next region of the same grammar must
+        // not resume the halted parse.
+        let big: String = (0..20_000)
+            .map(|i| format!("function f{i}() {{ return {i}; }}\n"))
+            .collect();
+        let small = "let a = 1;\n";
+        let text = format!("{big}{small}");
+        let mut parser = Parser::new();
+        parser.set_timeout(Some(Duration::from_nanos(1)));
+        assert!(matches!(
+            parser.parse_region(&text, Grammar::JavaScript, 0..big.len()),
+            Err(ParserError::ParseTimeout { .. })
+        ));
+        parser.set_timeout(None);
+        let after = parser
+            .parse_region(&text, Grammar::JavaScript, big.len()..text.len())
+            .unwrap();
+        let fresh = Parser::new()
+            .parse_region(&text, Grammar::JavaScript, big.len()..text.len())
+            .unwrap();
+        assert_eq!(after.root_node().to_sexp(), fresh.root_node().to_sexp());
+        assert_eq!(
+            after.root_node().byte_range(),
+            fresh.root_node().byte_range()
+        );
+    }
     use super::*;
 
     #[test]

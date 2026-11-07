@@ -160,7 +160,7 @@ const SERVERS: [&str; 15] = [
 ];
 
 #[test]
-fn status_lists_forty_languages_and_no_server_for_the_ten() {
+fn status_lists_every_language_and_no_server_for_the_ten() {
     let ws = tempfile::tempdir().unwrap();
     let mut mcp = Mcp::start(ws.path());
     let status = first_block(&mcp.call("status", json!({})).unwrap());
@@ -170,7 +170,7 @@ fn status_lists_forty_languages_and_no_server_for_the_ten() {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    assert_eq!(languages.len(), 40, "{status}");
+    assert_eq!(languages.len(), 43, "{status}");
     for (name, _, _) in ADDITIONS {
         assert!(languages.contains(&name), "{name} missing: {status}");
     }

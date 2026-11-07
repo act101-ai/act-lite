@@ -173,7 +173,9 @@ fn a8_details_of_a1() {
             "thresholds": thresholds(),
             "counts_by_rule":{"deep_nesting":1,"excessive_branching":1,"long_parameter_list":1,"oversized_function":1},
             "functions":8,
-            "not_applicable":[],"not_applicable_total":0
+            "not_applicable":[],"not_applicable_total":0,
+            "regions_not_analyzed":[],"regions_not_analyzed_total":0,
+            "files_without_analyzed_code":0
         })
     );
 }
@@ -435,7 +437,9 @@ fn no_function_gives_details_with_zero_counts() {
             "thresholds": thresholds(),
             "counts_by_rule":{"deep_nesting":0,"excessive_branching":0,"long_parameter_list":0,"oversized_function":0},
             "functions":0,
-            "not_applicable":[],"not_applicable_total":0
+            "not_applicable":[],"not_applicable_total":0,
+            "regions_not_analyzed":[],"regions_not_analyzed_total":0,
+            "files_without_analyzed_code":0
         })
     );
 }

@@ -292,7 +292,7 @@ impl ActLiteServer {
             McpError::internal_error(format!("Failed to execute skeleton query: {}", e), None)
         })?;
         let mut compact = compact_skeleton(&result);
-        if source.tree().root_node().has_error()
+        if source.has_any_error()
             && let serde_json::Value::Object(ref mut map) = compact
         {
             map.insert("parse_error".to_string(), serde_json::Value::Bool(true));
@@ -364,7 +364,7 @@ impl ActLiteServer {
                 })
             })
             .collect();
-        let compact = symbols_success_json(items, source.tree().root_node().has_error());
+        let compact = symbols_success_json(items, source.has_any_error());
         let mut json = serde_json::to_string(&compact)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         if total > limit {
@@ -581,10 +581,10 @@ impl ActLiteServer {
 
         // No language server answer: fall back to the name-level tree-sitter
         // baseline over same-grammar files, and say so.
-        let walk = act_lite_parser::walk_reference_siblings(
+        let walk = act_lite_parser::walk_reference_siblings_of(
             &self.root,
             &path,
-            grammar,
+            &act_lite_parser::reference_walk_grammars(&source, position.0, position.1),
             act_lite_parser::MAX_REFERENCE_WALK_FILES,
             act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES,
         )
@@ -931,6 +931,9 @@ fn resolve_symbol_position(
     source: &act_lite_parser::SourceFile,
     symbol: &str,
 ) -> Option<(u32, u32)> {
+    if source.grammar().is_component() {
+        return component_symbol_position(source, symbol);
+    }
     if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source)
         && let Some(found) = symbols.iter().find(|s| s.name() == symbol)
     {
@@ -938,6 +941,89 @@ fn resolve_symbol_position(
         return Some((start.line(), start.column()));
     }
     find_symbol_position(source.content(), symbol)
+}
+
+/// The position of `symbol` in a component file: the first symbol of that
+/// name in a region, else the first in the outer document; else the first
+/// whole-identifier occurrence that is not in a template expression. The
+/// column counts bytes.
+fn component_symbol_position(
+    source: &act_lite_parser::SourceFile,
+    symbol: &str,
+) -> Option<(u32, u32)> {
+    use act_lite_parser::regions::{Position, PositionIndex, RegionKind, StructureFilter};
+    let index = PositionIndex::new(source);
+    if let Ok(QueryResult::Symbols { symbols }) = act_lite_parser::execute_symbols(source) {
+        let in_region = |start: &act_lite_core::Location| {
+            start
+                .byte_offset()
+                .is_some_and(|byte| matches!(index.at(byte), Position::Region(_)))
+        };
+        let named: Vec<_> = symbols.iter().filter(|s| s.name() == symbol).collect();
+        if let Some(found) = named
+            .iter()
+            .find(|s| in_region(s.range().start()))
+            .or(named.first())
+        {
+            let start = found.range().start();
+            return Some((start.line(), start.column()));
+        }
+    }
+    if symbol.is_empty() {
+        return None;
+    }
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let content = source.content();
+    let filter = StructureFilter::new(source.grammar(), source.tree().root_node(), content);
+    // The first match in a parsed region wins; else the first match in the
+    // outer document that is reported structure.
+    let mut outer = None;
+    let mut line_start = 0;
+    for (line_idx, line) in content.split('\n').enumerate() {
+        let mut from = 0;
+        while let Some(hit) = line[from..].find(symbol) {
+            let start = from + hit;
+            let end = start + symbol.len();
+            let before_ok = line[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !is_ident(c));
+            let after_ok = line[end..].chars().next().is_none_or(|c| !is_ident(c));
+            if before_ok && after_ok {
+                let byte = line_start + start;
+                let at = (line_idx as u32 + 1, start as u32 + 1);
+                // A usable anchor is a node of exactly the name, not a
+                // comment or a string that holds it.
+                let names = |root: tree_sitter::Node| {
+                    let node = act_lite_parser::regions::node_at_byte(root, byte);
+                    node.byte_range().len() == symbol.len()
+                };
+                match index.at(byte) {
+                    Position::Region(region)
+                        if source.regions()[region].kind != RegionKind::Style
+                            && source
+                                .region_trees()
+                                .iter()
+                                .find(|tree| tree.region == region)
+                                .is_some_and(|tree| names(tree.tree.root_node())) =>
+                    {
+                        return Some(at);
+                    }
+                    Position::Outer
+                        if outer.is_none()
+                            && !filter.hides_byte(byte)
+                            && names(source.tree().root_node()) =>
+                    {
+                        outer = Some(at);
+                    }
+                    _ => {}
+                }
+            }
+            from = end;
+        }
+        line_start += line.len() + 1;
+    }
+    outer
 }
 
 /// Finds the first whole-identifier occurrence of `symbol` (1-indexed line

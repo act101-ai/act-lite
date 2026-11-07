@@ -1,18 +1,38 @@
 //! Source file with parsed syntax tree.
 
+use crate::regions::{self, Detector, Region, RegionTree};
 use crate::{Grammar, Parser, ParserError, SyntaxTree, error::Result};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// A check that ends a load when it returns `true`.
+pub type StopFn = Box<dyn Fn() -> bool + Send + Sync>;
+
+/// How a file is parsed. The default: the framework's region detector, the
+/// parser's existing per-parse deadline, and no stop.
+#[derive(Default)]
+pub struct ParseOptions {
+    /// The region detector of a component file, in place of its framework's.
+    pub detector: Option<Box<dyn Detector>>,
+    /// The deadline of each parse (the file's and each region's).
+    pub timeout: Option<Duration>,
+    /// Called before each region parse; `true` ends the load with
+    /// [`ParserError::Cancelled`].
+    pub stop: Option<StopFn>,
+}
 
 /// A source file with its content and parsed syntax tree.
 ///
-/// Handles incremental re-parsing when content changes.
+/// The content is held once, by the syntax tree; the region trees of a
+/// component file read the same text.
 pub struct SourceFile {
     path: PathBuf,
-    content: String,
     grammar: Grammar,
     tree: SyntaxTree,
+    regions: Vec<Region>,
+    region_trees: Vec<RegionTree>,
 }
 
 impl SourceFile {
@@ -45,7 +65,7 @@ impl SourceFile {
         // (which still cover cached get_file re-access, where no load() occurs).
         act_lite_core::touch::record(
             &source.path,
-            source.content.len() as u64,
+            source.content().len() as u64,
             source.grammar.name(),
         );
         Ok(source)
@@ -69,15 +89,12 @@ impl SourceFile {
                 .map_or_else(|| path.display().to_string(), str::to_string),
         })?;
 
-        let mut parser = Parser::new();
-        let tree = parser.parse(&content, grammar)?;
-
-        Ok(Self {
-            path: path.to_path_buf(),
+        Self::parse(
+            path.to_path_buf(),
             content,
             grammar,
-            tree,
-        })
+            ParseOptions::default(),
+        )
     }
 
     /// Creates a source file from content with explicit grammar.
@@ -86,14 +103,57 @@ impl SourceFile {
         content: String,
         grammar: Grammar,
     ) -> Result<Self> {
-        let mut parser = Parser::new();
-        let tree = parser.parse(&content, grammar)?;
+        Self::parse(path.into(), content, grammar, ParseOptions::default())
+    }
 
+    /// Creates a source file from content with explicit grammar and parse
+    /// options.
+    pub fn from_content_with(
+        path: impl AsRef<Path>,
+        content: String,
+        grammar: Grammar,
+        options: ParseOptions,
+    ) -> Result<Self> {
+        Self::parse(path.as_ref().to_path_buf(), content, grammar, options)
+    }
+
+    /// Parses the file and, for a component file, each of its regions that
+    /// is parsed, in document order.
+    fn parse(
+        path: PathBuf,
+        content: String,
+        grammar: Grammar,
+        options: ParseOptions,
+    ) -> Result<Self> {
+        let mut parser = Parser::new();
+        if let Some(timeout) = options.timeout {
+            parser.set_timeout(Some(timeout));
+        }
+        let tree = parser.parse_tree(&content, grammar)?;
+        let detector = match (grammar.is_component(), options.detector) {
+            (false, _) => None,
+            (true, Some(detector)) => Some(detector),
+            (true, None) => regions::detector_for(grammar),
+        };
+        let (regions, region_trees) = match detector {
+            Some(detector) => {
+                let regions = detector.regions(&tree, &content);
+                let trees = regions::parse_regions(
+                    &mut parser,
+                    &content,
+                    &regions,
+                    options.stop.as_deref(),
+                )?;
+                (regions, trees)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
         Ok(Self {
-            path: path.into(),
-            content,
+            path,
             grammar,
-            tree,
+            tree: SyntaxTree::new(tree, content),
+            regions,
+            region_trees,
         })
     }
 
@@ -104,7 +164,7 @@ impl SourceFile {
 
     /// Returns the source content.
     pub fn content(&self) -> &str {
-        &self.content
+        self.tree.source()
     }
 
     /// Returns the grammar.
@@ -115,6 +175,34 @@ impl SourceFile {
     /// Returns a reference to the syntax tree.
     pub fn tree(&self) -> &SyntaxTree {
         &self.tree
+    }
+
+    /// The regions of a component file, in document order; empty for a
+    /// file that is not a component.
+    pub fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    /// The trees of the well-formed regions of supported language, in
+    /// document order. A region whose parse timed out has none.
+    pub fn region_trees(&self) -> &[RegionTree] {
+        &self.region_trees
+    }
+
+    /// Whether the file tree or any region tree has an ERROR or MISSING
+    /// node, or a region parse timed out.
+    pub fn has_any_error(&self) -> bool {
+        let parsed = self
+            .regions
+            .iter()
+            .filter(|region| region.parse_target().is_some())
+            .count();
+        self.tree.root_node().has_error()
+            || parsed != self.region_trees.len()
+            || self
+                .region_trees
+                .iter()
+                .any(|region| region.tree.root_node().has_error())
     }
 
     /// Returns true if this is a TypeScript declaration file (.d.ts, .d.mts, .d.cts).
@@ -130,11 +218,14 @@ impl SourceFile {
     ///
     /// TODO: Implement incremental parsing with tree-sitter's `parse(source, Some(&old_tree))`
     /// for efficiency. Currently parses from scratch.
+    /// The regions are found again with the framework's detector.
     pub fn update_content(&mut self, new_content: String) -> Result<()> {
-        let mut parser = Parser::new();
-        let tree = parser.parse(&new_content, self.grammar)?;
-        self.content = new_content;
-        self.tree = tree;
+        *self = Self::parse(
+            self.path.clone(),
+            new_content,
+            self.grammar,
+            ParseOptions::default(),
+        )?;
         Ok(())
     }
 }

@@ -290,7 +290,10 @@ fn incomplete_with_findings() {
             "counts_by_rule": {"deep_nesting": 0, "excessive_branching": 0, "long_parameter_list": 3, "oversized_function": 0},
             "functions": 3,
             "not_applicable": [],
-            "not_applicable_total": 0
+            "not_applicable_total": 0,
+            "regions_not_analyzed": [],
+            "regions_not_analyzed_total": 0,
+            "files_without_analyzed_code": 0
         }
     });
     assert_eq!(v, want);
@@ -357,7 +360,10 @@ fn unsupported_and_no_findings_are_distinct() {
             "counts_by_rule": {"deep_nesting": 0, "excessive_branching": 0, "long_parameter_list": 0, "oversized_function": 0},
             "functions": 0,
             "not_applicable": [],
-            "not_applicable_total": 0
+            "not_applicable_total": 0,
+            "regions_not_analyzed": [],
+            "regions_not_analyzed_total": 0,
+            "files_without_analyzed_code": 0
         }
     });
     assert_eq!(v, want);

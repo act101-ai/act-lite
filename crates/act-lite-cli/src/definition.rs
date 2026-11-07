@@ -93,7 +93,9 @@ fn is_data_name_leaf(node: Node<'_>, grammar: Grammar, source: &str) -> bool {
         | (Grammar::Toml, "bare_key")
         | (Grammar::Yaml, "string_scalar") => true,
         (Grammar::Dockerfile, "param") => name_text(node, grammar, source).len() < node_len(node),
-        (Grammar::Html, "attribute_value") => {
+        (Grammar::Html | Grammar::Vue | Grammar::Svelte | Grammar::Astro, "attribute_value")
+            if node.named_child_count() == 0 =>
+        {
             let mut ancestor = node.parent();
             if ancestor.is_some_and(|parent| parent.kind() == "quoted_attribute_value") {
                 ancestor = ancestor.and_then(|parent| parent.parent());
@@ -209,15 +211,18 @@ fn declaration_name<'a>(node: Node<'a>, grammar: Grammar, source: &str) -> Optio
             }
             _ => None,
         },
-        Grammar::Html => match kind {
+        Grammar::Html | Grammar::Vue | Grammar::Svelte | Grammar::Astro => match kind {
             "attribute"
                 if child_of_kind(node, "attribute_name")
                     .is_some_and(|name| name_text(name, grammar, source) == "id") =>
             {
-                first_named_chain(
-                    child_of_kind(node, "quoted_attribute_value")?,
-                    "attribute_value",
-                )
+                match child_of_kind(node, "quoted_attribute_value") {
+                    Some(quoted) => first_named_chain(quoted, "attribute_value"),
+                    // A component's unquoted value (`id=app`) is a literal too.
+                    None if grammar.is_component() => child_of_kind(node, "attribute_value"),
+                    None => None,
+                }
+                .filter(|value| value.named_child_count() == 0)
             }
             _ => None,
         },
@@ -326,16 +331,35 @@ pub(crate) fn find_symbol_name_at_location(
     column: u32,
 ) -> Option<String> {
     let tree = source.tree();
-    let root_node = tree.root_node();
-    let row = line.saturating_sub(1) as usize;
-    let col = column.saturating_sub(1) as usize;
-    let node = root_node.descendant_for_point_range(
-        tree_sitter::Point { row, column: col },
-        tree_sitter::Point { row, column: col },
-    )?;
+    name_at_in_tree(
+        tree.root_node(),
+        source.grammar(),
+        tree.source(),
+        line,
+        column,
+    )
+}
 
-    let grammar = source.grammar();
-    let text = tree.source();
+/// The leaf of `root` at the 1-indexed line and byte column.
+fn leaf_at(root: Node<'_>, line: u32, column: u32) -> Option<Node<'_>> {
+    let point = tree_sitter::Point {
+        row: line.saturating_sub(1) as usize,
+        column: column.saturating_sub(1) as usize,
+    };
+    root.descendant_for_point_range(point, point)
+}
+
+/// [`find_symbol_name_at_location`] in one tree of a file, parsed with
+/// `grammar`: the file's own tree or a region tree. `text` is the whole
+/// file.
+fn name_at_in_tree(
+    root_node: Node<'_>,
+    grammar: Grammar,
+    text: &str,
+    line: u32,
+    column: u32,
+) -> Option<String> {
+    let node = leaf_at(root_node, line, column)?;
     let mut current = node;
     let mut identifier_node = is_symbol_node(current, grammar, text).then_some(current);
     let mut depth = 0usize;
@@ -472,19 +496,40 @@ pub(crate) fn collect_definition_ranges_in_source(
         };
     }
     let tree = source.tree();
-    let mut stack = vec![tree.root_node()];
+    definition_ranges_in_tree(
+        tree.root_node(),
+        source.grammar(),
+        tree.source(),
+        source.path(),
+        symbol_name,
+    )
+}
+
+/// The declarations named `symbol_name` in one tree of a file, parsed with
+/// `grammar`: the file's own tree or a region tree. `text` is the whole
+/// file. In the outer tree of a component file, a declaration where nothing
+/// is reported ([`act_lite_parser::regions::StructureFilter`]) is not one.
+fn definition_ranges_in_tree(
+    root_node: Node<'_>,
+    grammar: Grammar,
+    text: &str,
+    path: &Path,
+    symbol_name: &str,
+) -> Vec<act_lite_core::Range> {
+    let filter = act_lite_parser::regions::StructureFilter::new(grammar, root_node, text);
+    let mut stack = vec![root_node];
     let mut ranges = Vec::new();
-    let grammar = source.grammar();
     while let Some(node) = stack.pop() {
         let name_node = if is_definition_node_kind(node.kind()) {
             definition_name_node(node, None)
         } else {
-            declaration_name(node, grammar, tree.source())
+            declaration_name(node, grammar, text)
         };
         if let Some(name_node) = name_node
-            && name_text(name_node, grammar, tree.source()) == symbol_name
+            && name_text(name_node, grammar, text) == symbol_name
+            && !filter.hides(name_node)
         {
-            ranges.push(node_to_range(source.path(), name_node, tree.source()));
+            ranges.push(node_to_range(path, name_node, text));
         }
         let mut cursor = node.walk();
         stack.extend(node.children(&mut cursor));
@@ -513,8 +558,8 @@ pub(crate) fn range_priority(
     }
 }
 
-/// Every file under `root` that a walk from `anchor`, a file in `grammar`,
-/// reads ([`Grammar::walk_reads`]), skipping `.git`, `target` and
+/// Every file under `root` that a walk from `anchor` reads for any of
+/// `grammars` ([`Grammar::walk_reads`]), skipping `.git`, `target` and
 /// `node_modules`. Unreadable directories contribute nothing. A symlink is
 /// followed only while its target stays inside `root`, and each directory is
 /// entered once, by its canonical path. Files over
@@ -522,12 +567,12 @@ pub(crate) fn range_priority(
 pub(crate) fn collect_workspace_paths(
     root: &Path,
     anchor: &Path,
-    grammar: Grammar,
+    grammars: &[Grammar],
     paths: &mut Vec<PathBuf>,
 ) {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut visited = std::collections::HashSet::from([canonical_root.clone()]);
-    collect_paths_inside(root, &canonical_root, &mut visited, anchor, grammar, paths);
+    collect_paths_inside(root, &canonical_root, &mut visited, anchor, grammars, paths);
 }
 
 fn collect_paths_inside(
@@ -535,7 +580,7 @@ fn collect_paths_inside(
     canonical_root: &Path,
     visited: &mut std::collections::HashSet<PathBuf>,
     anchor: &Path,
-    grammar: Grammar,
+    grammars: &[Grammar],
     paths: &mut Vec<PathBuf>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -556,10 +601,12 @@ fn collect_paths_inside(
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"));
             if !skip && visited.insert(canonical) {
-                collect_paths_inside(&path, canonical_root, visited, anchor, grammar, paths);
+                collect_paths_inside(&path, canonical_root, visited, anchor, grammars, paths);
             }
         } else if path.is_file()
-            && grammar.walk_reads(anchor, &path)
+            && grammars
+                .iter()
+                .any(|grammar| grammar.walk_reads(anchor, &path))
             && std::fs::metadata(&path)
                 .is_ok_and(|meta| meta.len() <= act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES)
         {
@@ -594,6 +641,9 @@ pub(crate) fn resolve_definition(
     line: u32,
     column: u32,
 ) -> Result<(String, act_lite_core::Range), DefinitionError> {
+    if source.grammar().is_component() {
+        return resolve_component_definition(source, root, symbol, line, column);
+    }
     let names = if named_by_queries(source.grammar()) {
         names_at(source, line, column)
     } else {
@@ -632,6 +682,115 @@ pub(crate) fn resolve_definition(
     Ok((symbol_name, best))
 }
 
+/// [`resolve_definition`] from a component file. At a position in a template
+/// expression there is no symbol. At a position in the outer document, the
+/// name there is looked up in the outer trees of the file and of every file
+/// of the same component grammar under `root`. At a position in a region of
+/// language L, it is looked up in the regions of L of those files and in
+/// every file of L under `root`.
+fn resolve_component_definition(
+    source: &SourceFile,
+    root: &Path,
+    symbol: &str,
+    line: u32,
+    column: u32,
+) -> Result<(String, act_lite_core::Range), DefinitionError> {
+    use act_lite_parser::regions::{Position, outside_structure, position_at};
+    let component = source.grammar();
+    let text = source.content();
+    let position = byte_at(text, line, column).map_or(Position::TemplateExpression, |byte| {
+        position_at(source, byte)
+    });
+    // The tree searched at the position, and its grammar.
+    let (root_node, grammar) = match position {
+        Position::TemplateExpression => return Err(DefinitionError::NoSymbolAtPosition),
+        Position::Outer => (source.tree().root_node(), component),
+        Position::Region(index) => {
+            let tree = source
+                .region_trees()
+                .iter()
+                .find(|tree| tree.region == index)
+                .ok_or(DefinitionError::NoSymbolAtPosition)?;
+            (tree.tree.root_node(), tree.grammar)
+        }
+    };
+    if grammar == component
+        && leaf_at(root_node, line, column)
+            .is_none_or(|leaf| outside_structure(grammar, root_node, leaf, text))
+    {
+        return Err(DefinitionError::NoSymbolAtPosition);
+    }
+    let found = name_at_in_tree(root_node, grammar, text, line, column)
+        .ok_or(DefinitionError::NoSymbolAtPosition)?;
+    let symbol_name = if symbol.trim().is_empty() || symbol == found {
+        found
+    } else {
+        symbol.to_string()
+    };
+
+    // The trees of one component or plain file that hold the declarations.
+    let ranges_in = |file: &SourceFile| -> Vec<act_lite_core::Range> {
+        let in_tree = |root_node| {
+            definition_ranges_in_tree(
+                root_node,
+                grammar,
+                file.content(),
+                file.path(),
+                &symbol_name,
+            )
+        };
+        if grammar == component {
+            in_tree(file.tree().root_node())
+        } else if file.grammar() == component {
+            file.region_trees()
+                .iter()
+                .filter(|tree| tree.grammar == grammar)
+                .flat_map(|tree| in_tree(tree.tree.root_node()))
+                .collect()
+        } else {
+            in_tree(file.tree().root_node())
+        }
+    };
+    let path = source.path();
+    let mut candidates = ranges_in(source);
+    let mut grammars = vec![component];
+    if grammar != component {
+        grammars.push(grammar);
+    }
+    let mut workspace_paths = Vec::new();
+    collect_workspace_paths(root, path, &grammars, &mut workspace_paths);
+    for other in workspace_paths {
+        if other == path {
+            continue;
+        }
+        // A sibling that cannot be read or parsed has no definitions to offer.
+        let Ok(other_source) = SourceFile::load_within(&other, root) else {
+            continue;
+        };
+        candidates.extend(ranges_in(&other_source));
+    }
+    let best = candidates
+        .into_iter()
+        .min_by_key(|range| range_priority(range, path, line, column))
+        .ok_or_else(|| DefinitionError::NotFound {
+            symbol: symbol_name.clone(),
+        })?;
+    Ok((symbol_name, best))
+}
+
+/// The byte offset of a 1-indexed line and byte column of `text`, or `None`
+/// when the position lies past the end of its line or of the text.
+fn byte_at(text: &str, line: u32, column: u32) -> Option<usize> {
+    let start = if line <= 1 {
+        0
+    } else {
+        text.match_indices('\n').nth(line as usize - 2)?.0 + 1
+    };
+    let end = text[start..].find('\n').map_or(text.len(), |i| start + i);
+    let byte = start + (column as usize).checked_sub(1)?;
+    (line > 0 && byte <= end).then_some(byte)
+}
+
 /// The declarations of each of `names`, in order, in `source` and in every
 /// same-grammar file under `root`; each file is read and parsed once.
 fn workspace_candidates(
@@ -645,7 +804,7 @@ fn workspace_candidates(
         .map(|name| collect_definition_ranges_in_source(source, name))
         .collect();
     let mut workspace_paths = Vec::new();
-    collect_workspace_paths(root, path, source.grammar(), &mut workspace_paths);
+    collect_workspace_paths(root, path, &[source.grammar()], &mut workspace_paths);
     for other in workspace_paths {
         if other == path {
             continue;
@@ -716,7 +875,7 @@ mod tests {
         collect_workspace_paths(
             dir.path(),
             &dir.path().join("a.py"),
-            Grammar::Python,
+            &[Grammar::Python],
             &mut paths,
         );
         assert_eq!(paths.len(), 2, "{paths:?}");

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 /// name. Shrink-only: add a `locals.scm` and delete the entry here in the
 /// same commit.
 const KNOWN_UNMODELED: &[&str] = &[
+    "Astro",
     "Bash",
     "CMake",
     "Cpp",
@@ -34,9 +35,11 @@ const KNOWN_UNMODELED: &[&str] = &[
     "Scala",
     "Sql",
     "Scss",
+    "Svelte",
     "Swift",
     "Toml",
     "Tsx",
+    "Vue",
     "Xml",
     "Yaml",
     "Zig",

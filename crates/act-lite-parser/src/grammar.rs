@@ -5,13 +5,13 @@ use strum::IntoEnumIterator;
 
 use crate::language::LanguageSupport;
 use crate::languages::{
-    BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport, DartSupport,
-    DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport, HtmlSupport,
-    JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport, JuliaSupport,
-    KotlinSupport, LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport,
+    AstroSupport, BashSupport, CMakeSupport, CSharpSupport, CSupport, CppSupport, CssSupport,
+    DartSupport, DockerfileSupport, ElixirSupport, GoSupport, GraphQlSupport, HclTerraformSupport,
+    HtmlSupport, JavaScriptSupport, JavaSupport, JsonSupport, JsoncSupport, JsxSupport,
+    JuliaSupport, KotlinSupport, LuaSupport, MakeSupport, MarkdownSupport, NixSupport, PhpSupport,
     ProtobufSupport, PythonSupport, RSupport, RubySupport, RustSupport, ScalaSupport, ScssSupport,
-    SqlSupport, SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport, XmlSupport, YamlSupport,
-    ZigSupport,
+    SqlSupport, SvelteSupport, SwiftSupport, TomlSupport, TsxSupport, TypeScriptSupport,
+    VueSupport, XmlSupport, YamlSupport, ZigSupport,
 };
 
 /// Supported language grammars.
@@ -20,6 +20,8 @@ use crate::languages::{
 /// Variants are sorted alphabetically to minimize merge conflicts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::EnumIter)]
 pub enum Grammar {
+    /// Astro components
+    Astro,
     /// Bash shell scripting
     Bash,
     /// C
@@ -86,6 +88,8 @@ pub enum Grammar {
     Sql,
     /// SCSS
     Scss,
+    /// Svelte components
+    Svelte,
     /// Swift
     Swift,
     /// TOML (configuration format)
@@ -94,6 +98,8 @@ pub enum Grammar {
     Tsx,
     /// TypeScript
     TypeScript,
+    /// Vue single-file components
+    Vue,
     /// XML (data format)
     Xml,
     /// YAML
@@ -106,6 +112,7 @@ impl Grammar {
     /// Returns the human-readable name of this grammar.
     pub fn name(&self) -> &'static str {
         match self {
+            Grammar::Astro => "Astro",
             Grammar::Bash => "Bash",
             Grammar::C => "C",
             Grammar::CMake => "CMake",
@@ -139,10 +146,12 @@ impl Grammar {
             Grammar::Scala => "Scala",
             Grammar::Scss => "SCSS",
             Grammar::Sql => "SQL",
+            Grammar::Svelte => "Svelte",
             Grammar::Swift => "Swift",
             Grammar::Toml => "TOML",
             Grammar::Tsx => "TSX",
             Grammar::TypeScript => "TypeScript",
+            Grammar::Vue => "Vue",
             Grammar::Xml => "XML",
             Grammar::Yaml => "YAML",
             Grammar::Zig => "Zig",
@@ -156,6 +165,7 @@ impl Grammar {
     /// because names have special characters (e.g. "C#" → "csharp", "C++" → "cpp").
     pub fn query_dir(&self) -> &'static str {
         match self {
+            Grammar::Astro => "astro",
             Grammar::Bash => "bash",
             Grammar::C => "c",
             Grammar::CMake => "cmake",
@@ -188,10 +198,12 @@ impl Grammar {
             Grammar::Scala => "scala",
             Grammar::Sql => "sql",
             Grammar::Scss => "scss",
+            Grammar::Svelte => "svelte",
             Grammar::Swift => "swift",
             Grammar::Toml => "toml",
             Grammar::Tsx => "tsx",
             Grammar::TypeScript => "typescript",
+            Grammar::Vue => "vue",
             Grammar::Xml => "xml",
             Grammar::Yaml => "yaml",
             Grammar::Zig => "zig",
@@ -205,6 +217,7 @@ impl Grammar {
     /// match blocks.
     pub fn language_support(&self) -> &'static dyn LanguageSupport {
         match self {
+            Grammar::Astro => &AstroSupport,
             Grammar::Bash => &BashSupport,
             Grammar::C => &CSupport,
             Grammar::CMake => &CMakeSupport,
@@ -238,14 +251,23 @@ impl Grammar {
             Grammar::Scala => &ScalaSupport,
             Grammar::Scss => &ScssSupport,
             Grammar::Sql => &SqlSupport,
+            Grammar::Svelte => &SvelteSupport,
             Grammar::Swift => &SwiftSupport,
             Grammar::Toml => &TomlSupport,
             Grammar::Tsx => &TsxSupport,
             Grammar::TypeScript => &TypeScriptSupport,
+            Grammar::Vue => &VueSupport,
             Grammar::Xml => &XmlSupport,
             Grammar::Yaml => &YamlSupport,
             Grammar::Zig => &ZigSupport,
         }
+    }
+
+    /// Whether this grammar is a component entry (Vue, Svelte, Astro): its
+    /// tree is the outer document of a component file, whose script and style
+    /// regions hold code in other languages.
+    pub fn is_component(&self) -> bool {
+        matches!(self, Grammar::Vue | Grammar::Svelte | Grammar::Astro)
     }
 
     /// Returns all Grammar variants.
@@ -385,6 +407,7 @@ impl Grammar {
     /// Returns `None` if the extension is not recognized.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
+            "astro" => Some(Grammar::Astro),
             "sh" | "bash" => Some(Grammar::Bash),
             "c" | "h" => Some(Grammar::C),
             "cmake" => Some(Grammar::CMake),
@@ -421,10 +444,12 @@ impl Grammar {
             "scala" | "sc" => Some(Grammar::Scala),
             "scss" => Some(Grammar::Scss),
             "sql" | "psql" | "pgsql" | "mysql" => Some(Grammar::Sql),
+            "svelte" => Some(Grammar::Svelte),
             "swift" => Some(Grammar::Swift),
             "toml" => Some(Grammar::Toml),
             "tsx" => Some(Grammar::Tsx),
             "ts" | "mts" | "cts" => Some(Grammar::TypeScript),
+            "vue" => Some(Grammar::Vue),
             "xml" | "xsd" | "xsl" | "xslt" | "svg" | "plist" => Some(Grammar::Xml),
             "csproj" | "fsproj" | "vbproj" | "props" | "targets" => Some(Grammar::Xml),
             "resx" | "xaml" => Some(Grammar::Xml),
@@ -679,6 +704,32 @@ mod tests {
             Grammar::Julia.category(),
             act_lite_core::registry::LanguageCategory::Dynamic
         ));
+    }
+
+    #[test]
+    fn component_extensions_names_query_dirs_and_category() {
+        for (ext, grammar, name, dir) in [
+            ("vue", Grammar::Vue, "Vue", "vue"),
+            ("svelte", Grammar::Svelte, "Svelte", "svelte"),
+            ("astro", Grammar::Astro, "Astro", "astro"),
+        ] {
+            assert_eq!(Grammar::from_extension(ext), Some(grammar));
+            assert_eq!(grammar.name(), name);
+            assert_eq!(grammar.query_dir(), dir);
+            assert!(grammar.is_component(), "{grammar:?}");
+            assert!(
+                !matches!(
+                    grammar.category(),
+                    act_lite_core::registry::LanguageCategory::Data
+                ),
+                "{grammar:?} is not a Data grammar"
+            );
+        }
+        assert!(!Grammar::Html.is_component());
+        assert!(!Grammar::TypeScript.is_component());
+        for ext in ["vuex", "mdx", "VUE", "bak"] {
+            assert_eq!(Grammar::from_extension(ext), None, "{ext}");
+        }
     }
 
     #[test]
@@ -967,7 +1018,7 @@ mod tests {
         // Update this constant when intentionally adding/removing Grammar variants.
         assert_eq!(
             all.len(),
-            40,
+            43,
             "Grammar count changed — update this constant if intentional"
         );
         let mut seen = std::collections::HashSet::new();

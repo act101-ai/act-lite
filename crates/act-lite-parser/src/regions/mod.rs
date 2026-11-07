@@ -1,0 +1,691 @@
+//! Embedded regions of component files (Vue, Svelte, Astro).
+//!
+//! A region is a script, frontmatter or style element of a component file
+//! whose content is code of another language. Each well-formed region of a
+//! supported language is parsed on its own: the whole file text is parsed
+//! with the region's grammar and one included range, the region's content.
+//! The text is not copied, and every node of a region tree carries its
+//! position (row, byte column, byte offset) in the component file.
+
+pub mod astro;
+pub mod svelte;
+pub mod vue;
+
+use crate::{Grammar, Parser, ParserError, error::Result};
+use act_lite_core::CompactRange;
+use std::ops::Range;
+
+/// The reason given for a region whose parse exceeded the deadline.
+pub const TIMEOUT_REASON: &str = "parse timeout";
+
+/// What a region holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RegionKind {
+    Script,
+    Frontmatter,
+    Style,
+}
+
+/// The language of a region's content.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RegionLanguage {
+    /// JavaScript, JSX, TypeScript, TSX, CSS or SCSS.
+    Supported(Grammar),
+    /// A language act-lite does not parse: the attribute value as written.
+    Unsupported(String),
+}
+
+/// Whether a region can be parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RegionState {
+    /// No content, or zero-width content, and no error in or above it.
+    Empty,
+    /// A start tag, content and an end tag, none missing, and no error
+    /// node in or above the element.
+    WellFormed,
+    /// Any other region start: it has a kind and a start tag only.
+    Malformed,
+}
+
+/// One region of a component file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Region {
+    pub kind: RegionKind,
+    pub language: RegionLanguage,
+    /// The byte range of the content in the file; `None` when no content is
+    /// used (an empty or a malformed region).
+    pub content: Option<Range<usize>>,
+    /// The whole element (frontmatter: from fence to fence).
+    pub element: CompactRange,
+    /// The start tag (frontmatter: the opening `---`).
+    pub start_tag: CompactRange,
+    pub state: RegionState,
+}
+
+impl Region {
+    /// The grammar and content range of a region that is parsed: well-formed,
+    /// of supported language, with a content range.
+    pub(crate) fn parse_target(&self) -> Option<(Grammar, Range<usize>)> {
+        match (&self.state, &self.language, &self.content) {
+            (RegionState::WellFormed, RegionLanguage::Supported(grammar), Some(content)) => {
+                Some((*grammar, content.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Finds the regions of a component file in its outer tree, in document
+/// order.
+pub trait Detector: Send + Sync {
+    fn regions(&self, tree: &tree_sitter::Tree, source: &str) -> Vec<Region>;
+}
+
+/// The tree of one parsed region. Its nodes carry positions in the
+/// component file.
+#[derive(Debug, Clone)]
+pub struct RegionTree {
+    /// The index of the region in [`crate::SourceFile::regions`].
+    pub region: usize,
+    pub grammar: Grammar,
+    pub tree: tree_sitter::Tree,
+}
+
+/// The file text with every byte outside the region's content, except
+/// `\n`, replaced by a space. Lines, byte columns and byte offsets are
+/// those of the component file.
+pub fn view(source: &str, region: &Region) -> String {
+    let content = region.content.clone().unwrap_or(0..0);
+    let bytes: Vec<u8> = source
+        .bytes()
+        .enumerate()
+        .map(|(i, b)| {
+            if content.contains(&i) || b == b'\n' {
+                b
+            } else {
+                b' '
+            }
+        })
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Where a byte of a component file lies, for `references` and
+/// `definition`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    /// In the content of a parsed region: the index of the region in
+    /// [`crate::SourceFile::regions`].
+    Region(usize),
+    /// In the outer document, not in a template expression.
+    Outer,
+    /// In a template expression, or in the content of a `<script>`,
+    /// `<style>` or frontmatter that is not parsed.
+    TemplateExpression,
+}
+
+/// Where `byte` lies in `file`. Every byte of a file that is not a component
+/// is [`Position::Outer`].
+pub fn position_at(file: &crate::SourceFile, byte: usize) -> Position {
+    let grammar = file.grammar();
+    if !grammar.is_component() {
+        return Position::Outer;
+    }
+    for tree in file.region_trees() {
+        if file.regions()[tree.region]
+            .content
+            .as_ref()
+            .is_some_and(|content| content.contains(&byte))
+        {
+            return Position::Region(tree.region);
+        }
+    }
+    let path = path_at_byte(file.tree().root_node(), byte);
+    for (i, current) in path.iter().enumerate().rev() {
+        let parent_kind = i.checked_sub(1).map(|p| path[p].kind());
+        match node_position(grammar, *current, parent_kind) {
+            Some(position) => return position,
+            None => continue,
+        }
+    }
+    Position::Outer
+}
+
+/// [`position_at`] for many bytes of one file: built from one walk of the
+/// outer tree, then each lookup is a binary search.
+pub struct PositionIndex {
+    component: bool,
+    /// The content range of each parsed region, in document order.
+    regions: Vec<(Range<usize>, usize)>,
+    /// Disjoint segments of the outer document, by start byte: the position
+    /// of each byte from a segment's start to the next segment's start.
+    segments: Vec<(usize, Position)>,
+}
+
+impl PositionIndex {
+    pub fn new(file: &crate::SourceFile) -> Self {
+        let grammar = file.grammar();
+        if !grammar.is_component() {
+            return PositionIndex {
+                component: false,
+                regions: Vec::new(),
+                segments: Vec::new(),
+            };
+        }
+        let regions = file
+            .region_trees()
+            .iter()
+            .filter_map(|tree| {
+                let content = file.regions()[tree.region].content.clone()?;
+                Some((content, tree.region))
+            })
+            .collect();
+        // The nodes whose position differs from their parent's, in
+        // preorder: they nest, and each byte takes the position of the
+        // innermost one that holds it.
+        let mut marks: Vec<(usize, usize, Position)> = Vec::new();
+        let mut cursor = file.tree().root_node().walk();
+        let mut labels = vec![Position::Outer];
+        // The kind of each ancestor of the current node, from the root down.
+        let mut kinds: Vec<&'static str> = Vec::new();
+        loop {
+            let node = cursor.node();
+            let inherited = *labels.last().unwrap_or(&Position::Outer);
+            let label = node_position(grammar, node, kinds.last().copied()).unwrap_or(inherited);
+            if label != inherited {
+                marks.push((node.start_byte(), node.end_byte(), label));
+            }
+            if cursor.goto_first_child() {
+                labels.push(label);
+                kinds.push(node.kind());
+                continue;
+            }
+            loop {
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+                if !cursor.goto_parent() {
+                    let segments = segments_of(&marks);
+                    return PositionIndex {
+                        component: true,
+                        regions,
+                        segments,
+                    };
+                }
+                labels.pop();
+                kinds.pop();
+            }
+        }
+    }
+
+    /// Where `byte` lies: the same answer as [`position_at`].
+    pub fn at(&self, byte: usize) -> Position {
+        if !self.component {
+            return Position::Outer;
+        }
+        let i = self
+            .regions
+            .partition_point(|(range, _)| range.start <= byte);
+        if let Some((range, region)) = i.checked_sub(1).map(|i| &self.regions[i])
+            && range.contains(&byte)
+        {
+            return Position::Region(*region);
+        }
+        let i = self.segments.partition_point(|(start, _)| *start <= byte);
+        i.checked_sub(1)
+            .map_or(Position::Outer, |i| self.segments[i].1)
+    }
+}
+
+/// The position a node gives the bytes it holds, or `None` when it keeps
+/// its parent's (the rule [`position_at`] applies walking up).
+fn node_position(
+    grammar: Grammar,
+    node: tree_sitter::Node,
+    parent_kind: Option<&str>,
+) -> Option<Position> {
+    let kind = node.kind();
+    let unparsed_content = matches!(kind, "raw_text" | "frontmatter_js_block")
+        && matches!(
+            parent_kind,
+            Some("script_element" | "style_element" | "frontmatter")
+        );
+    if unparsed_content || expression_kinds(grammar).contains(&kind) {
+        Some(Position::TemplateExpression)
+    } else if matches!(kind, "element" | "template_element") {
+        Some(Position::Outer)
+    } else {
+        None
+    }
+}
+
+/// Disjoint segments from nested marks in preorder.
+fn segments_of(marks: &[(usize, usize, Position)]) -> Vec<(usize, Position)> {
+    let mut segments = vec![(0, Position::Outer)];
+    let mut open: Vec<(usize, Position)> = vec![(usize::MAX, Position::Outer)];
+    let push = |segments: &mut Vec<(usize, Position)>, start: usize, label: Position| {
+        if segments.last().is_some_and(|(s, _)| *s == start) {
+            segments.pop();
+        }
+        if segments.last().is_none_or(|(_, l)| *l != label) {
+            segments.push((start, label));
+        }
+    };
+    for &(start, end, label) in marks {
+        if start >= end {
+            continue;
+        }
+        while let Some(&(close, _)) = open.last()
+            && close <= start
+        {
+            open.pop();
+            let outer = open.last().map_or(Position::Outer, |(_, l)| *l);
+            push(&mut segments, close, outer);
+        }
+        push(&mut segments, start, label);
+        open.push((end, label));
+    }
+    while open.len() > 1 {
+        let (close, _) = open.pop().unwrap_or((usize::MAX, Position::Outer));
+        let outer = open.last().map_or(Position::Outer, |(_, l)| *l);
+        push(&mut segments, close, outer);
+    }
+    segments
+}
+
+/// The outer-tree node kinds whose content is a template expression.
+fn expression_kinds(grammar: Grammar) -> &'static [&'static str] {
+    match grammar {
+        Grammar::Vue => &["interpolation", "directive_attribute"],
+        Grammar::Svelte => &["expression", "svelte_raw_text"],
+        Grammar::Astro => &[
+            "html_interpolation",
+            "attribute_interpolation",
+            "attribute_backtick_string",
+        ],
+        _ => &[],
+    }
+}
+
+/// The innermost node below `root` whose byte range holds `byte` (start
+/// inclusive, end exclusive); `root` when no child holds it.
+pub fn node_at_byte(root: tree_sitter::Node<'_>, byte: usize) -> tree_sitter::Node<'_> {
+    path_at_byte(root, byte).pop().unwrap_or(root)
+}
+
+/// The nodes from `root` down to the deepest node that holds `byte`.
+fn path_at_byte(root: tree_sitter::Node<'_>, byte: usize) -> Vec<tree_sitter::Node<'_>> {
+    let mut path = vec![root];
+    let mut node = root;
+    'descend: loop {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.start_byte() <= byte && byte < child.end_byte() {
+                node = child;
+                path.push(child);
+                continue 'descend;
+            }
+        }
+        return path;
+    }
+}
+
+/// The strict ancestors of `node` below and including `root`, from `root`
+/// down, found by one descent (a node's `parent` walks down from the root
+/// each time, so walking up costs the square of the depth).
+pub fn ancestors_of<'t>(
+    root: tree_sitter::Node<'t>,
+    node: tree_sitter::Node<'t>,
+) -> Vec<tree_sitter::Node<'t>> {
+    let mut path = Vec::new();
+    let mut current = root;
+    while current.id() != node.id() {
+        path.push(current);
+        match current.child_with_descendant(node) {
+            Some(next) => current = next,
+            None => return Vec::new(),
+        }
+    }
+    path
+}
+
+/// Whether a node of a component file's outer tree lies where nothing is
+/// reported: below an ERROR node, or, in a Vue file, inside a custom block
+/// or a `<template>` whose first `lang` is not `html`. The block itself (the
+/// top-level element) and its start tag are not inside it.
+pub fn outside_structure(
+    grammar: Grammar,
+    root: tree_sitter::Node,
+    node: tree_sitter::Node,
+    source: &str,
+) -> bool {
+    let ancestors = ancestors_of(root, node);
+    if ancestors.iter().any(|a| a.kind() == "ERROR") {
+        return true;
+    }
+    match (grammar, ancestors.get(1)) {
+        (Grammar::Vue, Some(block)) if within_start_tag(*block, node) => false,
+        (Grammar::Vue, Some(block)) => match block.kind() {
+            "element" => true,
+            "template_element" => {
+                vue::template_lang(*block, source).is_some_and(|lang| lang != "html")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// [`outside_structure`] for every node of one outer tree, computed in one
+/// walk: a lookup does not walk the node's ancestors.
+pub struct StructureFilter {
+    hidden: std::collections::HashSet<usize>,
+    /// The byte range of each hidden node whose parent is not hidden, by
+    /// start: a byte is hidden when it lies in one.
+    hidden_ranges: Vec<Range<usize>>,
+}
+
+impl StructureFilter {
+    pub fn new(grammar: Grammar, root: tree_sitter::Node, source: &str) -> Self {
+        let mut hidden = std::collections::HashSet::new();
+        let mut hidden_ranges = Vec::new();
+        if !grammar.is_component() {
+            return StructureFilter {
+                hidden,
+                hidden_ranges,
+            };
+        }
+        /// What the strict ancestors of a node decide: below an ERROR node;
+        /// inside a top-level Vue block whose content is not structure; in
+        /// that block's start tag.
+        #[derive(Clone, Copy, Default)]
+        struct Context {
+            in_error: bool,
+            hidden_block: bool,
+            in_start_tag: bool,
+        }
+        // (node, the context its ancestors give it, whether it is a child of
+        // the root, whether its parent is hidden).
+        let mut stack: Vec<(tree_sitter::Node, Context, bool, bool)> = Vec::new();
+        let mut cursor = root.walk();
+        for child in root.children(&mut cursor) {
+            stack.push((child, Context::default(), true, false));
+        }
+        while let Some((node, context, top_level, parent_hidden)) = stack.pop() {
+            let is_hidden = context.in_error || (context.hidden_block && !context.in_start_tag);
+            if is_hidden {
+                hidden.insert(node.id());
+                if !parent_hidden {
+                    hidden_ranges.push(node.byte_range());
+                }
+            }
+            let mut inner = Context {
+                in_error: context.in_error || node.kind() == "ERROR",
+                ..context
+            };
+            if top_level && grammar == Grammar::Vue {
+                inner.hidden_block = match node.kind() {
+                    "element" => true,
+                    "template_element" => {
+                        vue::template_lang(node, source).is_some_and(|lang| lang != "html")
+                    }
+                    _ => false,
+                };
+            }
+            let mut cursor = node.walk();
+            for (i, child) in node.children(&mut cursor).enumerate() {
+                let mut child_context = inner;
+                if top_level && grammar == Grammar::Vue {
+                    // The first child of a top-level block is its start tag.
+                    child_context.in_start_tag =
+                        i == 0 && matches!(child.kind(), "start_tag" | "self_closing_tag");
+                }
+                stack.push((child, child_context, false, is_hidden));
+            }
+        }
+        hidden_ranges.sort_by_key(|range| range.start);
+        StructureFilter {
+            hidden,
+            hidden_ranges,
+        }
+    }
+
+    /// Whether the deepest node that holds `byte` is hidden.
+    pub fn hides_byte(&self, byte: usize) -> bool {
+        let i = self
+            .hidden_ranges
+            .partition_point(|range| range.start <= byte);
+        i.checked_sub(1)
+            .is_some_and(|i| self.hidden_ranges[i].contains(&byte))
+    }
+
+    /// Whether `node` lies where nothing is reported.
+    pub fn hides(&self, node: tree_sitter::Node) -> bool {
+        self.hidden.contains(&node.id())
+    }
+}
+
+/// Whether `node` lies in the start tag of `element`.
+fn within_start_tag(element: tree_sitter::Node, node: tree_sitter::Node) -> bool {
+    // The start tag is the element's first child.
+    element.child(0).is_some_and(|tag| {
+        matches!(tag.kind(), "start_tag" | "self_closing_tag")
+            && tag.start_byte() <= node.start_byte()
+            && node.end_byte() <= tag.end_byte()
+    })
+}
+
+/// The framework detector for a component grammar.
+pub(crate) fn detector_for(grammar: Grammar) -> Option<Box<dyn Detector>> {
+    match grammar {
+        Grammar::Vue => Some(Box::new(vue::VueDetector)),
+        Grammar::Svelte => Some(Box::new(svelte::SvelteDetector)),
+        Grammar::Astro => Some(Box::new(astro::AstroDetector)),
+        _ => None,
+    }
+}
+
+/// Parses each region that is parsed, in document order. `stop` is called
+/// before each parse; `true` ends the load with [`ParserError::Cancelled`].
+/// A region whose parse exceeds the deadline gets no tree.
+pub(crate) fn parse_regions(
+    parser: &mut Parser,
+    source: &str,
+    regions: &[Region],
+    stop: Option<&(dyn Fn() -> bool + Send + Sync)>,
+) -> Result<Vec<RegionTree>> {
+    let mut lines: Option<LineStarts> = None;
+    let mut trees = Vec::new();
+    for (index, region) in regions.iter().enumerate() {
+        let Some((grammar, content)) = region.parse_target() else {
+            continue;
+        };
+        if stop.is_some_and(|stop| stop()) {
+            return Err(ParserError::Cancelled);
+        }
+        let range = lines
+            .get_or_insert_with(|| LineStarts::new(source))
+            .ts_range(content);
+        match parser.parse_included(source, grammar, range) {
+            Ok(tree) => trees.push(RegionTree {
+                region: index,
+                grammar,
+                tree,
+            }),
+            Err(ParserError::ParseTimeout { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(trees)
+}
+
+/// The byte offset at which each line of a text starts.
+pub(crate) struct LineStarts(Vec<usize>);
+
+impl LineStarts {
+    pub(crate) fn new(source: &str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(
+            source
+                .bytes()
+                .enumerate()
+                .filter(|&(_, b)| b == b'\n')
+                .map(|(i, _)| i + 1),
+        );
+        Self(starts)
+    }
+
+    /// The tree-sitter point (0-based row, byte column) of `byte`.
+    pub(crate) fn point(&self, byte: usize) -> tree_sitter::Point {
+        let row = self.0.partition_point(|&start| start <= byte) - 1;
+        tree_sitter::Point::new(row, byte - self.0[row])
+    }
+
+    /// The tree-sitter range of the byte range `bytes`.
+    pub(crate) fn ts_range(&self, bytes: Range<usize>) -> tree_sitter::Range {
+        tree_sitter::Range {
+            start_byte: bytes.start,
+            end_byte: bytes.end,
+            start_point: self.point(bytes.start),
+            end_point: self.point(bytes.end),
+        }
+    }
+
+    /// The byte offset of a 1-based line and byte column.
+    pub(crate) fn byte(&self, line: u32, column: u32) -> usize {
+        let start = self
+            .0
+            .get((line as usize).saturating_sub(1))
+            .copied()
+            .unwrap_or(0);
+        start + (column as usize).saturating_sub(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region(content: Option<Range<usize>>) -> Region {
+        Region {
+            kind: RegionKind::Script,
+            language: RegionLanguage::Supported(Grammar::TypeScript),
+            content,
+            element: CompactRange::new(1, 1, 1, 1),
+            start_tag: CompactRange::new(1, 1, 1, 1),
+            state: RegionState::WellFormed,
+        }
+    }
+
+    #[test]
+    fn view_blanks_every_byte_outside_the_content_but_newlines() {
+        let text = "<p>ä</p>\n<script>let a;\n</script>\n";
+        let start = text.find("let").unwrap();
+        let end = text.find("</script>").unwrap();
+        let viewed = view(text, &region(Some(start..end)));
+        assert_eq!(viewed.len(), text.len());
+        assert_eq!(viewed, "         \n        let a;\n         \n");
+        assert_eq!(view(text, &region(None)).trim(), "");
+    }
+
+    #[test]
+    fn the_timeout_reason_is_parse_timeout() {
+        assert_eq!(TIMEOUT_REASON, "parse timeout");
+    }
+
+    #[test]
+    fn line_starts_give_byte_points_and_offsets() {
+        let text = "ab\nZähler x\n\ny";
+        let lines = LineStarts::new(text);
+        let x = text.find('x').unwrap();
+        assert_eq!(lines.point(0), tree_sitter::Point::new(0, 0));
+        assert_eq!(lines.point(x), tree_sitter::Point::new(1, 8));
+        assert_eq!(lines.point(text.len()), tree_sitter::Point::new(3, 1));
+        assert_eq!(lines.byte(2, 9), x);
+        let range = lines.ts_range(3..x);
+        assert_eq!(range.start_point, tree_sitter::Point::new(1, 0));
+        assert_eq!(range.end_byte, x);
+    }
+
+    #[test]
+    fn only_well_formed_regions_of_supported_language_are_parsed() {
+        assert!(region(Some(0..1)).parse_target().is_some());
+        assert!(region(None).parse_target().is_none());
+        let mut unsupported = region(Some(0..1));
+        unsupported.language = RegionLanguage::Unsupported("coffee".into());
+        assert!(unsupported.parse_target().is_none());
+        for state in [RegionState::Empty, RegionState::Malformed] {
+            let mut other = region(Some(0..1));
+            other.state = state;
+            assert!(other.parse_target().is_none());
+        }
+    }
+
+    #[test]
+    fn each_component_grammar_has_a_detector_and_no_other_grammar_has_one() {
+        for grammar in Grammar::all() {
+            assert_eq!(
+                detector_for(grammar).is_some(),
+                grammar.is_component(),
+                "{grammar:?}"
+            );
+        }
+    }
+
+    fn position(name: &str, grammar: Grammar, text: &str, before: &str) -> Position {
+        let file = crate::SourceFile::from_content(name, text.to_string(), grammar).unwrap();
+        position_at(&file, text.find(before).unwrap())
+    }
+
+    #[test]
+    fn a_position_is_in_a_parsed_region_the_outer_document_or_a_template_expression() {
+        let vue = "<script setup lang=\"ts\">\nconst count = 1\n</script>\n<script lang=\"coffee\">\nx = 1\n</script>\n<template>\n  <p id=\"app\" @click=\"go(count)\">{{ count }}</p>\n  <div><script>var y = 2</script></div>\n</template>\n";
+        let at = |before| position("A.vue", Grammar::Vue, vue, before);
+        assert_eq!(at("count = 1"), Position::Region(0));
+        assert_eq!(at("x = 1"), Position::TemplateExpression);
+        assert_eq!(at("app"), Position::Outer);
+        assert_eq!(at("go(count)"), Position::TemplateExpression);
+        assert_eq!(at("count }}"), Position::TemplateExpression);
+        assert_eq!(at("var y"), Position::TemplateExpression);
+        assert_eq!(at("<script setup"), Position::Outer);
+
+        let svelte = "<script lang=\"ts\">let count = 1;</script>\n{#if count > 1}<p class=\"a {count}\" id=\"i\">{count}</p>{/if}\n";
+        let at = |before| position("A.svelte", Grammar::Svelte, svelte, before);
+        assert_eq!(at("count = 1"), Position::Region(0));
+        assert_eq!(at("count > 1"), Position::TemplateExpression);
+        assert_eq!(at("count}\""), Position::TemplateExpression);
+        assert_eq!(at("count}</p>"), Position::TemplateExpression);
+        assert_eq!(at("i\">"), Position::Outer);
+
+        let astro = "---\nconst t = 1;\n---\n<ul>{[t].map((n) => <li id=\"q\">{n}</li>)}</ul>\n<p class={t} title=`x`>t</p>\n<script type=\"application/ld+json\">{\"a\": 1}</script>\n";
+        let at = |before| position("A.astro", Grammar::Astro, astro, before);
+        assert_eq!(at("t = 1"), Position::Region(0));
+        assert_eq!(at("[t]"), Position::TemplateExpression);
+        assert_eq!(at("q\""), Position::Outer);
+        assert_eq!(at("n}</li>"), Position::TemplateExpression);
+        assert_eq!(at("t} title"), Position::TemplateExpression);
+        assert_eq!(at("x`"), Position::TemplateExpression);
+        assert_eq!(at("\"a\""), Position::TemplateExpression);
+
+        let ts = "const count = 1;\n";
+        assert_eq!(
+            position("a.ts", Grammar::TypeScript, ts, "count"),
+            Position::Outer
+        );
+    }
+
+    #[test]
+    fn a_stop_before_the_first_region_parse_cancels() {
+        let text = "<script>let a = 1;</script>";
+        let start = text.find("let").unwrap();
+        let end = text.find("</script>").unwrap();
+        let stop = || true;
+        let result = parse_regions(
+            &mut Parser::new(),
+            text,
+            &[region(Some(start..end))],
+            Some(&stop),
+        );
+        assert!(matches!(result, Err(ParserError::Cancelled)));
+    }
+}

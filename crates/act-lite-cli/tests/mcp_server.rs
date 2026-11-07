@@ -168,7 +168,7 @@ async fn status_lists_every_language() {
     let languages = value["languages"]
         .as_array()
         .unwrap_or_else(|| panic!("no languages in {value}"));
-    assert_eq!(languages.len(), 40, "{value}");
+    assert_eq!(languages.len(), 43, "{value}");
     let lsp = value["lsp"]
         .as_object()
         .unwrap_or_else(|| panic!("no lsp object in {value}"));

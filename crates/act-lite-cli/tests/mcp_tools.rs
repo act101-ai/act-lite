@@ -1145,7 +1145,8 @@ fn unknown_tool_is_an_error() {
 // ---- status ----
 
 /// The languages the README lists.
-const README_LANGUAGES: [&str; 40] = [
+const README_LANGUAGES: [&str; 43] = [
+    "Astro",
     "Bash",
     "C",
     "C#",
@@ -1179,10 +1180,12 @@ const README_LANGUAGES: [&str; 40] = [
     "Scala",
     "SCSS",
     "SQL",
+    "Svelte",
     "Swift",
     "TOML",
     "TSX",
     "TypeScript",
+    "Vue",
     "XML",
     "YAML",
     "Zig",
