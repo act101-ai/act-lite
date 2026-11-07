@@ -1216,10 +1216,13 @@ fn component_references_across(
     };
     let text = anchor.content();
     let component = anchor.grammar();
-    // Whether the node or one of its ancestors declares `name`.
+    // Whether the node or one of its ancestors declares `name`. The
+    // component and region grammars declare a name only with a node of
+    // exactly its text, so a node of another length is not read.
     let anchored = |grammar: Grammar, root: tree_sitter::Node, node: tree_sitter::Node| {
         std::iter::once(node)
             .chain(ancestors_of(root, node).into_iter().rev())
+            .filter(|n| n.byte_range().len() == name.len())
             .any(|n| node_declares_name(grammar, n, text.as_bytes(), name))
     };
     let files = std::iter::once(anchor).chain(siblings);

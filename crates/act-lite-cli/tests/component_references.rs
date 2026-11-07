@@ -566,3 +566,18 @@ fn an_unquoted_template_id_is_its_own_definition() {
         assert_eq!(out["definition"]["column"], column, "{a}: {out}");
     }
 }
+
+#[test]
+fn mcp_skips_a_comment_that_holds_the_name() {
+    let text = "<script>\n// foo\nfoo()\n</script>\n";
+    let ws = workspace(&[("Comment.vue", text)]);
+    let cli = references(ws.path(), "foo", "Comment.vue", 3, 1);
+    let cli_lines: Vec<u64> = cli["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(cli_lines, vec![3], "{cli}");
+    assert_eq!(mcp_lines(ws.path(), "foo", "Comment.vue"), vec![3]);
+}

@@ -992,13 +992,28 @@ fn component_symbol_position(
             if before_ok && after_ok {
                 let byte = line_start + start;
                 let at = (line_idx as u32 + 1, start as u32 + 1);
+                // A usable anchor is a node of exactly the name, not a
+                // comment or a string that holds it.
+                let names = |root: tree_sitter::Node| {
+                    let node = act_lite_parser::regions::node_at_byte(root, byte);
+                    node.byte_range().len() == symbol.len()
+                };
                 match index.at(byte) {
                     Position::Region(region)
-                        if source.regions()[region].kind != RegionKind::Style =>
+                        if source.regions()[region].kind != RegionKind::Style
+                            && source
+                                .region_trees()
+                                .iter()
+                                .find(|tree| tree.region == region)
+                                .is_some_and(|tree| names(tree.tree.root_node())) =>
                     {
                         return Some(at);
                     }
-                    Position::Outer if outer.is_none() && !filter.hides_byte(byte) => {
+                    Position::Outer
+                        if outer.is_none()
+                            && !filter.hides_byte(byte)
+                            && names(source.tree().root_node()) =>
+                    {
                         outer = Some(at);
                     }
                     _ => {}
