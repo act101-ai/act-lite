@@ -154,14 +154,42 @@ pub struct ReferencesWalk {
     pub skipped: Vec<SkippedFile>,
 }
 
-fn path_is_reference_sibling(anchor: &Path, path: &Path, grammar: Grammar) -> bool {
-    grammar.walk_reads(anchor, path)
+fn path_is_reference_sibling(anchor: &Path, path: &Path, grammars: &[Grammar]) -> bool {
+    grammars
+        .iter()
+        .any(|grammar| grammar.walk_reads(anchor, path))
 }
 
 pub fn walk_reference_siblings(
     root: &Path,
     anchor: &Path,
     grammar: Grammar,
+    max_files: usize,
+    max_file_bytes: u64,
+) -> Result<ReferencesWalk> {
+    walk_reference_siblings_of(root, anchor, &[grammar], max_files, max_file_bytes)
+}
+
+/// The grammars whose files a `references` walk from the 1-indexed position
+/// of `anchor` reads: the anchor's own grammar, and, at a position in a
+/// region of a component file, the region's language too.
+pub fn reference_walk_grammars(anchor: &SourceFile, line: u32, column: u32) -> Vec<Grammar> {
+    let mut grammars = vec![anchor.grammar()];
+    if let Some(byte) = byte_at_position(anchor, line, column)
+        && let crate::regions::Position::Region(index) = crate::regions::position_at(anchor, byte)
+        && let Some(tree) = anchor.region_trees().iter().find(|t| t.region == index)
+    {
+        grammars.push(tree.grammar);
+    }
+    grammars
+}
+
+/// [`walk_reference_siblings`] over the files of any of `grammars`: every
+/// candidate of the union counts against `max_files`.
+pub fn walk_reference_siblings_of(
+    root: &Path,
+    anchor: &Path,
+    grammars: &[Grammar],
     max_files: usize,
     max_file_bytes: u64,
 ) -> Result<ReferencesWalk> {
@@ -194,7 +222,7 @@ pub fn walk_reference_siblings(
         };
         let path = entry.path();
         if entry.depth() > 0 && entry.path_is_symlink() {
-            let family_relevant = path_is_reference_sibling(anchor, path, grammar);
+            let family_relevant = path_is_reference_sibling(anchor, path, grammars);
             let reason = match std::fs::metadata(path) {
                 Err(err) => Some(format!("symlink target unreadable: {err}")),
                 Ok(meta) if meta.is_file() && !family_relevant => None,
@@ -208,7 +236,7 @@ pub fn walk_reference_siblings(
             }
             continue;
         }
-        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammar) {
+        if !entry.file_type().is_file() || !path_is_reference_sibling(anchor, path, grammars) {
             continue;
         }
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -462,18 +490,53 @@ fn check_source_format(source: &SourceFile) -> Result<()> {
 ///
 /// Returns the file structure without function/method bodies.
 pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
-    let support = source.grammar().language_support();
-    let grammar = source.grammar();
-
     check_source_format(source)?;
 
-    let query_source = support.skeleton_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let text = source.content();
+    let path = source.path();
+    let mut declarations = one_declaration_per_range(tree_declarations(
+        source.grammar(),
+        source.tree().root_node(),
+        text,
+        path,
+    )?);
+    if !source.regions().is_empty() {
+        for (name, element, start_tag) in region_blocks(source) {
+            declarations.push(Declaration {
+                kind: "module".to_string(),
+                name,
+                range: element,
+                name_range: Some(start_tag),
+                visibility: None,
+            });
+        }
+        for region in source.region_trees() {
+            declarations.extend(one_declaration_per_range(tree_declarations(
+                region.grammar,
+                region.tree.root_node(),
+                text,
+                path,
+            )?));
+        }
+        sort_in_document_order(&mut declarations, |d| &d.range);
+    }
+    Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+}
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
+/// The skeleton declarations of one tree of a file: the file's own tree
+/// or a region tree, with the grammar it was parsed with. `text` is the
+/// whole file.
+fn tree_declarations(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    text: &str,
+    path: &Path,
+) -> Result<Vec<Declaration>> {
+    let support = grammar.language_support();
+    let query = compiled::compiled(grammar, support.skeleton_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, text.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, text);
 
     let mut declarations = Vec::new();
 
@@ -498,23 +561,21 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
 
             match *capture_name {
                 "attr_name" => {
-                    is_class_attribute = node.utf8_text(tree.source().as_bytes()) == Ok("class");
+                    is_class_attribute = node.utf8_text(text.as_bytes()) == Ok("class");
                 }
                 "name" => {
-                    let text = node
-                        .utf8_text(tree.source().as_bytes())
-                        .unwrap_or("<invalid UTF-8>");
-                    name_captures.push_str(text);
+                    let name_text = node.utf8_text(text.as_bytes()).unwrap_or("<invalid UTF-8>");
+                    name_captures.push_str(name_text);
                     name_node = Some(node);
                     if name_range.is_none() {
-                        name_range = Some(node_to_range(node, source.path()));
+                        name_range = Some(node_to_range(node, path));
                     }
                 }
                 "import" | "export" | "include" | "use" | "require" => {
                     kind = Some(*capture_name);
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     self_name = Some(
-                        node.utf8_text(tree.source().as_bytes())
+                        node.utf8_text(text.as_bytes())
                             .unwrap_or("<invalid UTF-8>")
                             .to_string(),
                     );
@@ -526,14 +587,14 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
                 | "annotation" | "enum_constant" | "package" | "indexer" | "constant"
                 | "element" | "block" | "tag" => {
                     kind = Some(*capture_name);
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     decl_node = Some(node);
                 }
                 "definition" => {
                     kind = Some(skeleton_kind_for(node_kind_to_symbol_kind(
-                        support.node_kind_with_source(&node, tree.source().as_bytes()),
+                        support.node_kind_with_source(&node, text.as_bytes()),
                     )));
-                    range = Some(node_to_range(node, source.path()));
+                    range = Some(node_to_range(node, path));
                     decl_node = Some(node);
                 }
                 // `@definition.<kind>` states the kind in the query. See
@@ -550,13 +611,17 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
             && let Some((node, suffix)) = dotted_definition
         {
             let symbol_kind = symbol_kind_from_suffix(suffix).unwrap_or_else(|| {
-                node_kind_to_symbol_kind(
-                    support.node_kind_with_source(&node, tree.source().as_bytes()),
-                )
+                node_kind_to_symbol_kind(support.node_kind_with_source(&node, text.as_bytes()))
             });
             kind = Some(skeleton_kind_for(symbol_kind));
-            range = Some(node_to_range(node, source.path()));
+            range = Some(node_to_range(node, path));
             decl_node = Some(node);
+        }
+
+        if let Some(node) = decl_node.or(name_node)
+            && filter.hides(node)
+        {
+            continue;
         }
 
         if let (Some(k), Some(r)) = (kind, range) {
@@ -575,14 +640,9 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
             } else {
                 self_name.unwrap_or_default()
             };
-            name = name
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_string();
+            name = first_line(&name).to_string();
             let name = name.trim().to_string();
-            let name = if grammar == crate::Grammar::Ruby {
+            let name = if grammar == Grammar::Ruby {
                 name.strip_prefix(':').unwrap_or(&name).to_string()
             } else {
                 name
@@ -593,7 +653,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
             // A class attribute value lists several classes; each is a declaration.
             if is_class_attribute && let Some(value) = name_node {
                 for (token, token_range) in
-                    whitespace_separated_tokens(value, tree.source().as_bytes(), source.path())
+                    whitespace_separated_tokens(value, text.as_bytes(), path)
                 {
                     declarations.push(Declaration {
                         kind: k.to_string(),
@@ -605,9 +665,8 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
                 }
                 continue;
             }
-            let visibility = decl_node.and_then(|node| {
-                declaration_visibility(grammar, node, &name, tree.source().as_bytes())
-            });
+            let visibility = decl_node
+                .and_then(|node| declaration_visibility(grammar, node, &name, text.as_bytes()));
             declarations.push(Declaration {
                 kind: k.to_string(),
                 name,
@@ -618,8 +677,7 @@ pub fn execute_skeleton(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
-    let declarations = one_declaration_per_range(declarations);
-    Ok(QueryResult::Skeleton(SkeletonResult { declarations }))
+    Ok(declarations)
 }
 
 /// Two patterns that report the same node: an identical kind is reported
@@ -663,17 +721,41 @@ fn one_declaration_per_range(declarations: Vec<Declaration>) -> Vec<Declaration>
 ///
 /// Returns all symbol definitions in the file.
 pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
-    let support = source.grammar().language_support();
-
     check_source_format(source)?;
 
-    let query_source = support.symbols_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let text = source.content();
+    let path = source.path();
+    let mut symbols = tree_symbols(source.grammar(), source.tree().root_node(), text, path)?;
+    if !source.regions().is_empty() {
+        for (name, _, start_tag) in region_blocks(source) {
+            symbols.push(Symbol::new(name, SymbolKind::Module, start_tag));
+        }
+        for region in source.region_trees() {
+            symbols.extend(tree_symbols(
+                region.grammar,
+                region.tree.root_node(),
+                text,
+                path,
+            )?);
+        }
+        sort_in_document_order(&mut symbols, Symbol::range);
+    }
+    Ok(QueryResult::Symbols { symbols })
+}
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
+/// The symbols of one tree of a file: the file's own tree or a region
+/// tree, with the grammar it was parsed with. `text` is the whole file.
+fn tree_symbols(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    text: &str,
+    path: &Path,
+) -> Result<Vec<Symbol>> {
+    let support = grammar.language_support();
+    let query = compiled::compiled(grammar, support.symbols_query())?;
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, text.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, text);
 
     let mut symbols = Vec::new();
     let mut suppressed: Vec<(String, Range)> = Vec::new();
@@ -694,26 +776,25 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
             match *capture_name {
                 "name" => {
                     // A CSS class or id is declared with its sigil, a sibling token.
-                    let sigil = css_selector_sigil(node, source.grammar());
+                    let sigil = css_selector_sigil(node, grammar);
                     let text_start = sigil.map_or(node.start_byte(), |sigil| sigil.start_byte());
                     name = Some(
-                        tree.source()
-                            .get(text_start..node.end_byte())
+                        text.get(text_start..node.end_byte())
                             .unwrap_or("<invalid UTF-8>")
                             .to_string(),
                     );
                     // Use the name node's range instead of definition node's range
                     range = Some(match sigil {
                         Some(sigil) => Range::new(
-                            node_to_range(sigil, source.path()).start().clone(),
-                            node_to_range(node, source.path()).end().clone(),
+                            node_to_range(sigil, path).start().clone(),
+                            node_to_range(node, path).end().clone(),
                         ),
-                        None => node_to_range(node, source.path()),
+                        None => node_to_range(node, path),
                     });
                     name_node = Some(node);
                 }
                 "attr_name" => {
-                    is_class_attribute = node.utf8_text(tree.source().as_bytes()) == Ok("class");
+                    is_class_attribute = node.utf8_text(text.as_bytes()) == Ok("class");
                 }
                 "definition" => {
                     definition_node = Some(node);
@@ -738,19 +819,26 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
             None => kinded_definition.map(|(node, suffix)| (node, symbol_kind_from_suffix(suffix))),
         };
 
+        if let Some((node, _)) = resolved
+            && filter.hides(node)
+        {
+            continue;
+        }
+
         if let Some((node, stated_kind)) = resolved {
             let symbol_kind = stated_kind.unwrap_or_else(|| {
-                let node_kind = support.node_kind_with_source(&node, tree.source().as_bytes());
+                let node_kind = support.node_kind_with_source(&node, text.as_bytes());
                 node_kind_to_symbol_kind(node_kind)
             });
             // Use the @name range when available; fall back to the definition node's range.
-            let symbol_range = range.unwrap_or_else(|| node_to_range(node, source.path()));
-            let symbol_name = name.unwrap_or_default();
+            let symbol_range = range.unwrap_or_else(|| node_to_range(node, path));
+            let mut symbol_name = name.unwrap_or_default();
+            if grammar.is_component() {
+                symbol_name = first_line(&symbol_name).to_string();
+            }
             // A class attribute value lists several classes; each is a symbol.
             if is_class_attribute && let Some(value) = name_node {
-                for (token, range) in
-                    whitespace_separated_tokens(value, tree.source().as_bytes(), source.path())
-                {
+                for (token, range) in whitespace_separated_tokens(value, text.as_bytes(), path) {
                     symbols.push(Symbol::new(token, symbol_kind, range));
                 }
                 continue;
@@ -759,8 +847,70 @@ pub fn execute_symbols(source: &SourceFile) -> Result<QueryResult> {
         }
     }
 
-    let symbols = one_symbol_per_range(symbols, &suppressed);
-    Ok(QueryResult::Symbols { symbols })
+    Ok(one_symbol_per_range(symbols, &suppressed))
+}
+
+/// The block of each region that is not malformed: its start tag as
+/// written, cut to its first line; the element's range; the start tag's
+/// range.
+fn region_blocks(source: &SourceFile) -> Vec<(String, Range, Range)> {
+    let text = source.content();
+    let lines = crate::regions::LineStarts::new(text);
+    let range = |compact: &act_lite_core::CompactRange| {
+        let location = |line, column| {
+            act_lite_core::Location::full(
+                source.path().to_path_buf(),
+                line,
+                column,
+                lines.byte(line, column),
+            )
+        };
+        Range::new(
+            location(compact.start_line(), compact.start_col()),
+            location(compact.end_line(), compact.end_col()),
+        )
+    };
+    source
+        .regions()
+        .iter()
+        .filter(|region| region.state != crate::regions::RegionState::Malformed)
+        .map(|region| {
+            let start_tag = range(&region.start_tag);
+            let name = match (
+                start_tag.start().byte_offset(),
+                start_tag.end().byte_offset(),
+            ) {
+                (Some(start), Some(end)) => text.get(start..end).unwrap_or_default(),
+                _ => "",
+            };
+            (
+                first_line(name).to_string(),
+                range(&region.element),
+                start_tag,
+            )
+        })
+        .collect()
+}
+
+/// A declared name cut to its first non-empty line, trimmed.
+fn first_line(name: &str) -> &str {
+    name.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
+/// Stable sort by range start (line, column), then by range end descending,
+/// so an enclosing block comes before its content.
+fn sort_in_document_order<T>(items: &mut [T], range: impl Fn(&T) -> &Range) {
+    items.sort_by(|a, b| {
+        let (a, b) = (range(a), range(b));
+        (a.start().line(), a.start().column())
+            .cmp(&(b.start().line(), b.start().column()))
+            .then_with(|| {
+                (b.end().line(), b.end().column()).cmp(&(a.end().line(), a.end().column()))
+            })
+    });
 }
 
 /// Two patterns that report the same name node: an identical kind is
@@ -886,6 +1036,9 @@ pub fn execute_references_for_symbol(
     line: u32,
     column: u32,
 ) -> Result<QueryResult> {
+    if source.grammar().is_component() {
+        return component_references_across(source, &[], name, line, column);
+    }
     let mut node = node_at_byte_position(source, line, column).ok_or_else(|| {
         crate::ParserError::InvalidPosition {
             file: source.path().to_path_buf(),
@@ -935,6 +1088,12 @@ fn node_at_byte_position(
     line: u32,
     column: u32,
 ) -> Option<tree_sitter::Node<'_>> {
+    byte_at_position(source, line, column).map(|byte| source.tree().node_at_byte(byte))
+}
+
+/// The byte offset of a 1-indexed line and byte column, or `None` when the
+/// position lies outside the file or past the end of its line.
+fn byte_at_position(source: &SourceFile, line: u32, column: u32) -> Option<usize> {
     if line == 0 || column == 0 {
         return None;
     }
@@ -954,7 +1113,7 @@ fn node_at_byte_position(
             if column_offset > line_end - line_start {
                 return None;
             }
-            return Some(source.tree().node_at_byte(line_start + column_offset));
+            return Some(line_start + column_offset);
         }
 
         if line_end == bytes.len() {
@@ -982,6 +1141,9 @@ pub fn execute_references_for_symbol_across(
     line: u32,
     column: u32,
 ) -> Result<QueryResult> {
+    if anchor.grammar().is_component() {
+        return component_references_across(anchor, siblings, name, line, column);
+    }
     let mut node = node_at_byte_position(anchor, line, column).ok_or_else(|| {
         crate::ParserError::InvalidPosition {
             file: anchor.path().to_path_buf(),
@@ -1008,6 +1170,107 @@ pub fn execute_references_for_symbol_across(
     let mut references = collect_references_matching(anchor, Some(name))?;
     for sibling in siblings {
         references.extend(collect_references_matching(sibling, Some(name))?);
+    }
+
+    references.sort_by(|a, b| {
+        a.file()
+            .cmp(b.file())
+            .then_with(|| a.line().cmp(&b.line()))
+            .then_with(|| a.column().cmp(&b.column()))
+    });
+    references.dedup_by(|a, b| a.file() == b.file() && a.byte_offset() == b.byte_offset());
+
+    Ok(QueryResult::References {
+        references,
+        skipped_files: Vec::new(),
+        source: ReferenceSource::TreeSitter,
+    })
+}
+
+/// [`execute_references_for_symbol_across`] from a component file. At a
+/// position in a template expression the name is not found. At a position
+/// in the outer document, the anchor is checked on the outer tree, and the
+/// sites are the outer-structure sites of the anchor and of every sibling of
+/// the same component grammar. At a position in a region of language L, the
+/// anchor is checked on the region tree, and the sites are those of every
+/// region of L of the anchor and of each sibling of the same component
+/// grammar, and of every sibling in L.
+fn component_references_across(
+    anchor: &SourceFile,
+    siblings: &[SourceFile],
+    name: &str,
+    line: u32,
+    column: u32,
+) -> Result<QueryResult> {
+    use crate::regions::{Position, ancestors_of, node_at_byte, outside_structure, position_at};
+    let byte = byte_at_position(anchor, line, column).ok_or_else(|| {
+        crate::ParserError::InvalidPosition {
+            file: anchor.path().to_path_buf(),
+            line,
+            column,
+        }
+    })?;
+    let not_found = || crate::ParserError::SymbolNotFound {
+        name: name.to_string(),
+        file: anchor.path().to_path_buf(),
+    };
+    let text = anchor.content();
+    let component = anchor.grammar();
+    // Whether the node or one of its ancestors declares `name`. The
+    // component and region grammars declare a name only with a node of
+    // exactly its text, so a node of another length is not read.
+    let anchored = |grammar: Grammar, root: tree_sitter::Node, node: tree_sitter::Node| {
+        std::iter::once(node)
+            .chain(ancestors_of(root, node).into_iter().rev())
+            .filter(|n| n.byte_range().len() == name.len())
+            .any(|n| node_declares_name(grammar, n, text.as_bytes(), name))
+    };
+    let files = std::iter::once(anchor).chain(siblings);
+    let mut references = Vec::new();
+    match position_at(anchor, byte) {
+        Position::TemplateExpression => return Err(not_found()),
+        Position::Outer => {
+            let root = anchor.tree().root_node();
+            let node = node_at_byte(root, byte);
+            if outside_structure(component, root, node, text) || !anchored(component, root, node) {
+                return Err(not_found());
+            }
+            for file in files.filter(|file| file.grammar() == component) {
+                references.extend(collect_references_matching(file, Some(name))?);
+            }
+        }
+        Position::Region(index) => {
+            let tree = anchor
+                .region_trees()
+                .iter()
+                .find(|tree| tree.region == index)
+                .ok_or_else(not_found)?;
+            let language = tree.grammar;
+            let root = tree.tree.root_node();
+            if !anchored(language, root, node_at_byte(root, byte)) {
+                return Err(not_found());
+            }
+            for file in files {
+                if file.grammar() == component {
+                    for region in file.region_trees().iter().filter(|t| t.grammar == language) {
+                        references.extend(
+                            tree_reference_ranges_matching(
+                                language,
+                                region.tree.root_node(),
+                                file.content(),
+                                file.path(),
+                                Some(name),
+                                None,
+                            )?
+                            .into_iter()
+                            .map(|range| range.start().clone()),
+                        );
+                    }
+                } else if file.grammar() == language {
+                    references.extend(collect_references_matching(file, Some(name))?);
+                }
+            }
+        }
     }
 
     references.sort_by(|a, b| {
@@ -1245,16 +1508,36 @@ fn collect_reference_ranges_matching(
     exclude_byte_range: Option<(usize, usize)>,
 ) -> Result<Vec<Range>> {
     check_source_format(source)?;
+    tree_reference_ranges_matching(
+        source.grammar(),
+        source.tree().root_node(),
+        source.content(),
+        source.path(),
+        expected_name,
+        exclude_byte_range,
+    )
+}
 
-    let support = source.grammar().language_support();
+/// The reference sites of one tree of a file, parsed with `grammar`: the
+/// file's own tree or a region tree. `content` is the whole file. In the
+/// outer tree of a component file, a site where nothing is reported
+/// ([`crate::regions::outside_structure`]) is not a site.
+fn tree_reference_ranges_matching(
+    grammar: Grammar,
+    root_node: tree_sitter::Node,
+    content: &str,
+    path: &Path,
+    expected_name: Option<&str>,
+    exclude_byte_range: Option<(usize, usize)>,
+) -> Result<Vec<Range>> {
+    let support = grammar.language_support();
 
     let query_source = support.references_query();
-    let query = compiled::compiled(source.grammar(), query_source)?;
+    let query = compiled::compiled(grammar, query_source)?;
 
-    let tree = source.tree();
-    let root_node = tree.root_node();
     let mut cursor = tree_sitter::QueryCursor::new();
-    let mut matches = cursor.matches(&query, root_node, tree.source().as_bytes());
+    let mut matches = cursor.matches(&query, root_node, content.as_bytes());
+    let filter = crate::regions::StructureFilter::new(grammar, root_node, content);
 
     let mut references = Vec::new();
 
@@ -1263,15 +1546,13 @@ fn collect_reference_ranges_matching(
             let capture_name = &query.capture_names()[capture.index as usize];
             if *capture_name == "reference" {
                 let node = capture.node;
-                let text = node.utf8_text(source.content().as_bytes()).unwrap_or("");
+                if filter.hides(node) {
+                    continue;
+                }
+                let text = node.utf8_text(content.as_bytes()).unwrap_or("");
                 let name = expected_name.unwrap_or("");
-                let classified = classify_composed_reference(
-                    source.grammar(),
-                    node,
-                    source.content().as_bytes(),
-                    text,
-                    name,
-                );
+                let classified =
+                    classify_composed_reference(grammar, node, content.as_bytes(), text, name);
                 // The definition's own node is not a reference — but only
                 // composed carriers skip: a PLAIN identifier at the anchor IS
                 // the long-standing contract (the anchor file's def span is
@@ -1293,13 +1574,13 @@ fn collect_reference_ranges_matching(
                         for (start_off, end_off) in occurrences {
                             let base = node.start_byte();
                             let start_loc = Location::full(
-                                source.path().to_path_buf(),
+                                path.to_path_buf(),
                                 node.start_position().row as u32 + 1,
                                 node.start_position().column as u32 + 1 + (start_off as u32),
                                 base + start_off,
                             );
                             let end_loc = Location::full(
-                                source.path().to_path_buf(),
+                                path.to_path_buf(),
                                 node.start_position().row as u32 + 1,
                                 node.start_position().column as u32 + 1 + (end_off as u32),
                                 base + end_off,
@@ -1310,7 +1591,7 @@ fn collect_reference_ranges_matching(
                     // Composed refusals fire only when a name is in play.
                     ComposedReference::Unmodeled(form) => {
                         return Err(crate::ParserError::UnmodeledReferenceForm {
-                            file: source.path().to_path_buf(),
+                            file: path.to_path_buf(),
                             line: node.start_position().row as u32 + 1,
                             form,
                         });
@@ -1321,13 +1602,13 @@ fn collect_reference_ranges_matching(
                             continue;
                         }
                         let start_loc = Location::full(
-                            source.path().to_path_buf(),
+                            path.to_path_buf(),
                             node.start_position().row as u32 + 1,
                             node.start_position().column as u32 + 1,
                             node.start_byte(),
                         );
                         let end_loc = Location::full(
-                            source.path().to_path_buf(),
+                            path.to_path_buf(),
                             node.end_position().row as u32 + 1,
                             node.end_position().column as u32 + 1,
                             node.end_byte(),
@@ -3007,6 +3288,49 @@ interface Baz {}
                 other => panic!("{name}: expected Symbol, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn a_region_walk_counts_component_and_plain_candidates_together_against_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["A.vue", "B.vue", "c.ts", "d.ts", "e.js", "F.svelte"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let anchor = dir.path().join("A.vue");
+        let grammars = [Grammar::Vue, Grammar::TypeScript];
+        let walk = walk_reference_siblings_of(dir.path(), &anchor, &grammars, 3, u64::MAX).unwrap();
+        let mut names: Vec<String> = walk
+            .siblings
+            .iter()
+            .map(|s| s.path().file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["B.vue", "c.ts", "d.ts"]);
+        match walk_reference_siblings_of(dir.path(), &anchor, &grammars, 2, u64::MAX) {
+            Err(crate::ParserError::ReferencesWalkCap {
+                candidates,
+                max_files,
+                ..
+            }) => assert_eq!((candidates, max_files), (3, 2)),
+            other => panic!(
+                "expected the walk cap, got {:?}",
+                other.map(|w| w.siblings.len())
+            ),
+        }
+    }
+
+    #[test]
+    fn a_region_position_walks_the_region_language_too() {
+        let text = "<script setup lang=\"ts\">\nconst a = 1\n</script>\n<template><p id=\"x\"/></template>\n";
+        let source = SourceFile::from_content("A.vue", text.to_string(), Grammar::Vue).unwrap();
+        assert_eq!(
+            reference_walk_grammars(&source, 2, 7),
+            [Grammar::Vue, Grammar::TypeScript]
+        );
+        assert_eq!(reference_walk_grammars(&source, 4, 18), [Grammar::Vue]);
+        let ts =
+            SourceFile::from_content("a.ts", "const a = 1\n".into(), Grammar::TypeScript).unwrap();
+        assert_eq!(reference_walk_grammars(&ts, 1, 7), [Grammar::TypeScript]);
     }
 
     #[test]

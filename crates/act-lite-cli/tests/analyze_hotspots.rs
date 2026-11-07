@@ -140,7 +140,10 @@ fn details_explain_the_formula() {
             "complexity": "cyclomatic: 1 + decision points in the function's own body",
             "lines": "lines with a non-comment token of the function's own body, nested functions and Python docstrings excluded",
             "dependency_information": false,
-            "functions": 3
+            "functions": 3,
+            "regions_not_analyzed": [],
+            "regions_not_analyzed_total": 0,
+            "files_without_analyzed_code": 0
         })
     );
 }

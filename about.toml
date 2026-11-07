@@ -22,3 +22,15 @@ targets = [
 ]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+
+# tree-sitter-astro-next declares "MIT or Apache-2.0" but ships only the
+# Apache-2.0 text, and its scanner is the MIT-licensed scanner of
+# tree-sitter-astro. The crate is listed with the Apache-2.0 text it ships and
+# with MIT; about.hbs adds the upstream MIT text with its copyright line.
+[tree-sitter-astro-next.clarify]
+license = "Apache-2.0 AND MIT"
+
+[[tree-sitter-astro-next.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"

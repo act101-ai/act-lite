@@ -1,0 +1,19 @@
+---
+import Layout from '../layouts/Layout.astro';
+interface Props { title: string }
+const { title } = Astro.props;
+function shout(s: string): string {
+  return s.length > 3 ? s.toUpperCase() : s;
+}
+---
+<Layout title={title}>
+  <h1 id="top" class="t">{shout(title)}</h1>
+</Layout>
+<script>
+  function hello(): void { console.log('hé'); }
+</script>
+<script is:inline>var inline = 1;</script>
+<script type="application/ld+json">{"a": 1}</script>
+<style>
+  h1 { color: red; }
+</style>

@@ -45,7 +45,7 @@ pub const TOOLS: &[ToolEntry] = &[
     },
     ToolEntry {
         name: "analyze_patterns",
-        description: "Find functions with structural problems: more than 50 code lines, nesting deeper than 4, cyclomatic complexity above 10, or more than 5 parameters. Each finding gives the function, its location, the metric, its value and the threshold it exceeds, as one JSON result with its evidence. Covers 23 programming languages; data and markup formats report unsupported. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
+        description: "Find functions with structural problems: more than 50 code lines, nesting deeper than 4, cyclomatic complexity above 10, or more than 5 parameters. Each finding gives the function, its location, the metric, its value and the threshold it exceeds, as one JSON result with its evidence. Covers 26 programming languages; data and markup formats report unsupported. Params: none [, paths (string[]), include (glob[]), exclude (glob[]), include_tests (bool), include_generated (bool), include_vendored (bool), include_ignored (bool), limit (u32, 0 to 1000, default 100)]",
     },
     ToolEntry {
         name: "analyze_hotspots",

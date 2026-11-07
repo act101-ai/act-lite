@@ -21,6 +21,11 @@ impl SyntaxTree {
         self.tree.root_node()
     }
 
+    /// Returns the tree-sitter tree.
+    pub fn inner(&self) -> &Tree {
+        &self.tree
+    }
+
     /// Returns the source code this tree was parsed from.
     pub fn source(&self) -> &str {
         &self.source

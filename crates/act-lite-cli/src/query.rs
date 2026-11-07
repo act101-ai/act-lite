@@ -24,8 +24,9 @@ fn lsp_references_result(ranges: Vec<act_lite_core::Range>) -> QueryResult {
 }
 
 /// Serialize a `QueryResult` and inject a top-level `"parse_error": true`
-/// when `source`'s tree carries ERROR nodes; the key is entirely absent
-/// (never `false`) on a clean parse, so clean output stays byte-identical.
+/// when `source`'s tree or one of its region trees carries ERROR nodes; the
+/// key is entirely absent (never `false`) on a clean parse, so clean output
+/// stays byte-identical.
 /// Without this, an invalid file's partial symbol list is indistinguishable
 /// from a complete answer.
 fn with_parse_state(
@@ -33,7 +34,7 @@ fn with_parse_state(
     source: &act_lite_parser::SourceFile,
 ) -> serde_json::Value {
     let mut value = serde_json::to_value(result).expect("QueryResult must serialize to JSON");
-    if source.tree().root_node().has_error()
+    if source.has_any_error()
         && let serde_json::Value::Object(ref mut map) = value
     {
         map.insert("parse_error".to_string(), serde_json::Value::Bool(true));
@@ -150,12 +151,13 @@ pub async fn execute(
             }
 
             // Tree-sitter fallback: a name-level (not binding-level)
-            // cross-file baseline over same-grammar files in the workspace.
-            // The result's `source` field says `tree-sitter`.
-            let walk = act_lite_parser::walk_reference_siblings(
+            // cross-file baseline over same-grammar files in the workspace
+            // (from a component's region, also the files of the region's
+            // language). The result's `source` field says `tree-sitter`.
+            let walk = act_lite_parser::walk_reference_siblings_of(
                 &workspace_root,
                 file,
-                source.grammar(),
+                &act_lite_parser::reference_walk_grammars(&source, *line, *column),
                 act_lite_parser::MAX_REFERENCE_WALK_FILES,
                 act_lite_parser::MAX_REFERENCE_WALK_FILE_BYTES,
             )?;
@@ -803,7 +805,7 @@ pub fn execute_symbols_batch_by_files(
                 });
             }
             total += symbols.len();
-            let parse_error = source.tree().root_node().has_error().then_some(true);
+            let parse_error = source.has_any_error().then_some(true);
             results.push(FileSymbolGroup {
                 file: rel_str,
                 symbols,
@@ -868,7 +870,7 @@ pub fn execute_symbols_batch_by_ids(
                 }
             }
             total += symbols.len();
-            let parse_error = source.tree().root_node().has_error().then_some(true);
+            let parse_error = source.has_any_error().then_some(true);
             results.push(FileSymbolGroup {
                 file: file_path.clone(),
                 symbols,

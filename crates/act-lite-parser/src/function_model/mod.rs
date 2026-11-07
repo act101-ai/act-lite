@@ -22,6 +22,7 @@ mod tokens;
 
 use act_lite_core::CompactRange;
 use act_lite_core::registry::LanguageCategory;
+use std::borrow::Cow;
 use tree_sitter::Node;
 
 use crate::{Grammar, SourceFile};
@@ -49,9 +50,11 @@ pub struct Function {
 }
 
 /// Whether the function model covers the grammar: every grammar that is not
-/// a `Data` format.
+/// a `Data` format. A component entry has no row of its own: its functions
+/// are those of its script regions, measured by their languages' rows.
 pub fn supports(grammar: Grammar) -> bool {
-    !matches!(grammar.category(), LanguageCategory::Data) && table::row(grammar).is_some()
+    !matches!(grammar.category(), LanguageCategory::Data)
+        && (table::row(grammar).is_some() || grammar.is_component())
 }
 
 /// The named node kinds the model reads for a grammar; empty for a grammar
@@ -64,8 +67,50 @@ pub fn node_kinds(grammar: Grammar) -> Vec<&'static str> {
 
 /// Every function of the file, in location order.
 pub fn functions(file: &SourceFile) -> Functions<'_> {
-    let grammar = file.grammar();
-    let source = file.content();
+    functions_in(file.grammar(), file.tree().inner(), file.content())
+}
+
+/// Every function of one tree of `grammar` over `source`, in location
+/// order: a file's tree, or a region tree whose positions are those of the
+/// file that holds it.
+pub fn functions_in<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+) -> Functions<'a> {
+    with_lines(grammar, tree, source, Cow::Owned(LineStarts::new(source).0))
+}
+
+/// The start byte of each line of a text, computed once and shared by the
+/// trees of one file (a component file has one tree per region).
+pub struct LineStarts(Vec<usize>);
+
+impl LineStarts {
+    pub fn new(source: &str) -> Self {
+        LineStarts(
+            std::iter::once(0)
+                .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+                .collect(),
+        )
+    }
+}
+
+/// [`functions_in`] with the line starts of `source` computed by the caller.
+pub fn functions_in_lines<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+    lines: &'a LineStarts,
+) -> Functions<'a> {
+    with_lines(grammar, tree, source, Cow::Borrowed(&lines.0))
+}
+
+fn with_lines<'a>(
+    grammar: Grammar,
+    tree: &'a tree_sitter::Tree,
+    source: &'a str,
+    line_starts: Cow<'a, [usize]>,
+) -> Functions<'a> {
     let ctx = table::row(grammar)
         .filter(|_| supports(grammar))
         .map(|row| Ctx {
@@ -74,16 +119,14 @@ pub fn functions(file: &SourceFile) -> Functions<'_> {
             source,
         });
     let stack = if ctx.is_some() {
-        vec![file.tree().root_node()]
+        vec![tree.root_node()]
     } else {
         Vec::new()
     };
     Functions {
         ctx,
         stack,
-        line_starts: std::iter::once(0)
-            .chain(source.match_indices('\n').map(|(i, _)| i + 1))
-            .collect(),
+        line_starts,
     }
 }
 
@@ -91,7 +134,7 @@ pub fn functions(file: &SourceFile) -> Functions<'_> {
 pub struct Functions<'a> {
     ctx: Option<Ctx<'a>>,
     stack: Vec<Node<'a>>,
-    line_starts: Vec<usize>,
+    line_starts: Cow<'a, [usize]>,
 }
 
 impl Iterator for Functions<'_> {
