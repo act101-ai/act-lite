@@ -24,8 +24,17 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 /// Restrict `dir` to the current user. Files created in it later inherit the
 /// same single entry (`OICI`: object and container inherit).
 pub(crate) fn restrict_dir(dir: &Path) -> io::Result<()> {
-    let name = wide(dir.as_os_str());
-    with_owner_only_dacl("OICI", |dacl| unsafe {
+    restrict_named(dir, "OICI")
+}
+
+/// Restrict the existing file at `path` to the current user.
+pub(crate) fn restrict_existing_file(path: &Path) -> io::Result<()> {
+    restrict_named(path, "")
+}
+
+fn restrict_named(path: &Path, inherit: &str) -> io::Result<()> {
+    let name = wide(path.as_os_str());
+    with_owner_only_dacl(inherit, |dacl| unsafe {
         SetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
