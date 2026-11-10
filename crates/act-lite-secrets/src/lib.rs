@@ -1,3 +1,5 @@
+#[cfg(windows)]
+mod acl;
 pub mod env_edit;
 pub mod env_line;
 pub mod error;

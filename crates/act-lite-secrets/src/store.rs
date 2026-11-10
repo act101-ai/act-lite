@@ -188,25 +188,36 @@ fn restrict_dir(dir: &Path) -> Result<(), SecretsError> {
         .map_err(io_err("set permissions on", dir))
 }
 
-#[cfg(not(unix))]
+/// Windows: a protected ACL that only the current user is on, the `0700`
+/// equivalent, wherever the store lives (also under `ACT_CONFIG_DIR`).
+#[cfg(windows)]
+fn restrict_dir(dir: &Path) -> Result<(), SecretsError> {
+    crate::acl::restrict_dir(dir).map_err(io_err("set permissions on", dir))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_dir(_dir: &Path) -> Result<(), SecretsError> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn write_private(path: &Path, contents: &str) -> Result<(), SecretsError> {
     use std::io::Write;
     let mut file = error::create_temp_file(path)?;
+    // Windows: set the owner-only ACL before any byte is written.
+    #[cfg(windows)]
+    if let Err(e) = crate::acl::restrict_file(&file) {
+        drop(file);
+        return Err(error::err_after_temp_created(
+            path,
+            path,
+            "set permissions on",
+            "set permissions on (the temp file also could not be removed; delete it manually) at",
+            e,
+        ));
+    }
     file.write_all(contents.as_bytes())
         .map_err(io_err("write", path))?;
     file.sync_all().map_err(io_err("sync", path))
-}
-
-// Non-unix platforms have no portable `0600` equivalent here, so the store
-// inherits default filesystem ACLs and is NOT permission-protected at rest.
-#[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> Result<(), SecretsError> {
-    std::fs::write(path, contents).map_err(io_err("write", path))
 }
 
 #[cfg(test)]
@@ -343,7 +354,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
     }
 
-    #[cfg(unix)]
     #[test]
     fn save_refuses_a_preexisting_temp_file_and_leaves_it_in_place() {
         let tmp = tempfile::tempdir().unwrap();
@@ -362,6 +372,42 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&stray_tmp).unwrap(), "leftover");
         assert!(!path.exists(), "save must not have completed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn saved_store_and_its_directory_are_owner_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sub").join("store.env");
+        let mut store = Store::new();
+        store.insert("A".into(), "longvalue1".into());
+        save_store(&path, &store).unwrap();
+        crate::acl::assert_owner_only(&path, "");
+        crate::acl::assert_owner_only(path.parent().unwrap(), "OICI");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_tightens_the_acl_on_an_existing_wide_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("store.env");
+        std::fs::write(&path, "A=old\n").unwrap();
+
+        let mut store = Store::new();
+        store.insert("A".into(), "newvalue1".into());
+        save_store(&path, &store).unwrap();
+
+        crate::acl::assert_owner_only(&path, "");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn with_lock_restricts_the_store_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sub").join("store.env");
+        with_lock(&path, || Ok(())).unwrap();
+        crate::acl::assert_owner_only(path.parent().unwrap(), "OICI");
     }
 
     #[test]
