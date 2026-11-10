@@ -9,6 +9,7 @@
 # Test seam (not for normal use):
 #   ACT_LITE_BASE_URL     base of the download URLs; the archive and its .sha256 are fetched from
 #                         <base>/<tag>/<file> (default: https://github.com/act101-ai/act-lite/releases/download)
+#   ACT_LITE_TEST_FAIL_REPLACE  when set, the step that moves the new act-lite.exe into place fails
 #
 # Supported: Windows 10 and 11 on x86_64, Windows PowerShell 5.1 or PowerShell 7.
 # The script needs no administrator rights. It writes only to the install directory,
@@ -127,8 +128,9 @@ function Install-ActLite {
     # A running act-lite.exe (for example the MCP server of an open Claude Code)
     # cannot be overwritten, but it can be renamed; the old copy is removed when possible.
     $old = Join-Path $dir '.act-lite.old.exe'
-    Remove-Item -Force -ErrorAction SilentlyContinue $old
-    if (Test-Path -PathType Leaf $exe) {
+    $hadExe = Test-Path -PathType Leaf $exe
+    if ($hadExe) {
+      Remove-Item -Force -ErrorAction SilentlyContinue $old
       try {
         Move-Item -Force $exe $old
       } catch {
@@ -136,9 +138,17 @@ function Install-ActLite {
       }
     }
     try {
+      if ($env:ACT_LITE_TEST_FAIL_REPLACE) { throw 'ACT_LITE_TEST_FAIL_REPLACE' }
       Move-Item -Force $staged $exe
     } catch {
-      Fail "could not replace $exe"
+      if ($hadExe) {
+        try {
+          Move-Item -Force $old $exe
+        } catch {
+          Fail "could not replace $exe, nor restore it; the previous version is $old"
+        }
+      }
+      Fail "could not replace $exe; the existing install was not changed"
     }
     $staged = $null
     Remove-Item -Force -ErrorAction SilentlyContinue $old

@@ -61,6 +61,7 @@ dependencies = [
  "tokio-test",
  "tracing",
  "which",
+ "windows-sys",
 ]
 
 [[package]]

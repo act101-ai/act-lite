@@ -152,6 +152,12 @@ jobs:
               & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
               if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell install round $round"; $failed = $true }
             }
+            Write-Host "== ${shell}: a failed replacement keeps the installed copy"
+            $before = (Get-FileHash "$dir\act-lite.exe").Hash
+            $env:ACT_LITE_TEST_FAIL_REPLACE = '1'
+            & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
+            Remove-Item Env:ACT_LITE_TEST_FAIL_REPLACE
+            if ($LASTEXITCODE -eq 0 -or -not (Test-Path "$dir\act-lite.exe") -or (Get-FileHash "$dir\act-lite.exe").Hash -ne $before) { Write-Host "FAIL: $shell lost act-lite.exe after a failed replacement"; $failed = $true }
             Write-Host "== ${shell}: checksum mismatch installs nothing"
             Remove-Item -Recurse -Force $dir
             $env:ACT_LITE_VERSION = 'v0.0.2'

@@ -6,6 +6,51 @@ use std::ffi::OsString;
 use std::time::Duration;
 use tracing::{debug, info};
 
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::RawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+    };
+
+    /// A job object that holds an install command's shell and every process
+    /// the shell starts.
+    pub(super) struct Job(HANDLE);
+
+    // SAFETY: a job handle may be used and closed from any thread.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        /// A new job holding `process`, or `None` when Windows refuses one.
+        pub(super) fn holding(process: RawHandle) -> Option<Job> {
+            // SAFETY: no security attributes and no name; the handle returned
+            // is owned by `Job` and closed on drop.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                return None;
+            }
+            let job = Job(handle);
+            // SAFETY: both handles are open for the duration of the call.
+            (unsafe { AssignProcessToJobObject(job.0, process as HANDLE) } != 0).then_some(job)
+        }
+
+        /// Ends every process in the job.
+        pub(super) fn terminate(&self) {
+            // SAFETY: the handle is open until drop.
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the handle is owned and closed exactly once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
 /// Longest an install command may run before it is killed.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -140,8 +185,13 @@ async fn run_install_command(
     let child = command.spawn().map_err(failed)?;
     #[cfg(any(unix, windows))]
     let group = child.id();
+    // Windows has no process groups: a job holds the shell and everything it
+    // starts, even after the shell itself has exited.
+    #[cfg(windows)]
+    let job = child.raw_handle().and_then(job::Job::holding);
     // Held, not dropped, on a timeout: dropping it kills the shell, and on
-    // Windows the tree under the shell is found only while the shell lives.
+    // Windows without a job the tree under the shell is found only while the
+    // shell lives.
     let wait = child.wait_with_output();
     tokio::pin!(wait);
     let output = match tokio::time::timeout(limit, &mut wait).await {
@@ -152,9 +202,10 @@ async fn run_install_command(
                 // SAFETY: kill(2) on the group the shell leads; no memory is touched.
                 unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
             }
-            // No process groups: kill the tree under the shell.
             #[cfg(windows)]
-            if let Some(pid) = group {
+            if let Some(job) = &job {
+                job.terminate();
+            } else if let Some(pid) = group {
                 let _ = tokio::process::Command::new("taskkill")
                     .args(["/T", "/F", "/PID", &pid.to_string()])
                     .output()
@@ -378,6 +429,29 @@ mod tests {
         assert!(
             released,
             "`ping` outlived the timeout and still holds {out:?}"
+        );
+    }
+
+    /// A timeout kills a process the install command started even after the
+    /// shell has exited: the started process would otherwise create `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_children_of_an_exited_shell() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!(
+            "start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"",
+            marker.display()
+        );
+        let err = run_install_command(SHELL, &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        std::thread::sleep(Duration::from_secs(5));
+        assert!(
+            !marker.exists(),
+            "the process the shell started outlived the timeout"
         );
     }
 
