@@ -12,6 +12,9 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 /// The environment variable that permits installation when set to `1`.
 pub const INSTALL_ENV: &str = "ACT_LITE_INSTALL_LSP";
 
+/// The shell that runs install commands.
+const SHELL: &str = if cfg!(windows) { "cmd" } else { "sh" };
+
 /// Checks if the LSP server command is available on PATH.
 pub fn is_installed(config: &ServerConfig) -> bool {
     which::which(&config.command).is_ok()
@@ -46,7 +49,8 @@ fn hint(install_cmd: Option<&str>, homepage: &str) -> String {
 /// Ensures the LSP server binary is available.
 ///
 /// Returns `Ok(())` if the binary is on PATH. When it is missing and
-/// `allow_install` is true, runs the server's install command through `sh -c`.
+/// `allow_install` is true, runs the server's install command through `sh -c`
+/// (`cmd /C` on Windows).
 /// Otherwise returns `NotInstalled` with the install command and homepage,
 /// and runs nothing.
 pub async fn ensure_installed(
@@ -85,7 +89,7 @@ async fn ensure_installed_with(
     );
 
     // Execute the install command
-    match run_install_command("sh", &install_cmd, INSTALL_TIMEOUT).await {
+    match run_install_command(SHELL, &install_cmd, INSTALL_TIMEOUT).await {
         Ok(()) => {
             // Verify the binary is now available
             if is_installed(config) {
@@ -108,7 +112,7 @@ async fn ensure_installed_with(
     }
 }
 
-/// Runs an install command through `shell -c` and returns Ok(()) on success or an error string.
+/// Runs an install command through `shell -c` (`shell /S /C` on Windows) and returns Ok(()) on success or an error string.
 /// If it runs longer than `limit`, the shell and every process it started are
 /// killed and an error returned.
 async fn run_install_command(
@@ -120,9 +124,12 @@ async fn run_install_command(
 
     let failed = |e: std::io::Error| format!("failed to execute shell: {e}");
     let mut command = tokio::process::Command::new(shell);
+    #[cfg(not(windows))]
+    command.arg("-c").arg(cmd);
+    // Verbatim: cmd.exe does not parse the quoting `arg` would add.
+    #[cfg(windows)]
+    command.raw_arg(format!("/S /C \"{cmd}\""));
     command
-        .arg("-c")
-        .arg(cmd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -167,6 +174,24 @@ async fn run_install_command(
 mod tests {
     use super::*;
 
+    /// A command for [`SHELL`] that creates the empty file `path`.
+    fn touch(path: &std::path::Path) -> String {
+        if cfg!(windows) {
+            format!("type nul > \"{}\"", path.display())
+        } else {
+            format!("touch {}", path.display())
+        }
+    }
+
+    /// A command for [`SHELL`] that runs for `secs` seconds.
+    fn sleep(secs: u32) -> String {
+        if cfg!(windows) {
+            format!("ping -n {} 127.0.0.1 > nul", secs + 1)
+        } else {
+            format!("sleep {secs}")
+        }
+    }
+
     /// A config for a binary that is not on PATH.
     fn missing() -> ServerConfig {
         ServerConfig::new("definitely-not-a-real-binary-xyzzy".to_string(), vec![])
@@ -195,7 +220,7 @@ mod tests {
         let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker");
-        let cmd = format!("touch {}", marker.display());
+        let cmd = touch(&marker);
         let err = ensure_installed_with(&missing(), "test", Some(cmd), true)
             .await
             .unwrap_err();
@@ -210,9 +235,18 @@ mod tests {
     async fn ensure_installed_on_opt_in_succeeds_when_the_binary_appears() {
         let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
-        let binary = dir.path().join("server");
+        // On Windows a file is executable by its extension.
+        let binary = dir.path().join(if cfg!(windows) {
+            "server.cmd"
+        } else {
+            "server"
+        });
         let config = ServerConfig::new(binary.display().to_string(), vec![]);
-        let cmd = format!("touch {0} && chmod +x {0}", binary.display());
+        let cmd = if cfg!(windows) {
+            touch(&binary)
+        } else {
+            format!("touch {0} && chmod +x {0}", binary.display())
+        };
         ensure_installed_with(&config, "test", Some(cmd), true)
             .await
             .unwrap();
@@ -221,7 +255,12 @@ mod tests {
     #[tokio::test]
     async fn ensure_installed_reports_a_failing_install_command() {
         let _path = crate::test_path::lock_path();
-        for (cmd, stdout) in [("echo out; echo err >&2; exit 3", true), ("exit 4", false)] {
+        let writes_both = if cfg!(windows) {
+            "echo out& echo err 1>&2& exit 3"
+        } else {
+            "echo out; echo err >&2; exit 3"
+        };
+        for (cmd, stdout) in [(writes_both, true), ("exit 4", false)] {
             let err = ensure_installed_with(&missing(), "test", Some(cmd.to_string()), true)
                 .await
                 .unwrap_err();
@@ -313,7 +352,7 @@ mod tests {
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            run_install_command("sh", "sleep 60", Duration::from_secs(1)),
+            run_install_command(SHELL, &sleep(60), Duration::from_secs(1)),
         )
         .await;
         let err = result
