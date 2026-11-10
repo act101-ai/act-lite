@@ -183,6 +183,24 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$rel\act-lite.exe") -or -not (Test-Path "$rel\.act-lite.install.lock")) { Write-Host "FAIL: $shell did not install into $rel"; $failed = $true }
             if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains $rel) { Write-Host "FAIL: $shell did not put the absolute $rel on the user PATH"; $failed = $true }
           }
+          foreach ($shell in 'powershell', 'pwsh') {
+            Write-Host "== ${shell}: an install dir with [ ] is literal; a sibling it would match as a wildcard is untouched"
+            $base = Join-Path $env:RUNNER_TEMP "lit-$shell"
+            New-Item -ItemType Directory -Force "$base\a" | Out-Null
+            Copy-Item "$env:SystemRoot\System32\whoami.exe" "$base\a\act-lite.exe"
+            $sibling = (Get-FileHash "$base\a\act-lite.exe").Hash
+            $env:ACT_LITE_INSTALL_DIR = "$base\[ab]"
+            $env:ACT_LITE_VERSION = 'v0.0.1'
+            foreach ($round in 1, 2) {
+              & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath "$base\[ab]\act-lite.exe")) { Write-Host "FAIL: $shell did not install into $base\[ab] (round $round)"; $failed = $true }
+            }
+            $env:ACT_LITE_TEST_FAIL_REPLACE = '1'
+            & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
+            Remove-Item Env:ACT_LITE_TEST_FAIL_REPLACE
+            if (-not (Test-Path -LiteralPath "$base\[ab]\act-lite.exe")) { Write-Host "FAIL: $shell lost $base\[ab]\act-lite.exe after a failed replacement"; $failed = $true }
+            if (-not (Test-Path "$base\a\act-lite.exe") -or (Get-FileHash "$base\a\act-lite.exe").Hash -ne $sibling) { Write-Host "FAIL: $shell changed the sibling $base\a\act-lite.exe"; $failed = $true }
+          }
           $env:ACT_LITE_INSTALL_DIR = $dir
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains $dir) { Write-Host "FAIL: $dir is not on the user PATH"; $failed = $true }

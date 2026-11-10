@@ -89,19 +89,19 @@ function Install-ActLite {
     if ($listed -ne "$name.zip" -or $expected -notmatch '^[0-9a-fA-F]{64}$') {
       Fail "$name.zip.sha256 is not a checksum for $name.zip; nothing was installed"
     }
-    $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
     if ($actual -ne $expected) {
       Fail "checksum mismatch for $name.zip; nothing was installed"
     }
     Write-Host "$name.zip: OK"
 
     try {
-      Expand-Archive -Path $zip -DestinationPath $tmp
+      Expand-Archive -LiteralPath $zip -DestinationPath $tmp
     } catch {
       Fail "could not extract $name.zip"
     }
     $new = Join-Path $tmp "$name\act-lite.exe"
-    if (-not (Test-Path -PathType Leaf $new)) {
+    if (-not (Test-Path -PathType Leaf -LiteralPath $new)) {
       Fail "$name.zip does not contain $name\act-lite.exe"
     }
 
@@ -110,13 +110,13 @@ function Install-ActLite {
     } catch {
       Fail "could not create $dir"
     }
-    if (Test-Path -PathType Container $exe) {
+    if (Test-Path -PathType Container -LiteralPath $exe) {
       Fail "$exe is a directory; remove it or choose another ACT_LITE_INSTALL_DIR"
     }
 
     $staged = Join-Path $dir ".act-lite.$PID.tmp.exe"
     try {
-      Copy-Item -Force $new $staged
+      Copy-Item -Force -LiteralPath $new -Destination $staged
     } catch {
       Fail "could not write into $dir"
     }
@@ -148,22 +148,22 @@ function Install-ActLite {
       }
     }
     $old = Join-Path $dir '.act-lite.old.exe'
-    $hadExe = Test-Path -PathType Leaf $exe
+    $hadExe = Test-Path -PathType Leaf -LiteralPath $exe
     if ($hadExe) {
-      Remove-Item -Force -ErrorAction SilentlyContinue $old
+      Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $old
       try {
-        Move-Item -Force $exe $old
+        Move-Item -Force -LiteralPath $exe -Destination $old
       } catch {
         Fail "could not replace $exe; close the programs that use it and run the installer again"
       }
     }
     try {
       if ($env:ACT_LITE_TEST_FAIL_REPLACE) { throw 'ACT_LITE_TEST_FAIL_REPLACE' }
-      Move-Item -Force $staged $exe
+      Move-Item -Force -LiteralPath $staged -Destination $exe
     } catch {
       if ($hadExe) {
         try {
-          Move-Item -Force $old $exe
+          Move-Item -Force -LiteralPath $old -Destination $exe
         } catch {
           Fail "could not replace $exe, nor restore it; the previous version is $old"
         }
@@ -171,7 +171,7 @@ function Install-ActLite {
       Fail "could not replace $exe; the existing install was not changed"
     }
     $staged = $null
-    Remove-Item -Force -ErrorAction SilentlyContinue $old
+    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $old
     $lock.Dispose()
     $lock = $null
 
@@ -201,9 +201,9 @@ function Install-ActLite {
       $lock.Dispose()
     }
     if ($staged) {
-      Remove-Item -Force -ErrorAction SilentlyContinue $staged
+      Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $staged
     }
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
   }
 }
 
