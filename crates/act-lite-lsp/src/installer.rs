@@ -8,11 +8,18 @@ use tracing::{debug, info};
 
 #[cfg(windows)]
 mod job {
-    use std::os::windows::io::RawHandle;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
     };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    /// The creation flag that starts the shell suspended, so it is in its job
+    /// before it can start anything.
+    pub(super) const SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
     /// A job object that holds an install command's shell and every process
     /// the shell starts.
@@ -23,17 +30,31 @@ mod job {
     unsafe impl Sync for Job {}
 
     impl Job {
-        /// A new job holding `process`, or `None` when Windows refuses one.
-        pub(super) fn holding(process: RawHandle) -> Option<Job> {
+        /// Puts `child`, started with [`SUSPENDED`], in a new job, then lets
+        /// it run. On an error `child` has not run.
+        pub(super) fn contain(child: &tokio::process::Child) -> Result<Job, String> {
+            let (Some(process), Some(pid)) = (child.raw_handle(), child.id()) else {
+                return Err("the shell has no process handle".to_string());
+            };
             // SAFETY: no security attributes and no name; the handle returned
             // is owned by `Job` and closed on drop.
             let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
             if handle.is_null() {
-                return None;
+                return Err(format!(
+                    "no job object: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
             let job = Job(handle);
             // SAFETY: both handles are open for the duration of the call.
-            (unsafe { AssignProcessToJobObject(job.0, process as HANDLE) } != 0).then_some(job)
+            if unsafe { AssignProcessToJobObject(job.0, process as HANDLE) } == 0 {
+                return Err(format!(
+                    "the shell could not join a job object: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            resume(pid)?;
+            Ok(job)
         }
 
         /// Ends every process in the job.
@@ -48,6 +69,47 @@ mod job {
             // SAFETY: the handle is owned and closed exactly once.
             unsafe { CloseHandle(self.0) };
         }
+    }
+
+    /// Resumes the threads of process `pid`; a process started suspended has
+    /// one, its main thread.
+    fn resume(pid: u32) -> Result<(), String> {
+        let failed = || {
+            format!(
+                "the shell could not be resumed: {}",
+                std::io::Error::last_os_error()
+            )
+        };
+        // SAFETY: a snapshot of all threads; the handle is closed below.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(failed());
+        }
+        // SAFETY: THREADENTRY32 is plain data; dwSize is set as the API requires.
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut resumed = 0;
+        // SAFETY: `snapshot` is open and `entry` is a valid THREADENTRY32.
+        let mut more = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+        while more {
+            if entry.th32OwnerProcessID == pid {
+                // SAFETY: the thread handle is closed right after use.
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if !thread.is_null() {
+                    // SAFETY: `thread` is open with THREAD_SUSPEND_RESUME.
+                    if unsafe { ResumeThread(thread) } != u32::MAX {
+                        resumed += 1;
+                    }
+                    // SAFETY: closed exactly once.
+                    unsafe { CloseHandle(thread) };
+                }
+            }
+            // SAFETY: as for Thread32First.
+            more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+        }
+        // SAFETY: closed exactly once.
+        unsafe { CloseHandle(snapshot) };
+        if resumed == 0 { Err(failed()) } else { Ok(()) }
     }
 }
 
@@ -182,16 +244,23 @@ async fn run_install_command(
     // Its own process group, so a timeout can kill what the shell started.
     #[cfg(unix)]
     command.process_group(0);
-    let child = command.spawn().map_err(failed)?;
-    #[cfg(any(unix, windows))]
-    let group = child.id();
     // Windows has no process groups: a job holds the shell and everything it
     // starts, even after the shell itself has exited.
     #[cfg(windows)]
-    let job = child.raw_handle().and_then(job::Job::holding);
-    // Held, not dropped, on a timeout: dropping it kills the shell, and on
-    // Windows without a job the tree under the shell is found only while the
-    // shell lives.
+    command.creation_flags(job::SUSPENDED);
+    let child = command.spawn().map_err(failed)?;
+    #[cfg(unix)]
+    let group = child.id();
+    #[cfg(windows)]
+    let job = match job::Job::contain(&child) {
+        Ok(job) => job,
+        Err(e) => {
+            // Dropping the suspended shell kills it before it ran anything.
+            drop(child);
+            return Err(e);
+        }
+    };
+    // Held, not dropped, on a timeout: dropping it kills only the shell.
     let wait = child.wait_with_output();
     tokio::pin!(wait);
     let output = match tokio::time::timeout(limit, &mut wait).await {
@@ -203,14 +272,7 @@ async fn run_install_command(
                 unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
             }
             #[cfg(windows)]
-            if let Some(job) = &job {
-                job.terminate();
-            } else if let Some(pid) = group {
-                let _ = tokio::process::Command::new("taskkill")
-                    .args(["/T", "/F", "/PID", &pid.to_string()])
-                    .output()
-                    .await;
-            }
+            job.terminate();
             return Err(format!("timed out after {} s", limit.as_secs()));
         }
     };
@@ -453,6 +515,25 @@ mod tests {
             !marker.exists(),
             "the process the shell started outlived the timeout"
         );
+    }
+
+    /// The shell starts suspended and runs only once it is in its job, so
+    /// nothing it starts can escape the job.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_shell_runs_only_once_it_is_in_its_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let mut command = tokio::process::Command::new(SHELL);
+        command
+            .raw_arg(format!("/S /C \"type nul > {}\"", marker.display()))
+            .creation_flags(job::SUSPENDED);
+        let child = command.spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(!marker.exists(), "the shell ran before it was in its job");
+        let _job = job::Job::contain(&child).unwrap();
+        assert!(child.wait_with_output().await.unwrap().status.success());
+        assert!(marker.exists(), "the shell did not run once resumed");
     }
 
     #[tokio::test]
