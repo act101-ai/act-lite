@@ -579,10 +579,7 @@ pub fn execute_repo_outline(
         }
 
         // Always workspace-relative for glob filter matching
-        let ws_rel = path
-            .strip_prefix(workspace_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let ws_rel = crate::output::rel_slash(workspace_root, path).unwrap_or_default();
 
         // Apply include/exclude glob filters against workspace-relative path
         if let Some(inc) = include
@@ -598,9 +595,7 @@ pub fn execute_repo_outline(
 
         // Display path respects the relative flag
         let display_path = if relative {
-            path.strip_prefix(traversal_root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or(ws_rel.clone())
+            crate::output::rel_slash(traversal_root, path).unwrap_or(ws_rel.clone())
         } else {
             ws_rel.clone()
         };
@@ -670,7 +665,7 @@ pub fn execute_repo_outline(
     languages.sort_by_key(|l| std::cmp::Reverse(l.lines));
 
     Ok(RepoOutlineResult {
-        root: traversal_root.display().to_string(),
+        root: crate::output::display_path(traversal_root),
         files,
         total_files,
         truncated,
@@ -784,8 +779,8 @@ pub fn execute_symbols_batch_by_files(
 
         let skeleton = act_lite_parser::execute_skeleton(&source)?;
         if let QueryResult::Skeleton(sk) = skeleton {
-            let rel_path = file.strip_prefix(workspace_root).unwrap_or(file);
-            let rel_str = rel_path.display().to_string();
+            let rel_str = crate::output::rel_slash(workspace_root, file)
+                .unwrap_or_else(|| file.display().to_string());
 
             let mut symbols = Vec::new();
             for decl in &sk.declarations {

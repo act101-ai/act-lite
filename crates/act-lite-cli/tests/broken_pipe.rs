@@ -1,7 +1,9 @@
 //! A closed stdout pipe ends act-lite quietly: no panic, no lost error, and
 //! an exit code that tells the shell the output was cut.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Read;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};

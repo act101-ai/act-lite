@@ -272,7 +272,7 @@ impl ActLiteServer {
         let response = serde_json::json!({
             "name": "act-lite",
             "version": env!("CARGO_PKG_VERSION"),
-            "root": self.root.display().to_string(),
+            "root": crate::output::display_path(&self.root),
             "languages": languages,
             "lsp": lsp,
         });
@@ -564,7 +564,7 @@ impl ActLiteServer {
                         "file": p.file,
                         "resolved_by": lsp_resolved_by(grammar),
                         "references": refs.ranges.iter().map(|range| serde_json::json!({
-                            "file": range.start().file().display().to_string(),
+                            "file": crate::output::display_path(range.start().file()),
                             "line": range.start().line(),
                         })).collect::<Vec<_>>(),
                     });
@@ -621,7 +621,7 @@ impl ActLiteServer {
             "file": p.file,
             "resolved_by": format!("tree-sitter workspace baseline (name-level; {why})"),
             "references": references.iter().map(|r| serde_json::json!({
-                "file": r.file().display().to_string(),
+                "file": crate::output::display_path(r.file()),
                 "line": r.line(),
             })).collect::<Vec<_>>(),
         });
@@ -696,7 +696,7 @@ impl ActLiteServer {
             "callers": callers.callers.iter().map(|sym| serde_json::json!({
                 "name": sym.name(),
                 "kind": format!("{:?}", sym.kind()),
-                "file": sym.file().display().to_string(),
+                "file": crate::output::display_path(sym.file()),
                 "line": sym.range().start().line(),
             })).collect::<Vec<_>>(),
         });

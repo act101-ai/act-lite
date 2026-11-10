@@ -850,7 +850,9 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct BrokenFlush(Vec<u8>);
+    #[cfg(unix)]
     impl Write for BrokenFlush {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.0.extend_from_slice(buf);

@@ -241,14 +241,19 @@ fn workspace_flag_selects_the_project_root_as_given() {
 fn workspace_flag_with_a_missing_dir_errors() {
     let tmp = project();
     let missing = tmp.path().join("nope").to_str().unwrap().to_string();
-    act(&tmp)
+    let out = act(&tmp)
         .args(["env", "list", "--workspace", &missing])
         .assert()
-        .failure()
-        .stderr(predicates::str::contains(format!(
+        .failure();
+    // stderr is JSON, which escapes the `\` of a Windows path; compare decoded.
+    let err: serde_json::Value = serde_json::from_slice(&out.get_output().stderr).unwrap();
+    assert_eq!(
+        err["error"]["chain"][0],
+        format!(
             "--workspace {missing} does not exist or is not readable; pass an existing project \
              directory"
-        )));
+        )
+    );
 }
 
 #[test]

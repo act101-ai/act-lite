@@ -1230,12 +1230,21 @@ mod tests {
         assert_eq!(markup_to_string(markup), "const x: number = 5");
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_url_to_path_valid() {
         let uri: lsp_types::Uri = "file:///home/user/test.ts".parse().unwrap();
         let result = url_to_path(&uri);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PathBuf::from("/home/user/test.ts"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_url_to_path_valid() {
+        let uri: lsp_types::Uri = "file:///C:/home/user/test.ts".parse().unwrap();
+        let result = url_to_path(&uri);
+        assert_eq!(result.unwrap().as_os_str(), r"C:\home\user\test.ts");
     }
 
     #[test]

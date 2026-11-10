@@ -158,6 +158,10 @@ pub struct LspClient {
     #[cfg(unix)]
     process_group: Option<i32>,
 
+    /// Holds the server and every process it starts; dropping it ends them.
+    #[cfg(windows)]
+    job: Option<crate::job::Job>,
+
     /// Channel for sending messages to the write task.
     message_tx: mpsc::UnboundedSender<OutgoingMessage>,
 
@@ -288,7 +292,7 @@ impl LspClient {
         );
 
         // Spawn the LSP server process
-        let mut command = Command::new(&config.command);
+        let mut command = Command::new(server_program(&config.command));
         command
             .args(&config.args)
             .current_dir(
@@ -308,10 +312,21 @@ impl LspClient {
                 language: language.clone(),
                 source: e,
             })?;
+        // An npm `.cmd` shim runs the server under `cmd.exe`: the job holds both.
+        // Killed if it cannot join its job: suspended, it would never exit.
+        #[cfg(windows)]
+        command
+            .creation_flags(crate::job::SUSPENDED)
+            .kill_on_drop(true);
         #[cfg(not(unix))]
         let mut child = command.spawn().map_err(|e| LspError::ServerSpawnFailed {
             language: language.clone(),
             source: e,
+        })?;
+        #[cfg(windows)]
+        let job = crate::job::Job::contain(&child).map_err(|e| LspError::ServerSpawnFailed {
+            language: language.clone(),
+            source: std::io::Error::other(e),
         })?;
 
         // With the guard's `process_group(0)` the child's pid IS its
@@ -387,6 +402,8 @@ impl LspClient {
             process: Arc::new(Mutex::new(Some(child))),
             #[cfg(unix)]
             process_group,
+            #[cfg(windows)]
+            job: Some(job),
             message_tx,
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
@@ -846,7 +863,6 @@ impl LspClientTrait for LspClient {
         if first_open {
             self.wait_for_indexing(INDEXING_BUDGET_MS.min(left())).await;
         }
-        let wanted = uri.as_str();
         let deadline = Duration::from_millis(if first_open {
             timeout_ms.min(left())
         } else {
@@ -858,7 +874,10 @@ impl LspClientTrait for LspClient {
                 match rx.recv().await {
                     Ok((method, params)) => {
                         if method == "textDocument/publishDiagnostics"
-                            && params.get("uri").and_then(|u| u.as_str()) == Some(wanted)
+                            && params
+                                .get("uri")
+                                .and_then(|u| u.as_str())
+                                .is_some_and(|u| same_document(u, uri))
                         {
                             return true;
                         }
@@ -1047,6 +1066,10 @@ impl LspClientTrait for LspClient {
             tokio::time::sleep(Duration::from_millis(200)).await;
             signal_process_group(pgid, libc::SIGKILL);
         }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
 
         // `kill` also waits, which reaps the child rather than leaving a zombie.
         if let Some(mut child) = self.process.lock().await.take() {
@@ -1055,6 +1078,47 @@ impl LspClientTrait for LspClient {
 
         Ok(())
     }
+}
+
+/// True when `published` names the document `uri`: the same text, or the
+/// same file in another spelling. vscode-languageserver servers write
+/// `file:///C:/a` back as `file:///c%3A/a`; on Windows a path may also
+/// differ in case and still name the same file.
+fn same_document(published: &str, uri: &Uri) -> bool {
+    published == uri.as_str()
+        || published.parse::<Uri>().is_ok_and(|p| {
+            match (
+                crate::types::uri_to_path(&p),
+                crate::types::uri_to_path(uri),
+            ) {
+                (Ok(a), Ok(b)) => a == b || same_file_on_windows(&a, &b),
+                _ => false,
+            }
+        })
+}
+
+#[cfg(windows)]
+fn same_file_on_windows(a: &Path, b: &Path) -> bool {
+    same_file::is_same_file(a, b).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn same_file_on_windows(_: &Path, _: &Path) -> bool {
+    false
+}
+
+/// The program to spawn for a server `command`.
+///
+/// On Windows `Command::new` finds only `.exe` files on `PATH`, but npm
+/// installs servers as `.cmd` shims, so the command is resolved through
+/// `PATHEXT` there, as `installer::is_installed` finds it.
+fn server_program(command: &str) -> PathBuf {
+    if cfg!(windows)
+        && let Ok(path) = which::which(command)
+    {
+        return path;
+    }
+    PathBuf::from(command)
 }
 
 /// Sends `sig` to every process in group `pgid`.
@@ -1098,6 +1162,85 @@ mod tests {
     use crate::types::JsonRpcError;
     use std::str::FromStr;
 
+    #[test]
+    fn same_document_matches_the_same_text() {
+        let uri: Uri = "file:///work/main.ts".parse().unwrap();
+        assert!(same_document("file:///work/main.ts", &uri));
+        assert!(!same_document("file:///work/other.ts", &uri));
+    }
+
+    /// TypeScript's server publishes diagnostics for `file:///C:/a` as
+    /// `file:///c%3A/a`.
+    #[cfg(windows)]
+    #[test]
+    fn same_document_matches_another_spelling_of_a_drive_path() {
+        let uri: Uri = "file:///C:/work/main.ts".parse().unwrap();
+        assert!(same_document("file:///c%3A/work/main.ts", &uri));
+        assert!(!same_document("file:///c%3A/work/other.ts", &uri));
+    }
+
+    /// A path that differs in case names the same file on a case-insensitive
+    /// Windows directory.
+    #[cfg(windows)]
+    #[test]
+    fn same_document_matches_a_differently_cased_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Main.ts");
+        std::fs::write(&file, "").unwrap();
+        std::fs::write(dir.path().join("other.ts"), "").unwrap();
+        let uri = crate::types::path_to_uri(&file).unwrap();
+        let lower: Uri = uri.as_str().to_lowercase().parse().unwrap();
+        assert_ne!(uri.as_str(), lower.as_str());
+        assert!(same_document(lower.as_str(), &uri));
+        let other = crate::types::path_to_uri(&dir.path().join("other.ts")).unwrap();
+        assert!(!same_document(other.as_str(), &uri));
+    }
+
+    /// A server behind a `.cmd` shim runs under `cmd.exe`; dropping the
+    /// client ends the whole tree: the grandchild would otherwise create
+    /// `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dropping_the_client_ends_a_cmd_shim_servers_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        std::fs::write(
+            dir.path().join("typescript-language-server.cmd"),
+            format!(
+                // Full paths: PATH holds only the shim's directory.
+                "@start /b %SystemRoot%\\System32\\cmd.exe /c \"%SystemRoot%\\System32\\ping.exe -n 4 127.0.0.1 > nul & type nul > {}\"\r\n@%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 > nul\r\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let _path = crate::test_path::PathGuard::set(dir.path());
+        let config = ServerConfig::new("typescript-language-server".to_string(), vec![]);
+        let client = LspClient::spawn("typescript".to_string(), config)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(client);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!marker.exists(), "the server's tree outlived the client");
+    }
+
+    /// npm installs a server as a `.cmd` shim, which `Command::new` alone
+    /// does not find on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn server_program_finds_a_cmd_shim_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("typescript-language-server.cmd"),
+            "@exit 0\r\n",
+        )
+        .unwrap();
+        let _path = crate::test_path::PathGuard::set(dir.path());
+        let program = server_program("typescript-language-server");
+        let status = std::process::Command::new(program).status().unwrap();
+        assert!(status.success());
+    }
+
     fn create_test_client() -> (LspClient, mpsc::UnboundedReceiver<OutgoingMessage>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let client = LspClient {
@@ -1105,6 +1248,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1419,6 +1564,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1460,6 +1607,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1562,6 +1711,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1611,6 +1762,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1667,6 +1820,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1693,6 +1848,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2233,6 +2390,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2304,6 +2463,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2371,6 +2532,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2441,6 +2604,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2487,6 +2652,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2543,6 +2710,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2588,6 +2757,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2666,6 +2837,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),

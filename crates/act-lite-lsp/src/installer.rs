@@ -12,6 +12,9 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 /// The environment variable that permits installation when set to `1`.
 pub const INSTALL_ENV: &str = "ACT_LITE_INSTALL_LSP";
 
+/// The shell that runs install commands.
+const SHELL: &str = if cfg!(windows) { "cmd" } else { "sh" };
+
 /// Checks if the LSP server command is available on PATH.
 pub fn is_installed(config: &ServerConfig) -> bool {
     which::which(&config.command).is_ok()
@@ -46,7 +49,8 @@ fn hint(install_cmd: Option<&str>, homepage: &str) -> String {
 /// Ensures the LSP server binary is available.
 ///
 /// Returns `Ok(())` if the binary is on PATH. When it is missing and
-/// `allow_install` is true, runs the server's install command through `sh -c`.
+/// `allow_install` is true, runs the server's install command through `sh -c`
+/// (`cmd /C` on Windows).
 /// Otherwise returns `NotInstalled` with the install command and homepage,
 /// and runs nothing.
 pub async fn ensure_installed(
@@ -85,7 +89,7 @@ async fn ensure_installed_with(
     );
 
     // Execute the install command
-    match run_install_command("sh", &install_cmd, INSTALL_TIMEOUT).await {
+    match run_install_command(SHELL, &install_cmd, INSTALL_TIMEOUT).await {
         Ok(()) => {
             // Verify the binary is now available
             if is_installed(config) {
@@ -108,7 +112,7 @@ async fn ensure_installed_with(
     }
 }
 
-/// Runs an install command through `shell -c` and returns Ok(()) on success or an error string.
+/// Runs an install command through `shell -c` (`shell /S /C` on Windows) and returns Ok(()) on success or an error string.
 /// If it runs longer than `limit`, the shell and every process it started are
 /// killed and an error returned.
 async fn run_install_command(
@@ -120,9 +124,12 @@ async fn run_install_command(
 
     let failed = |e: std::io::Error| format!("failed to execute shell: {e}");
     let mut command = tokio::process::Command::new(shell);
+    #[cfg(not(windows))]
+    command.arg("-c").arg(cmd);
+    // Verbatim: cmd.exe does not parse the quoting `arg` would add.
+    #[cfg(windows)]
+    command.raw_arg(format!("/S /C \"{cmd}\""));
     command
-        .arg("-c")
-        .arg(cmd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -130,10 +137,26 @@ async fn run_install_command(
     // Its own process group, so a timeout can kill what the shell started.
     #[cfg(unix)]
     command.process_group(0);
+    // Windows has no process groups: a job holds the shell and everything it
+    // starts, even after the shell itself has exited.
+    #[cfg(windows)]
+    command.creation_flags(crate::job::SUSPENDED);
     let child = command.spawn().map_err(failed)?;
     #[cfg(unix)]
     let group = child.id();
-    let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
+    #[cfg(windows)]
+    let job = match crate::job::Job::contain(&child) {
+        Ok(job) => job,
+        Err(e) => {
+            // Dropping the suspended shell kills it before it ran anything.
+            drop(child);
+            return Err(e);
+        }
+    };
+    // Held, not dropped, on a timeout: dropping it kills only the shell.
+    let wait = child.wait_with_output();
+    tokio::pin!(wait);
+    let output = match tokio::time::timeout(limit, &mut wait).await {
         Ok(output) => output.map_err(failed)?,
         Err(_) => {
             #[cfg(unix)]
@@ -141,6 +164,8 @@ async fn run_install_command(
                 // SAFETY: kill(2) on the group the shell leads; no memory is touched.
                 unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
             }
+            #[cfg(windows)]
+            job.terminate();
             return Err(format!("timed out after {} s", limit.as_secs()));
         }
     };
@@ -166,6 +191,24 @@ async fn run_install_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A command for [`SHELL`] that creates the empty file `path`.
+    fn touch(path: &std::path::Path) -> String {
+        if cfg!(windows) {
+            format!("type nul > \"{}\"", path.display())
+        } else {
+            format!("touch {}", path.display())
+        }
+    }
+
+    /// A command for [`SHELL`] that runs for `secs` seconds.
+    fn sleep(secs: u32) -> String {
+        if cfg!(windows) {
+            format!("ping -n {} 127.0.0.1 > nul", secs + 1)
+        } else {
+            format!("sleep {secs}")
+        }
+    }
 
     /// A config for a binary that is not on PATH.
     fn missing() -> ServerConfig {
@@ -195,7 +238,7 @@ mod tests {
         let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("marker");
-        let cmd = format!("touch {}", marker.display());
+        let cmd = touch(&marker);
         let err = ensure_installed_with(&missing(), "test", Some(cmd), true)
             .await
             .unwrap_err();
@@ -210,9 +253,18 @@ mod tests {
     async fn ensure_installed_on_opt_in_succeeds_when_the_binary_appears() {
         let _path = crate::test_path::lock_path();
         let dir = tempfile::tempdir().unwrap();
-        let binary = dir.path().join("server");
+        // On Windows a file is executable by its extension.
+        let binary = dir.path().join(if cfg!(windows) {
+            "server.cmd"
+        } else {
+            "server"
+        });
         let config = ServerConfig::new(binary.display().to_string(), vec![]);
-        let cmd = format!("touch {0} && chmod +x {0}", binary.display());
+        let cmd = if cfg!(windows) {
+            touch(&binary)
+        } else {
+            format!("touch {0} && chmod +x {0}", binary.display())
+        };
         ensure_installed_with(&config, "test", Some(cmd), true)
             .await
             .unwrap();
@@ -221,7 +273,12 @@ mod tests {
     #[tokio::test]
     async fn ensure_installed_reports_a_failing_install_command() {
         let _path = crate::test_path::lock_path();
-        for (cmd, stdout) in [("echo out; echo err >&2; exit 3", true), ("exit 4", false)] {
+        let writes_both = if cfg!(windows) {
+            "echo out& echo err 1>&2& exit 3"
+        } else {
+            "echo out; echo err >&2; exit 3"
+        };
+        for (cmd, stdout) in [(writes_both, true), ("exit 4", false)] {
             let err = ensure_installed_with(&missing(), "test", Some(cmd.to_string()), true)
                 .await
                 .unwrap_err();
@@ -307,13 +364,106 @@ mod tests {
         assert!(!survived, "`sleep 60` (pid {pid}) outlived the timeout");
     }
 
+    /// A timeout kills what the install command started, not only the shell:
+    /// the file `ping`'s output goes to is deletable once nothing holds it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_the_commands_children() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let cmd = format!("ping -n 61 127.0.0.1 > \"{}\"", out.display());
+        let err = run_install_command(SHELL, &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let released = (0..40).any(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::remove_file(&out).is_ok()
+        });
+        assert!(
+            released,
+            "`ping` outlived the timeout and still holds {out:?}"
+        );
+    }
+
+    /// A timeout kills a process the install command started even after the
+    /// shell has exited: the started process would otherwise create `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_children_of_an_exited_shell() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!(
+            "start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"",
+            marker.display()
+        );
+        let err = run_install_command(SHELL, &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        std::thread::sleep(Duration::from_secs(5));
+        assert!(
+            !marker.exists(),
+            "the process the shell started outlived the timeout"
+        );
+    }
+
+    /// An install dropped before it ends (its MCP session closed) ends every
+    /// process it started: the started process would otherwise create `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_dropped_install_ends_the_processes_it_started() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!(
+            "start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"",
+            marker.display()
+        );
+        let dropped = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_install_command(SHELL, &cmd, Duration::from_secs(60)),
+        )
+        .await;
+        assert!(
+            dropped.is_err(),
+            "the install ended on its own: {dropped:?}"
+        );
+        std::thread::sleep(Duration::from_secs(5));
+        assert!(
+            !marker.exists(),
+            "the process the dropped install started kept running"
+        );
+    }
+
+    /// The shell starts suspended and runs only once it is in its job, so
+    /// nothing it starts can escape the job.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_shell_runs_only_once_it_is_in_its_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let mut command = tokio::process::Command::new(SHELL);
+        command
+            .raw_arg(format!("/S /C \"type nul > {}\"", marker.display()))
+            .creation_flags(crate::job::SUSPENDED);
+        let child = command.spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(!marker.exists(), "the shell ran before it was in its job");
+        let _job = crate::job::Job::contain(&child).unwrap();
+        assert!(child.wait_with_output().await.unwrap().status.success());
+        assert!(marker.exists(), "the shell did not run once resumed");
+    }
+
     #[tokio::test]
     async fn install_command_times_out() {
         let _path = crate::test_path::lock_path();
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            run_install_command("sh", "sleep 60", Duration::from_secs(1)),
+            run_install_command(SHELL, &sleep(60), Duration::from_secs(1)),
         )
         .await;
         let err = result

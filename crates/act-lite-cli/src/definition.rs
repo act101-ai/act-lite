@@ -826,7 +826,7 @@ pub(crate) fn definition_json(symbol: &str, range: &act_lite_core::Range) -> ser
     serde_json::json!({
         "symbol": symbol,
         "definition": {
-            "file": range.start().file().display().to_string(),
+            "file": crate::output::display_path(range.start().file()),
             "line": range.start().line(),
             "column": range.start().column(),
             "end_line": range.end().line(),
