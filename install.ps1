@@ -62,6 +62,9 @@ function Install-ActLite {
 
   $base = if ($env:ACT_LITE_BASE_URL) { $env:ACT_LITE_BASE_URL } else { "https://github.com/$repo/releases/download" }
   $dir = if ($env:ACT_LITE_INSTALL_DIR) { $env:ACT_LITE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\act-lite\bin' }
+  # Absolute, against PowerShell's location: .NET calls (the install lock) resolve
+  # a relative path against the process directory, which can differ.
+  $dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
   $name = "act-lite-$tag-$target"
   $exe = Join-Path $dir 'act-lite.exe'
 

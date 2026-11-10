@@ -173,6 +173,17 @@ jobs:
             & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
             if ($LASTEXITCODE -eq 0 -or (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell installed despite a checksum mismatch"; $failed = $true }
           }
+          foreach ($shell in 'powershell', 'pwsh') {
+            Write-Host "== ${shell}: a relative ACT_LITE_INSTALL_DIR is taken from PowerShell's location"
+            $rel = Join-Path $env:RUNNER_TEMP "rel-$shell"
+            $env:ACT_LITE_INSTALL_DIR = ".\rel-$shell"
+            $env:ACT_LITE_VERSION = 'v0.0.1'
+            # The process directory differs from PowerShell's location.
+            & $shell -NoProfile -ExecutionPolicy Bypass -Command "[Environment]::CurrentDirectory = `$env:SystemRoot; Set-Location `$env:RUNNER_TEMP; $run"
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$rel\act-lite.exe") -or -not (Test-Path "$rel\.act-lite.install.lock")) { Write-Host "FAIL: $shell did not install into $rel"; $failed = $true }
+            if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains $rel) { Write-Host "FAIL: $shell did not put the absolute $rel on the user PATH"; $failed = $true }
+          }
+          $env:ACT_LITE_INSTALL_DIR = $dir
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains $dir) { Write-Host "FAIL: $dir is not on the user PATH"; $failed = $true }
           Stop-Process -Id $server.Id

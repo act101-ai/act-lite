@@ -158,6 +158,10 @@ pub struct LspClient {
     #[cfg(unix)]
     process_group: Option<i32>,
 
+    /// Holds the server and every process it starts; dropping it ends them.
+    #[cfg(windows)]
+    job: Option<crate::job::Job>,
+
     /// Channel for sending messages to the write task.
     message_tx: mpsc::UnboundedSender<OutgoingMessage>,
 
@@ -308,10 +312,18 @@ impl LspClient {
                 language: language.clone(),
                 source: e,
             })?;
+        // An npm `.cmd` shim runs the server under `cmd.exe`: the job holds both.
+        #[cfg(windows)]
+        command.creation_flags(crate::job::SUSPENDED);
         #[cfg(not(unix))]
         let mut child = command.spawn().map_err(|e| LspError::ServerSpawnFailed {
             language: language.clone(),
             source: e,
+        })?;
+        #[cfg(windows)]
+        let job = crate::job::Job::contain(&child).map_err(|e| LspError::ServerSpawnFailed {
+            language: language.clone(),
+            source: std::io::Error::other(e),
         })?;
 
         // With the guard's `process_group(0)` the child's pid IS its
@@ -387,6 +399,8 @@ impl LspClient {
             process: Arc::new(Mutex::new(Some(child))),
             #[cfg(unix)]
             process_group,
+            #[cfg(windows)]
+            job: Some(job),
             message_tx,
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1047,6 +1061,10 @@ impl LspClientTrait for LspClient {
             tokio::time::sleep(Duration::from_millis(200)).await;
             signal_process_group(pgid, libc::SIGKILL);
         }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
 
         // `kill` also waits, which reaps the child rather than leaving a zombie.
         if let Some(mut child) = self.process.lock().await.take() {
@@ -1112,6 +1130,33 @@ mod tests {
     use crate::types::JsonRpcError;
     use std::str::FromStr;
 
+    /// A server behind a `.cmd` shim runs under `cmd.exe`; dropping the
+    /// client ends the whole tree: the grandchild would otherwise create
+    /// `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dropping_the_client_ends_a_cmd_shim_servers_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        std::fs::write(
+            dir.path().join("typescript-language-server.cmd"),
+            format!(
+                "@start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"\r\n@ping -n 30 127.0.0.1 > nul\r\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let _path = crate::test_path::PathGuard::set(dir.path());
+        let config = ServerConfig::new("typescript-language-server".to_string(), vec![]);
+        let client = LspClient::spawn("typescript".to_string(), config)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        drop(client);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!marker.exists(), "the server's tree outlived the client");
+    }
+
     /// npm installs a server as a `.cmd` shim, which `Command::new` alone
     /// does not find on Windows.
     #[cfg(windows)]
@@ -1136,6 +1181,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1450,6 +1497,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1491,6 +1540,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1593,6 +1644,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1642,6 +1695,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1698,6 +1753,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -1724,6 +1781,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2264,6 +2323,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2335,6 +2396,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2402,6 +2465,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2472,6 +2537,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2518,6 +2585,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2574,6 +2643,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2619,6 +2690,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
@@ -2697,6 +2770,8 @@ mod tests {
             process: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             process_group: None,
+            #[cfg(windows)]
+            job: None,
             message_tx: tx,
             pending: Arc::clone(&pending),
             next_id: Arc::new(AtomicU64::new(1)),

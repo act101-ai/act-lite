@@ -57,6 +57,8 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod installer;
+#[cfg(windows)]
+mod job;
 pub mod mock;
 pub mod pool;
 pub mod servers;
