@@ -40,12 +40,13 @@ is fixed forward: a patch version on a `release/<major>.<minor>` branch cut
 from the tag, or the next release from `main`.
 
 A tag push runs `release.yml`: the `floor` job (the checks above), one build
-per target, a smoke of every archive, then the GitHub release with the four
-archives and their `.sha256` files. The one-line installer
-(`install.sh`) resolves the latest release, so a new tag is live for users as
-soon as the run finishes. Before you announce it: download the assets, verify
-the checksums, run `act-lite --version` from an archive, and run
-`install.sh` once.
+per target, a smoke of every archive, then the GitHub release with the five
+archives (four `.tar.gz`, one Windows `.zip`) and their `.sha256` files. The
+one-line installers (`install.sh`, `install.ps1`) resolve the latest release,
+so a new tag is live for users as soon as the run finishes. Before you
+announce it: download the assets, verify the checksums, run
+`act-lite --version` from an archive, and run `install.sh` and `install.ps1`
+once.
 
 ## Plugin skills
 

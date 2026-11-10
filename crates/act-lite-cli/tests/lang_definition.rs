@@ -383,6 +383,7 @@ fn julia_dotted_use_matches_the_whole_field_expression() {
 }
 
 /// `answer` finished within five seconds, or the test fails.
+#[cfg(unix)]
 fn within_five_seconds(answer: impl FnOnce() -> Result<String, String> + Send + 'static) -> String {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

@@ -460,6 +460,21 @@ curl -fsSL https://raw.githubusercontent.com/act101-ai/act-lite/main/install.sh 
   | ACT_LITE_VERSION=v0.1.0 ACT_LITE_INSTALL_DIR=/usr/local/bin sh
 ```
 
+On Windows, run in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/act101-ai/act-lite/main/install.ps1 | iex
+```
+
+The script downloads the archive, checks its SHA-256 checksum, installs
+`act-lite.exe` into `%LOCALAPPDATA%\Programs\act-lite\bin`, and adds that
+directory to your user `PATH`. It needs no administrator rights. It reads
+`ACT_LITE_VERSION` and `ACT_LITE_INSTALL_DIR` like `install.sh`:
+
+```powershell
+$env:ACT_LITE_VERSION = "v0.1.0"; irm https://raw.githubusercontent.com/act101-ai/act-lite/main/install.ps1 | iex
+```
+
 You can also install by hand from a release archive, or build from source
 with `cargo build`.
 
@@ -472,11 +487,12 @@ Download the archive for your platform and its `.sha256` file from the
 - `act-lite-<version>-aarch64-unknown-linux-gnu.tar.gz`: Linux aarch64
 - `act-lite-<version>-aarch64-apple-darwin.tar.gz`: macOS on Apple silicon
 - `act-lite-<version>-x86_64-apple-darwin.tar.gz`: macOS on Intel
+- `act-lite-<version>-x86_64-pc-windows-msvc.zip`: Windows x86_64
 
 `<version>` is the release tag (for example `v0.1.0`) and `<target>` is one
-of the four names above. Check the archive, extract it, and copy `act-lite`
-into a directory on your `PATH` (here `~/.local/bin`; add it to `PATH` if it
-is not there):
+of the four Linux and macOS names above. Check the archive, extract it, and
+copy `act-lite` into a directory on your `PATH` (here `~/.local/bin`; add it
+to `PATH` if it is not there):
 
 ```bash
 shasum -a 256 -c act-lite-<version>-<target>.tar.gz.sha256
@@ -485,13 +501,25 @@ mkdir -p ~/.local/bin
 install -m 0755 act-lite-<version>-<target>/act-lite ~/.local/bin/
 ```
 
+On Windows, in PowerShell, compare the checksum with the first field of the
+`.sha256` file, extract the archive, and copy `act-lite.exe` into a directory
+on your `PATH` (here the installer's directory; add it to your user `PATH` if
+it is not there):
+
+```powershell
+(Get-FileHash act-lite-<version>-x86_64-pc-windows-msvc.zip).Hash
+Get-Content act-lite-<version>-x86_64-pc-windows-msvc.zip.sha256
+Expand-Archive act-lite-<version>-x86_64-pc-windows-msvc.zip .
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\act-lite\bin"
+Copy-Item act-lite-<version>-x86_64-pc-windows-msvc\act-lite.exe "$env:LOCALAPPDATA\Programs\act-lite\bin\"
+```
+
 ### Platforms
 
 - Linux x86_64 and aarch64 with glibc 2.31 or later (Ubuntu 20.04, Debian 11
   and later).
 - macOS 11 or later, on Apple silicon and Intel.
-
-Windows is not supported.
+- Windows 10 and 11 on x86_64.
 
 ### From source
 
