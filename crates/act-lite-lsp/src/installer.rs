@@ -138,7 +138,7 @@ async fn run_install_command(
     #[cfg(unix)]
     command.process_group(0);
     let child = command.spawn().map_err(failed)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let group = child.id();
     let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
         Ok(output) => output.map_err(failed)?,
@@ -147,6 +147,14 @@ async fn run_install_command(
             if let Some(group) = group {
                 // SAFETY: kill(2) on the group the shell leads; no memory is touched.
                 unsafe { libc::kill(-(group as i32), libc::SIGKILL) };
+            }
+            // No process groups: kill the tree under the shell.
+            #[cfg(windows)]
+            if let Some(pid) = group {
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &pid.to_string()])
+                    .output()
+                    .await;
             }
             return Err(format!("timed out after {} s", limit.as_secs()));
         }
@@ -344,6 +352,29 @@ mod tests {
             unsafe { libc::kill(pid, 0) == 0 }
         });
         assert!(!survived, "`sleep 60` (pid {pid}) outlived the timeout");
+    }
+
+    /// A timeout kills what the install command started, not only the shell:
+    /// the file `ping`'s output goes to is deletable once nothing holds it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn install_command_timeout_kills_the_commands_children() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let cmd = format!("ping -n 61 127.0.0.1 > \"{}\"", out.display());
+        let err = run_install_command(SHELL, &cmd, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.contains("timed out"), "{err}");
+        let released = (0..40).any(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::remove_file(&out).is_ok()
+        });
+        assert!(
+            released,
+            "`ping` outlived the timeout and still holds {out:?}"
+        );
     }
 
     #[tokio::test]
