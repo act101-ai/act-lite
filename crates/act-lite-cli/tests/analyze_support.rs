@@ -5,9 +5,10 @@
 use act_lite_cli::analyze::discovery::{Candidate, Includes, discover, walk_workspace};
 use act_lite_cli::analyze::envelope::{AnalyzeError, Finding, Location};
 use act_lite_cli::analyze::focus::{FocusSet, check_focus, focus_files};
+#[cfg(unix)]
+use act_lite_cli::analyze::read::SymlinkTarget;
 use act_lite_cli::analyze::read::{
-    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader,
-    SymlinkTarget, read_file,
+    EntryKind, FileSource, ReadOutcome, ReadResult, Reader, SupportError, SupportReader, read_file,
 };
 use act_lite_cli::analyze::run::{Analysis, Analyzer, Request, RunContext, run};
 use act_lite_parser::Grammar;
