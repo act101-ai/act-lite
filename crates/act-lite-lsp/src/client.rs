@@ -288,7 +288,7 @@ impl LspClient {
         );
 
         // Spawn the LSP server process
-        let mut command = Command::new(&config.command);
+        let mut command = Command::new(server_program(&config.command));
         command
             .args(&config.args)
             .current_dir(
@@ -1057,6 +1057,20 @@ impl LspClientTrait for LspClient {
     }
 }
 
+/// The program to spawn for a server `command`.
+///
+/// On Windows `Command::new` finds only `.exe` files on `PATH`, but npm
+/// installs servers as `.cmd` shims, so the command is resolved through
+/// `PATHEXT` there, as `installer::is_installed` finds it.
+fn server_program(command: &str) -> PathBuf {
+    if cfg!(windows)
+        && let Ok(path) = which::which(command)
+    {
+        return path;
+    }
+    PathBuf::from(command)
+}
+
 /// Sends `sig` to every process in group `pgid`.
 ///
 /// Guarded against `pgid <= 0`: `killpg(0, …)` would signal act's OWN process
@@ -1097,6 +1111,23 @@ mod tests {
     use super::*;
     use crate::types::JsonRpcError;
     use std::str::FromStr;
+
+    /// npm installs a server as a `.cmd` shim, which `Command::new` alone
+    /// does not find on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn server_program_finds_a_cmd_shim_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("typescript-language-server.cmd"),
+            "@exit 0\r\n",
+        )
+        .unwrap();
+        let _path = crate::test_path::PathGuard::set(dir.path());
+        let program = server_program("typescript-language-server");
+        let status = std::process::Command::new(program).status().unwrap();
+        assert!(status.success());
+    }
 
     fn create_test_client() -> (LspClient, mpsc::UnboundedReceiver<OutgoingMessage>) {
         let (tx, rx) = mpsc::unbounded_channel();
