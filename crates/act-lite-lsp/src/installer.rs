@@ -140,7 +140,11 @@ async fn run_install_command(
     let child = command.spawn().map_err(failed)?;
     #[cfg(any(unix, windows))]
     let group = child.id();
-    let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
+    // Held, not dropped, on a timeout: dropping it kills the shell, and on
+    // Windows the tree under the shell is found only while the shell lives.
+    let wait = child.wait_with_output();
+    tokio::pin!(wait);
+    let output = match tokio::time::timeout(limit, &mut wait).await {
         Ok(output) => output.map_err(failed)?,
         Err(_) => {
             #[cfg(unix)]
