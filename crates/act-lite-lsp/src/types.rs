@@ -167,17 +167,12 @@ pub fn path_to_uri(path: &std::path::Path) -> crate::Result<Uri> {
     // lsp-types 0.97 uses fluent_uri and doesn't have from_file_path,
     // so we construct the URI string manually
     let path_str = path.to_string_lossy();
-    let encoded = if cfg!(windows) {
-        percent_encode_path(&path_str.replace('\\', "/"))
+    let uri_path = if cfg!(windows) {
+        windows_path_to_uri_path(&path_str)
     } else {
-        percent_encode_path(&path_str)
+        path_str.into_owned()
     };
-    let uri_str = if cfg!(windows) {
-        format!("file:///{encoded}")
-    } else {
-        format!("file://{encoded}")
-    };
-    uri_str
+    format!("file://{}", percent_encode_path(&uri_path))
         .parse()
         .map_err(|_| crate::error::LspError::InvalidUri(path.display().to_string()))
 }
@@ -189,15 +184,46 @@ pub fn uri_to_path(uri: &Uri) -> crate::Result<PathBuf> {
         return Err(crate::error::LspError::InvalidUri(uri_str.to_string()));
     }
 
-    let path_str = if cfg!(windows) {
-        // file:///C:/path -> C:/path
-        uri_str.strip_prefix("file:///").unwrap_or(uri_str)
+    let path = percent_decode_path(&uri_str["file://".len()..])?;
+    if cfg!(windows) {
+        Ok(PathBuf::from(windows_uri_path_to_path(&path)))
     } else {
-        // file:///path -> /path
-        uri_str.strip_prefix("file://").unwrap_or(uri_str)
-    };
+        Ok(PathBuf::from(path))
+    }
+}
 
-    Ok(PathBuf::from(percent_decode_path(path_str)?))
+/// The part of a `file:` URI after `file://` for a Windows path, unencoded.
+///
+/// `C:\a` gives `/C:/a` and `\\server\share\a` gives `server/share/a`. The
+/// verbatim prefixes `\\?\` and `\\?\UNC\` that `std::fs::canonicalize`
+/// adds are dropped: language servers reject `file:////?/C:/a`.
+fn windows_path_to_uri_path(path: &str) -> String {
+    let path = match path.strip_prefix(r"\\?\UNC\") {
+        Some(unc) => format!(r"\\{unc}"),
+        None => path.strip_prefix(r"\\?\").unwrap_or(path).to_string(),
+    };
+    let path = path.replace('\\', "/");
+    match path.strip_prefix("//") {
+        Some(unc) => unc.to_string(),
+        None if path.starts_with('/') => path,
+        None => format!("/{path}"),
+    }
+}
+
+/// Reverses [`windows_path_to_uri_path`] on a decoded URI path: `/c:/a` gives
+/// `C:\a` and `server/share/a` gives `\\server\share\a`. The drive letter is
+/// upper-cased, as `std::fs::canonicalize` returns it.
+fn windows_uri_path_to_path(path: &str) -> String {
+    let path = match path.strip_prefix('/') {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => {
+            let mut drive = rest.to_string();
+            drive[..1].make_ascii_uppercase();
+            drive
+        }
+        Some(_) => path.to_string(),
+        None => format!("//{path}"),
+    };
+    path.replace('/', "\\")
 }
 
 /// Converts an act-lite-core Location to an LSP Position.
@@ -311,11 +337,63 @@ mod tests {
         assert!(uri.as_str().contains("main.ts"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_uri_to_path() {
         let uri: Uri = "file:///home/user/project/src/main.ts".parse().unwrap();
         let path = uri_to_path(&uri).unwrap();
         assert_eq!(path, PathBuf::from("/home/user/project/src/main.ts"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_uri_to_path() {
+        let uri: Uri = "file:///C:/home/user/project/src/main.ts".parse().unwrap();
+        let path = uri_to_path(&uri).unwrap();
+        assert_eq!(
+            path.as_os_str(),
+            r"C:\home\user\project\src\main.ts",
+            "backslashes, so the path compares equal to a canonicalized one"
+        );
+        // vscode-languageserver servers send a lower-case, escaped drive.
+        let uri: Uri = "file:///c%3A/x".parse().unwrap();
+        assert_eq!(uri_to_path(&uri).unwrap().as_os_str(), r"C:\x");
+    }
+
+    /// Windows paths map to URIs language servers accept, and back.
+    #[test]
+    fn windows_paths_map_to_uri_paths_and_back() {
+        for (path, uri_path, back) in [
+            (r"C:\a\b c.ts", "/C:/a/b c.ts", r"C:\a\b c.ts"),
+            (r"\\?\C:\x", "/C:/x", r"C:\x"),
+            (r"\\server\share\x", "server/share/x", r"\\server\share\x"),
+            (
+                r"\\?\UNC\server\share\x",
+                "server/share/x",
+                r"\\server\share\x",
+            ),
+        ] {
+            assert_eq!(windows_path_to_uri_path(path), uri_path, "{path}");
+            assert_eq!(windows_uri_path_to_path(uri_path), back, "{uri_path}");
+        }
+        assert_eq!(windows_uri_path_to_path("/c:/x"), r"C:\x");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_to_uri() {
+        for (path, uri) in [
+            (r"C:\a\b c.ts", "file:///C:/a/b%20c.ts"),
+            (r"\\?\C:\x", "file:///C:/x"),
+            (r"\\server\share\x", "file://server/share/x"),
+        ] {
+            let encoded = path_to_uri(std::path::Path::new(path)).unwrap();
+            assert_eq!(encoded.as_str(), uri, "{path}");
+        }
+        let canonical = std::fs::canonicalize(".").unwrap();
+        let uri = path_to_uri(&canonical).unwrap();
+        assert!(uri.as_str().starts_with("file:///"), "{uri:?}");
+        assert_eq!(uri_to_path(&uri).unwrap(), std::env::current_dir().unwrap());
     }
 
     /// Paths that need percent-encoding must survive the round trip.
@@ -325,21 +403,22 @@ mod tests {
     /// disk, so the caller list it appears in cannot be opened or jumped to.
     #[test]
     fn test_path_uri_round_trip_with_reserved_characters() {
-        for original in [
-            "/home/user/fixtures/psf-requests@f361ead0/src/main.py",
-            "/home/user/fixtures/a+b(c),d;e=f/main.py",
-            "/home/user/my project/src/main.ts",
-            "/home/user/proj#1/a+b/main.rs",
-            "/home/user/проект/main.rs",
+        let root = if cfg!(windows) {
+            r"C:\home\user"
+        } else {
+            "/home/user"
+        };
+        for tail in [
+            "fixtures/psf-requests@f361ead0/src/main.py",
+            "fixtures/a+b(c),d;e=f/main.py",
+            "my project/src/main.ts",
+            "proj#1/a+b/main.rs",
+            "проект/main.rs",
         ] {
-            let path = std::path::Path::new(original);
-            let uri = path_to_uri(path).expect("path should encode");
+            let original = std::path::Path::new(root).join(tail);
+            let uri = path_to_uri(&original).expect("path should encode");
             let back = uri_to_path(&uri).expect("uri should decode");
-            assert_eq!(
-                back,
-                PathBuf::from(original),
-                "round trip failed via {uri:?}"
-            );
+            assert_eq!(back, original, "round trip failed via {uri:?}");
         }
     }
 
