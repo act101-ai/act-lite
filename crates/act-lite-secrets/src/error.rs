@@ -118,11 +118,12 @@ pub(crate) fn create_temp_file(tmp: &Path) -> Result<std::fs::File, SecretsError
     }
     #[cfg(windows)]
     {
-        // WRITE_DAC lets `write_private` set the owner-only ACL on this handle.
+        // WRITE_DAC and WRITE_OWNER let `write_private` set the owner-only
+        // ACL and owner on this handle.
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Foundation::GENERIC_WRITE;
-        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
-        options.access_mode(GENERIC_WRITE | WRITE_DAC);
+        use windows_sys::Win32::Storage::FileSystem::{WRITE_DAC, WRITE_OWNER};
+        options.access_mode(GENERIC_WRITE | WRITE_DAC | WRITE_OWNER);
     }
     options.open(tmp).map_err(|source| {
         let action = if source.kind() == std::io::ErrorKind::AlreadyExists {

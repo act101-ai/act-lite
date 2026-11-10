@@ -97,9 +97,21 @@ pub fn serialize_env(store: &Store) -> String {
 }
 
 /// Load a store from disk. A missing file yields an empty store.
+///
+/// Windows: first restrict the store and its directory to the current user,
+/// so a store written before act-lite set ACLs (1.2.0) is private from its
+/// first read, not only after its next save. A failure to restrict fails the
+/// load.
 pub fn load_store(path: &Path) -> Result<Store, SecretsError> {
     if !path.exists() {
         return Ok(Store::new());
+    }
+    #[cfg(windows)]
+    {
+        if let Some(dir) = path.parent() {
+            restrict_dir(dir)?;
+        }
+        crate::acl::restrict_existing_file(path).map_err(io_err("set permissions on", path))?;
     }
     let content = std::fs::read_to_string(path).map_err(io_err("read", path))?;
     parse_env(&content, path)
@@ -215,9 +227,23 @@ fn write_private(path: &Path, contents: &str) -> Result<(), SecretsError> {
             e,
         ));
     }
-    file.write_all(contents.as_bytes())
-        .map_err(io_err("write", path))?;
-    file.sync_all().map_err(io_err("sync", path))
+    // A failed write or sync removes the temp file: it may hold plaintext,
+    // and a leftover would block the next save (`create_new`).
+    let written = match file.write_all(contents.as_bytes()) {
+        Ok(()) => file.sync_all().map_err(|e| ("sync", e)),
+        Err(e) => Err(("write", e)),
+    };
+    if let Err((action, e)) = written {
+        drop(file);
+        return Err(error::err_after_temp_created(
+            path,
+            path,
+            action,
+            "write (the temp file also could not be removed; delete it manually) at",
+            e,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -399,6 +425,22 @@ mod tests {
 
         crate::acl::assert_owner_only(&path, "");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn load_tightens_the_acl_on_an_existing_wide_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("sub");
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("store.env");
+        std::fs::write(&path, "A=value1\n").unwrap();
+
+        let store = load_store(&path).unwrap();
+
+        assert_eq!(store.get("A").map(String::as_str), Some("value1"));
+        crate::acl::assert_owner_only(&path, "");
+        crate::acl::assert_owner_only(&dir, "OICI");
     }
 
     #[cfg(windows)]

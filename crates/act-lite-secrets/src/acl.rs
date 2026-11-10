@@ -1,7 +1,9 @@
 //! Owner-only access on Windows: the equivalent of unix modes `0700` and
-//! `0600`. Each function sets a protected DACL (inheritance from the parent
-//! off) whose one entry gives the current user full control, so the store is
-//! private wherever it lives, not only under the user profile.
+//! `0600`. Each function makes the current user the owner and sets a
+//! protected DACL (inheritance from the parent off) whose one entry gives the
+//! current user full control, so the store is private wherever it lives, not
+//! only under the user profile. Ownership matters: an owner can always
+//! rewrite the DACL, so a store left owned by another account is not private.
 
 use std::ffi::OsStr;
 use std::io;
@@ -16,38 +18,69 @@ use windows_sys::Win32::Security::Authorization::{
     SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetTokenInformation,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+const DACL: u32 = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
 
 /// Restrict `dir` to the current user. Files created in it later inherit the
 /// same single entry (`OICI`: object and container inherit).
 pub(crate) fn restrict_dir(dir: &Path) -> io::Result<()> {
-    let name = wide(dir.as_os_str());
-    with_owner_only_dacl("OICI", |dacl| unsafe {
-        SetNamedSecurityInfoW(
+    restrict_named(dir, "OICI")
+}
+
+/// Restrict the existing file at `path` to the current user.
+pub(crate) fn restrict_existing_file(path: &Path) -> io::Result<()> {
+    restrict_named(path, "")
+}
+
+/// Set the DACL first: it grants the current user full control, which
+/// includes the `WRITE_OWNER` right that the second call needs. The second
+/// call sets owner and DACL together, so a DACL that a previous owner put
+/// back between the two calls is replaced, and after it that account is
+/// neither owner nor on the DACL. A caller that is not the owner gets this far
+/// only if the old DACL gave it `WRITE_DAC`; any failure fails the load or
+/// save. As with unix `chmod`, a handle another process opened earlier keeps
+/// the access it was granted.
+fn restrict_named(path: &Path, inherit: &str) -> io::Result<()> {
+    let name = wide(path.as_os_str());
+    with_owner_only(inherit, |owner, dacl| unsafe {
+        match SetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            DACL,
             null_mut(),
             null_mut(),
             dacl,
             null(),
-        )
+        ) {
+            0 => SetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL,
+                owner,
+                null_mut(),
+                dacl,
+                null(),
+            ),
+            code => code,
+        }
     })
 }
 
 /// Restrict the open `file` to the current user. The handle must have
-/// `WRITE_DAC` access.
+/// `WRITE_DAC` and `WRITE_OWNER` access.
 pub(crate) fn restrict_file(file: &std::fs::File) -> io::Result<()> {
     let handle = file.as_raw_handle() as HANDLE;
-    with_owner_only_dacl("", |dacl| unsafe {
+    with_owner_only("", |owner, dacl| unsafe {
         SetSecurityInfo(
             handle,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            null_mut(),
+            OWNER_SECURITY_INFORMATION | DACL,
+            owner,
             null_mut(),
             dacl,
             null(),
@@ -55,13 +88,11 @@ pub(crate) fn restrict_file(file: &std::fs::File) -> io::Result<()> {
     })
 }
 
-/// Build the DACL `D:P(A;<inherit>;FA;;;<user>)` and pass it to `apply`,
-/// which returns a Win32 error code (0 is success).
-fn with_owner_only_dacl(inherit: &str, apply: impl FnOnce(*const ACL) -> u32) -> io::Result<()> {
-    let sddl = wide(OsStr::new(&format!(
-        "D:P(A;{inherit};FA;;;{})",
-        current_user_sid()?
-    )));
+/// Build owner `<user>` and DACL `D:P(A;<inherit>;FA;;;<user>)` and pass them
+/// to `apply`, which returns a Win32 error code (0 is success).
+fn with_owner_only(inherit: &str, apply: impl FnOnce(PSID, *const ACL) -> u32) -> io::Result<()> {
+    let sid = current_user_sid()?;
+    let sddl = wide(OsStr::new(&format!("O:{sid}D:P(A;{inherit};FA;;;{sid})")));
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     // SAFETY: `sddl` is NUL-terminated; on success `sd` is a LocalAlloc'd
     // descriptor that `Local` frees.
@@ -80,12 +111,15 @@ fn with_owner_only_dacl(inherit: &str, apply: impl FnOnce(*const ACL) -> u32) ->
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl: *mut ACL = null_mut();
-    // SAFETY: `sd.0` is a valid descriptor; `dacl` points into it and is used
-    // only while `sd` lives.
-    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0 {
+    let mut owner: PSID = null_mut();
+    // SAFETY: `sd.0` is a valid descriptor; `dacl` and `owner` point into it
+    // and are used only while `sd` lives.
+    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0
+        || unsafe { GetSecurityDescriptorOwner(sd.0, &mut owner, &mut defaulted) } == 0
+    {
         return Err(io::Error::last_os_error());
     }
-    match apply(dacl) {
+    match apply(owner, dacl) {
         0 => Ok(()),
         code => Err(io::Error::from_raw_os_error(code as i32)),
     }
@@ -155,35 +189,16 @@ impl Drop for Token {
     }
 }
 
-/// The DACL of `path` as SDDL, for tests.
+/// `sd` as SDDL, limited to `info`, for tests.
 #[cfg(test)]
-pub(crate) fn dacl_sddl(path: &Path) -> String {
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
-    };
-    let name = wide(path.as_os_str());
-    let mut dacl = null_mut();
-    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-    let rc = unsafe {
-        GetNamedSecurityInfoW(
-            name.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            null_mut(),
-            null_mut(),
-            &mut dacl,
-            null_mut(),
-            &mut sd,
-        )
-    };
-    assert_eq!(rc, 0, "GetNamedSecurityInfoW failed for {}", path.display());
-    let sd = Local(sd);
+fn sd_to_sddl(sd: PSECURITY_DESCRIPTOR, info: u32) -> String {
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
     let mut text = null_mut();
     let ok = unsafe {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            sd.0,
+            sd,
             SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
+            info,
             &mut text,
             null_mut(),
         )
@@ -193,21 +208,79 @@ pub(crate) fn dacl_sddl(path: &Path) -> String {
     unsafe { from_wide_ptr(text.0.cast()) }
 }
 
-/// Assert that `path` has a protected DACL whose only entry gives the current
-/// user full control with inheritance flags `inherit`.
+/// The owner and DACL of `path` as SDDL, for tests.
+#[cfg(test)]
+pub(crate) fn security_sddl(path: &Path) -> String {
+    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let name = wide(path.as_os_str());
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            info,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut sd,
+        )
+    };
+    assert_eq!(rc, 0, "GetNamedSecurityInfoW failed for {}", path.display());
+    let sd = Local(sd);
+    sd_to_sddl(sd.0, info)
+}
+
+/// The current user's SID as SDDL writes it in an output string: an alias
+/// such as `LA` for a well-known account (the built-in Administrator, which a
+/// CI runner can be), else `S-1-5-21-...`.
+#[cfg(test)]
+fn current_user_in_sddl() -> String {
+    let sddl = wide(OsStr::new(&format!("O:{}", current_user_sid().unwrap())));
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut sd,
+            null_mut(),
+        )
+    };
+    assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+    let sd = Local(sd);
+    sd_to_sddl(sd.0, OWNER_SECURITY_INFORMATION)
+        .strip_prefix("O:")
+        .unwrap()
+        .to_string()
+}
+
+/// Assert that the current user owns `path` and that `path` has a protected
+/// DACL whose only entry gives the current user full control with
+/// inheritance flags `inherit`.
 #[cfg(test)]
 pub(crate) fn assert_owner_only(path: &Path, inherit: &str) {
-    let sddl = dacl_sddl(path);
-    let (flags, aces) = sddl
-        .strip_prefix("D:")
-        .and_then(|rest| rest.find('(').map(|i| rest.split_at(i)))
+    let sddl = security_sddl(path);
+    let sid = current_user_in_sddl();
+    let (owner, dacl) = sddl
+        .strip_prefix("O:")
+        .and_then(|rest| rest.split_once("D:"))
+        .unwrap_or_else(|| panic!("no owner or DACL on {}: {sddl}", path.display()));
+    assert_eq!(
+        owner,
+        sid,
+        "{} is not owned by the current user: {sddl}",
+        path.display()
+    );
+    let (flags, aces) = dacl
+        .find('(')
+        .map(|i| dacl.split_at(i))
         .unwrap_or_else(|| panic!("no DACL entries on {}: {sddl}", path.display()));
     assert!(
         flags.contains('P'),
         "DACL of {} is not protected: {sddl}",
         path.display()
     );
-    let sid = current_user_sid().unwrap();
     assert_eq!(
         aces,
         format!("(A;{inherit};FA;;;{sid})"),
