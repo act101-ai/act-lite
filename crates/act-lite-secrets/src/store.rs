@@ -140,9 +140,7 @@ pub fn save_store(path: &Path, store: &Store) -> Result<(), SecretsError> {
 
 /// Run `f` while holding an exclusive lock on the directory of the store at
 /// `path`, so one process's load-modify-save of the store cannot interleave
-/// with another's. The lock is on the directory itself, so no lock file is
-/// left beside the store; it is released when `f` returns.
-#[cfg(unix)]
+/// with another's. The lock is released when `f` returns.
 pub fn with_lock<T>(
     path: &Path,
     f: impl FnOnce() -> Result<T, SecretsError>,
@@ -154,18 +152,33 @@ pub fn with_lock<T>(
     })?;
     std::fs::create_dir_all(dir).map_err(io_err("create directory", dir))?;
     restrict_dir(dir)?;
-    let handle = std::fs::File::open(dir).map_err(io_err("open", dir))?;
-    handle.lock().map_err(io_err("lock", dir))?;
+    let _lock = lock_dir(dir)?;
     f()
 }
 
-// Non-unix platforms cannot open a directory as a file; no lock is taken.
+/// Lock the directory itself, so no lock file is left beside the store.
+#[cfg(unix)]
+fn lock_dir(dir: &Path) -> Result<std::fs::File, SecretsError> {
+    let handle = std::fs::File::open(dir).map_err(io_err("open", dir))?;
+    handle.lock().map_err(io_err("lock", dir))?;
+    Ok(handle)
+}
+
+/// Windows cannot lock a directory handle, so lock a `.lock` file in the
+/// directory instead. The file stays: deleting it would let a waiting process
+/// lock the old file while a new one locks a fresh file.
 #[cfg(not(unix))]
-pub fn with_lock<T>(
-    _path: &Path,
-    f: impl FnOnce() -> Result<T, SecretsError>,
-) -> Result<T, SecretsError> {
-    f()
+fn lock_dir(dir: &Path) -> Result<std::fs::File, SecretsError> {
+    let path = dir.join(".lock");
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(io_err("open", &path))?;
+    handle.lock().map_err(io_err("lock", &path))?;
+    Ok(handle)
 }
 
 #[cfg(unix)]

@@ -40,9 +40,13 @@ fn reveal(tmp: &tempfile::TempDir, name: &str) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// Every entry in the secrets dir but the `.lock` file Windows locks the store with.
 fn store_files(config_dir: &Path) -> Vec<PathBuf> {
     match fs::read_dir(config_dir.join("secrets")) {
-        Ok(rd) => rd.map(|e| e.unwrap().path()).collect(),
+        Ok(rd) => rd
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap() != ".lock")
+            .collect(),
         Err(_) => Vec::new(),
     }
 }
