@@ -1914,12 +1914,15 @@ act-lite env get NAME --reveal      # the plaintext value
 - `get` prints a redacted line unless `--reveal` is given. `--reveal` is the
   explicit switch that accepts the value entering your terminal or context.
 
-The store is `~/.config/act/secrets/<id>.env`, one file per project, created
-with mode 0600. `<id>` is derived from the project root: the nearest ancestor
-directory that contains `.git` (all linked worktrees of a repository share one
-store), else the current directory. `--workspace <dir>` uses `<dir>` as the
-root exactly as given, with no `.git` search. `ACT_CONFIG_DIR` replaces
-`~/.config/act`; else `$XDG_CONFIG_HOME/act` is used when that variable is set.
+The store is `~/.config/act/secrets/<id>.env` (Windows:
+`%APPDATA%\act\secrets\<id>.env`), one file per project, created with mode
+0600 in a 0700 directory. On Windows the file and its directory get an ACL
+that gives access only to the current user. `<id>` is derived from the project
+root: the nearest ancestor directory that contains `.git` (all linked worktrees
+of a repository share one store), else the current directory.
+`--workspace <dir>` uses `<dir>` as the root exactly as given, with no `.git`
+search. `ACT_CONFIG_DIR` replaces `~/.config/act`; else `$XDG_CONFIG_HOME/act`
+is used when that variable is set.
 
 act-lite and act101's `act` share the store location, the per-project id and
 the marker. A `.env` sequestered by `act env` is read by `act-lite env`, and
