@@ -1,5 +1,4 @@
 #[cfg(windows)]
-#[allow(dead_code)] // TEMP: red commit; the next commit wires it in.
 mod acl;
 pub mod env_edit;
 pub mod env_line;

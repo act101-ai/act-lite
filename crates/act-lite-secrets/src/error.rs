@@ -116,6 +116,14 @@ pub(crate) fn create_temp_file(tmp: &Path) -> Result<std::fs::File, SecretsError
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    #[cfg(windows)]
+    {
+        // WRITE_DAC lets `write_private` set the owner-only ACL on this handle.
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::GENERIC_WRITE;
+        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+        options.access_mode(GENERIC_WRITE | WRITE_DAC);
+    }
     options.open(tmp).map_err(|source| {
         let action = if source.kind() == std::io::ErrorKind::AlreadyExists {
             "create a temp file at (one already exists there, left over from an earlier run; \
