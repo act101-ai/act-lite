@@ -311,7 +311,9 @@ fn run_redacts_a_value_split_across_stdout_and_stderr() {
     }
     // stdout holds `s`; stderr passes it, so the written order is `sup`,
     // `ersecretvalue\n`, `s` and the value is contiguous there: both parts are masked.
-    let script = "printf sups; sleep 0.3; printf 'ersecretvalue\\n' >&2";
+    // stdout stays open after the stderr write: a stdout end read before the
+    // stderr bytes ends stdout's part first, and `sup` is then written as is.
+    let script = "printf sups; sleep 0.3; printf 'ersecretvalue\\n' >&2; sleep 1";
     merged(script).stdout("******\ns");
     act(&tmp)
         .args(["env", "run", "--", "sh", "-c", script])
