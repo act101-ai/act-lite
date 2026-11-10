@@ -133,7 +133,7 @@ jobs:
             Compress-Archive -Path "$root\$tag\stage\$name" -DestinationPath "$root\$tag\$name.zip"
             $hash = (Get-FileHash -Algorithm SHA256 "$root\$tag\$name.zip").Hash.ToLower()
             if ($tag -eq 'v0.0.2') { $hash = '0' * 64 }
-            Set-Content -NoNewline "$root\$tag\$name.zip.sha256" "$hash  $name.zip`n"
+            [IO.File]::WriteAllText("$root\$tag\$name.zip.sha256", "$hash  $name.zip`n")
           }
           Copy-Item install.ps1 $root
           $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', $root -PassThru
