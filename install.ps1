@@ -68,6 +68,7 @@ function Install-ActLite {
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
   New-Item -ItemType Directory -Path $tmp | Out-Null
   $staged = $null
+  $lock = $null
   try {
     Write-Host "Installing act-lite $tag for $target"
     $zip = Join-Path $tmp "$name.zip"
@@ -127,6 +128,22 @@ function Install-ActLite {
     }
     # A running act-lite.exe (for example the MCP server of an open Claude Code)
     # cannot be overwritten, but it can be renamed; the old copy is removed when possible.
+    # One installation into $dir at a time: each replaces act-lite.exe through
+    # the same backup name.
+    $lockPath = Join-Path $dir '.act-lite.install.lock'
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not $lock) {
+      try {
+        $lock = [IO.File]::Open($lockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+      } catch {
+        $e = $_.Exception
+        if ($e.InnerException) { $e = $e.InnerException }
+        # 0x80070020: the file is in use, so another installation holds the lock.
+        if ($e.HResult -ne -2147024864) { Fail "could not open $lockPath" }
+        if ((Get-Date) -gt $deadline) { Fail "another installation into $dir is still running; run the installer again when it ends" }
+        Start-Sleep -Milliseconds 500
+      }
+    }
     $old = Join-Path $dir '.act-lite.old.exe'
     $hadExe = Test-Path -PathType Leaf $exe
     if ($hadExe) {
@@ -152,6 +169,8 @@ function Install-ActLite {
     }
     $staged = $null
     Remove-Item -Force -ErrorAction SilentlyContinue $old
+    $lock.Dispose()
+    $lock = $null
 
     Write-Host "Installed $exe"
     & $exe --version
@@ -175,6 +194,9 @@ function Install-ActLite {
       $env:Path = "$env:Path;$dir"
     }
   } finally {
+    if ($lock) {
+      $lock.Dispose()
+    }
     if ($staged) {
       Remove-Item -Force -ErrorAction SilentlyContinue $staged
     }

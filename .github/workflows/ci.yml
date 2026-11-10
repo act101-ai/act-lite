@@ -152,6 +152,15 @@ jobs:
               & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
               if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell install round $round"; $failed = $true }
             }
+            Write-Host "== ${shell}: an installation waits while another holds the install lock"
+            $held = [IO.File]::Open("$dir\.act-lite.install.lock", 'OpenOrCreate', 'ReadWrite', 'None')
+            $waiting = Start-Process $shell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $run -PassThru
+            $null = $waiting.Handle  # keeps ExitCode readable after exit
+            Start-Sleep -Seconds 5
+            $waited = -not $waiting.HasExited -and -not (Test-Path "$dir\.act-lite.old.exe")
+            $held.Dispose()
+            if (-not $waiting.WaitForExit(120000)) { $waiting.Kill() }
+            if (-not $waited -or $waiting.ExitCode -ne 0 -or -not (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell did not wait for the install lock, or failed after it"; $failed = $true }
             Write-Host "== ${shell}: a failed replacement keeps the installed copy"
             $before = (Get-FileHash "$dir\act-lite.exe").Hash
             $env:ACT_LITE_TEST_FAIL_REPLACE = '1'
