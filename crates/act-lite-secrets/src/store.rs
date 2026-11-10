@@ -343,7 +343,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
     }
 
-    #[cfg(unix)]
     #[test]
     fn save_refuses_a_preexisting_temp_file_and_leaves_it_in_place() {
         let tmp = tempfile::tempdir().unwrap();
@@ -362,6 +361,42 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&stray_tmp).unwrap(), "leftover");
         assert!(!path.exists(), "save must not have completed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn saved_store_and_its_directory_are_owner_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sub").join("store.env");
+        let mut store = Store::new();
+        store.insert("A".into(), "longvalue1".into());
+        save_store(&path, &store).unwrap();
+        crate::acl::assert_owner_only(&path, "");
+        crate::acl::assert_owner_only(path.parent().unwrap(), "OICI");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn save_tightens_the_acl_on_an_existing_wide_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("store.env");
+        std::fs::write(&path, "A=old\n").unwrap();
+
+        let mut store = Store::new();
+        store.insert("A".into(), "newvalue1".into());
+        save_store(&path, &store).unwrap();
+
+        crate::acl::assert_owner_only(&path, "");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn with_lock_restricts_the_store_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sub").join("store.env");
+        with_lock(&path, || Ok(())).unwrap();
+        crate::acl::assert_owner_only(path.parent().unwrap(), "OICI");
     }
 
     #[test]
