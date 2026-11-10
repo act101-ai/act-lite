@@ -13,7 +13,9 @@ mod job {
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
@@ -22,7 +24,7 @@ mod job {
     pub(super) const SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
     /// A job object that holds an install command's shell and every process
-    /// the shell starts.
+    /// the shell starts; they end when it is dropped.
     pub(super) struct Job(HANDLE);
 
     // SAFETY: a job handle may be used and closed from any thread.
@@ -46,6 +48,24 @@ mod job {
                 ));
             }
             let job = Job(handle);
+            // SAFETY: LIMIT_INFORMATION is plain data; the call reads exactly
+            // its size from a live local.
+            let limited = unsafe {
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if limited == 0 {
+                return Err(format!(
+                    "the job object could not be set to end with act-lite: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
             // SAFETY: both handles are open for the duration of the call.
             if unsafe { AssignProcessToJobObject(job.0, process as HANDLE) } == 0 {
                 return Err(format!(
@@ -514,6 +534,34 @@ mod tests {
         assert!(
             !marker.exists(),
             "the process the shell started outlived the timeout"
+        );
+    }
+
+    /// An install dropped before it ends (its MCP session closed) ends every
+    /// process it started: the started process would otherwise create `marker`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_dropped_install_ends_the_processes_it_started() {
+        let _path = crate::test_path::lock_path();
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        let cmd = format!(
+            "start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"",
+            marker.display()
+        );
+        let dropped = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_install_command(SHELL, &cmd, Duration::from_secs(60)),
+        )
+        .await;
+        assert!(
+            dropped.is_err(),
+            "the install ended on its own: {dropped:?}"
+        );
+        std::thread::sleep(Duration::from_secs(5));
+        assert!(
+            !marker.exists(),
+            "the process the dropped install started kept running"
         );
     }
 
