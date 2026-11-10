@@ -313,8 +313,11 @@ impl LspClient {
                 source: e,
             })?;
         // An npm `.cmd` shim runs the server under `cmd.exe`: the job holds both.
+        // Killed if it cannot join its job: suspended, it would never exit.
         #[cfg(windows)]
-        command.creation_flags(crate::job::SUSPENDED);
+        command
+            .creation_flags(crate::job::SUSPENDED)
+            .kill_on_drop(true);
         #[cfg(not(unix))]
         let mut child = command.spawn().map_err(|e| LspError::ServerSpawnFailed {
             language: language.clone(),
