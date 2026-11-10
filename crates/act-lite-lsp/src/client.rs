@@ -1082,15 +1082,29 @@ impl LspClientTrait for LspClient {
 
 /// True when `published` names the document `uri`: the same text, or the
 /// same file in another spelling. vscode-languageserver servers write
-/// `file:///C:/a` back as `file:///c%3A/a`.
+/// `file:///C:/a` back as `file:///c%3A/a`; on Windows a path may also
+/// differ in case and still name the same file.
 fn same_document(published: &str, uri: &Uri) -> bool {
     published == uri.as_str()
         || published.parse::<Uri>().is_ok_and(|p| {
-            matches!(
-                (crate::types::uri_to_path(&p), crate::types::uri_to_path(uri)),
-                (Ok(a), Ok(b)) if a == b
-            )
+            match (
+                crate::types::uri_to_path(&p),
+                crate::types::uri_to_path(uri),
+            ) {
+                (Ok(a), Ok(b)) => a == b || same_file_on_windows(&a, &b),
+                _ => false,
+            }
         })
+}
+
+#[cfg(windows)]
+fn same_file_on_windows(a: &Path, b: &Path) -> bool {
+    same_file::is_same_file(a, b).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn same_file_on_windows(_: &Path, _: &Path) -> bool {
+    false
 }
 
 /// The program to spawn for a server `command`.
@@ -1163,6 +1177,23 @@ mod tests {
         let uri: Uri = "file:///C:/work/main.ts".parse().unwrap();
         assert!(same_document("file:///c%3A/work/main.ts", &uri));
         assert!(!same_document("file:///c%3A/work/other.ts", &uri));
+    }
+
+    /// A path that differs in case names the same file on a case-insensitive
+    /// Windows directory.
+    #[cfg(windows)]
+    #[test]
+    fn same_document_matches_a_differently_cased_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Main.ts");
+        std::fs::write(&file, "").unwrap();
+        std::fs::write(dir.path().join("other.ts"), "").unwrap();
+        let uri = crate::types::path_to_uri(&file).unwrap();
+        let lower: Uri = uri.as_str().to_lowercase().parse().unwrap();
+        assert_ne!(uri.as_str(), lower.as_str());
+        assert!(same_document(lower.as_str(), &uri));
+        let other = crate::types::path_to_uri(&dir.path().join("other.ts")).unwrap();
+        assert!(!same_document(other.as_str(), &uri));
     }
 
     /// A server behind a `.cmd` shim runs under `cmd.exe`; dropping the

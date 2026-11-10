@@ -53,6 +53,7 @@ dependencies = [
  "async-trait",
  "libc",
  "lsp-types",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",
