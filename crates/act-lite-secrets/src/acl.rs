@@ -38,9 +38,13 @@ pub(crate) fn restrict_existing_file(path: &Path) -> io::Result<()> {
 }
 
 /// Set the DACL first: it grants the current user full control, which
-/// includes the `WRITE_OWNER` right that the owner change then needs. A
-/// caller that is not the owner can do this only if the old DACL gave it
-/// `WRITE_DAC`; otherwise the call fails and the store is not used.
+/// includes the `WRITE_OWNER` right that the second call needs. The second
+/// call sets owner and DACL together, so a DACL that a previous owner put
+/// back between the two calls is replaced, and after it that account is
+/// neither owner nor on the DACL. A caller that is not the owner gets this far
+/// only if the old DACL gave it `WRITE_DAC`; any failure fails the load or
+/// save. As with unix `chmod`, a handle another process opened earlier keeps
+/// the access it was granted.
 fn restrict_named(path: &Path, inherit: &str) -> io::Result<()> {
     let name = wide(path.as_os_str());
     with_owner_only(inherit, |owner, dacl| unsafe {
@@ -56,10 +60,10 @@ fn restrict_named(path: &Path, inherit: &str) -> io::Result<()> {
             0 => SetNamedSecurityInfoW(
                 name.as_ptr(),
                 SE_FILE_OBJECT,
-                OWNER_SECURITY_INFORMATION,
+                OWNER_SECURITY_INFORMATION | DACL,
                 owner,
                 null_mut(),
-                null(),
+                dacl,
                 null(),
             ),
             code => code,
