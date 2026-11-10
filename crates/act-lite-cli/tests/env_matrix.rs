@@ -130,6 +130,8 @@ fn mv_force_proceeds_through_a_value_collision_only_with_the_flag() {
     );
 }
 
+// Python's `pty` needs `termios`, which Windows lacks.
+#[cfg(unix)]
 #[test]
 fn add_reads_a_hidden_prompt_and_updates_an_existing_key() {
     if Command::new("python3").arg("--version").output().is_err() {
@@ -597,6 +599,7 @@ fn add_one(cmd: &mut Command) {
         .success();
 }
 
+#[cfg(unix)]
 #[test]
 fn store_defaults_to_home_config_act_secrets_with_mode_0600() {
     let tmp = project();
@@ -614,12 +617,33 @@ fn store_defaults_to_home_config_act_secrets_with_mode_0600() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn store_uses_xdg_config_home_act_when_set() {
     let tmp = project();
     let xdg = tmp.path().join("xdg");
     add_one(act_bare(&tmp, tmp.path()).env("XDG_CONFIG_HOME", &xdg));
     assert_eq!(store_files(&xdg.join("act")).len(), 1);
+    assert!(store_files(&tmp.path().join("home/.config/act")).is_empty());
+}
+
+/// Windows keeps the store in `%APPDATA%\act\secrets`. `dirs::config_dir()`
+/// reads the RoamingAppData known folder, not the `APPDATA` variable, so the
+/// child cannot be pointed at a temp dir: the test uses the real folder and
+/// removes the store it made.
+#[cfg(windows)]
+#[test]
+fn store_defaults_to_appdata_act_secrets_on_windows() {
+    use act_lite_secrets::paths::{resolve_root, store_path_in};
+    let tmp = project();
+    add_one(&mut act_bare(&tmp, tmp.path()));
+    let secrets = PathBuf::from(std::env::var_os("APPDATA").unwrap())
+        .join("act")
+        .join("secrets");
+    let store = store_path_in(&secrets, &resolve_root(tmp.path()));
+    let found = store.is_file();
+    let _ = fs::remove_file(&store);
+    assert!(found, "no store at {}", store.display());
     assert!(store_files(&tmp.path().join("home/.config/act")).is_empty());
 }
 
