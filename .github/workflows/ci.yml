@@ -24,6 +24,8 @@ jobs:
   floor:
     name: floor (${{ github.event.inputs.os || 'ubuntu-latest' }})
     runs-on: ${{ github.event.inputs.os || 'ubuntu-latest' }}
+    outputs:
+      installer_ps: ${{ steps.scope.outputs.installer_ps }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,6 +58,7 @@ jobs:
           printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml|about\.(toml|hbs))$' && echo "licenses=true" >> "$GITHUB_OUTPUT" || echo "licenses=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^install\.sh$' && echo "installer=true" >> "$GITHUB_OUTPUT" || echo "installer=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^install\.ps1$' && echo "installer_ps=true" >> "$GITHUB_OUTPUT" || echo "installer_ps=false" >> "$GITHUB_OUTPUT"
           echo "rust: ${pkgs:-none}"
       - name: cargo fmt --check
         if: steps.scope.outputs.pkgs != ''
@@ -104,3 +107,59 @@ jobs:
       - name: shellcheck install.sh
         if: steps.scope.outputs.installer == 'true' && runner.os == 'Linux'
         run: shellcheck install.sh
+
+  installer-windows:
+    needs: floor
+    if: ${{ !cancelled() && needs.floor.outputs.installer_ps == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PSScriptAnalyzer install.ps1
+        shell: pwsh
+        run: |
+          $found = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning, Error -ExcludeRule PSAvoidUsingWriteHost
+          $found | Format-Table -AutoSize
+          if ($found) { exit 1 }
+      - name: install.ps1 against a local release
+        shell: pwsh
+        run: |
+          # A stand-in release: curl.exe answers --version like act-lite.exe does.
+          $root = Join-Path $env:RUNNER_TEMP 'release'
+          $target = 'x86_64-pc-windows-msvc'
+          foreach ($tag in 'v0.0.1', 'v0.0.2') {
+            $name = "act-lite-$tag-$target"
+            New-Item -ItemType Directory -Force "$root\$tag\stage\$name" | Out-Null
+            Copy-Item "$env:SystemRoot\System32\curl.exe" "$root\$tag\stage\$name\act-lite.exe"
+            Compress-Archive -Path "$root\$tag\stage\$name" -DestinationPath "$root\$tag\$name.zip"
+            $hash = (Get-FileHash -Algorithm SHA256 "$root\$tag\$name.zip").Hash.ToLower()
+            if ($tag -eq 'v0.0.2') { $hash = '0' * 64 }
+            [IO.File]::WriteAllText("$root\$tag\$name.zip.sha256", "$hash  $name.zip`n")
+          }
+          Copy-Item install.ps1 $root
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', $root -PassThru
+          for ($i = 0; $i -lt 50; $i++) {
+            try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/install.ps1 | Out-Null; break } catch { Start-Sleep -Milliseconds 200 }
+          }
+          $env:ACT_LITE_BASE_URL = 'http://127.0.0.1:8765'
+          $dir = Join-Path $env:RUNNER_TEMP 'bin'
+          $env:ACT_LITE_INSTALL_DIR = $dir
+          $run = 'irm http://127.0.0.1:8765/install.ps1 | iex'
+          $failed = $false
+          foreach ($shell in 'powershell', 'pwsh') {
+            Write-Host "== ${shell}: install, then install again over the first copy"
+            $env:ACT_LITE_VERSION = 'v0.0.1'
+            foreach ($round in 1, 2) {
+              & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
+              if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell install round $round"; $failed = $true }
+            }
+            Write-Host "== ${shell}: checksum mismatch installs nothing"
+            Remove-Item -Recurse -Force $dir
+            $env:ACT_LITE_VERSION = 'v0.0.2'
+            & $shell -NoProfile -ExecutionPolicy Bypass -Command $run
+            if ($LASTEXITCODE -eq 0 -or (Test-Path "$dir\act-lite.exe")) { Write-Host "FAIL: $shell installed despite a checksum mismatch"; $failed = $true }
+          }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains $dir) { Write-Host "FAIL: $dir is not on the user PATH"; $failed = $true }
+          Stop-Process -Id $server.Id
+          # explicit: the runner otherwise exits with $LASTEXITCODE, which the mismatch case sets to 1
+          if ($failed) { exit 1 } else { exit 0 }

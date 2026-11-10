@@ -54,6 +54,11 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
             cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+            # static CRT: the binary does not need the Visual C++ redistributable
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
@@ -67,14 +72,17 @@ jobs:
         with:
           tool: cross@0.2.5
       - name: build
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
           USE_CROSS: ${{ matrix.cross }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
           if [ "$USE_CROSS" = true ]; then tool=cross; else tool=cargo; fi
           "$tool" build --release --locked -p act-lite-cli --target "$TARGET"
       - name: package
         id: package
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: |
@@ -85,24 +93,44 @@ jobs:
           fi
           name="act-lite-${version}-${TARGET}"
           mkdir -p "dist/$name"
-          cp "target/$TARGET/release/act-lite" LICENSE NOTICE THIRD-PARTY-LICENSES README.md "dist/$name/"
+          case "$TARGET" in
+            *-windows-*) exe=act-lite.exe; ext=zip ;;
+            *) exe=act-lite; ext=tar.gz ;;
+          esac
+          cp "target/$TARGET/release/$exe" LICENSE NOTICE THIRD-PARTY-LICENSES README.md "dist/$name/"
           cd dist
-          tar -czf "$name.tar.gz" "$name"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          if [ "$ext" = zip ]; then
+            7z a -tzip "$name.zip" "$name"
+            # sha256sum on Windows marks binary mode with '*'; write the shasum format by hand
+            printf '%s  %s\n' "$(sha256sum "$name.zip" | cut -d' ' -f1)" "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "archive=$name.$ext" >> "$GITHUB_OUTPUT"
       - name: smoke
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ steps.package.outputs.name }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "tag $GITHUB_REF_NAME does not match version v$version"
             exit 1
           fi
+          if command -v shasum >/dev/null; then sum="shasum -a 256"; else sum=sha256sum; fi
+          (cd dist && $sum -c "$ARCHIVE.sha256")
           dir=$(mktemp -d)
-          tar -xzf "dist/$NAME.tar.gz" -C "$dir"
-          bin="$dir/$NAME/act-lite"
+          case "$ARCHIVE" in
+            *.zip) (cd "$dir" && 7z x "$GITHUB_WORKSPACE/dist/$ARCHIVE" >/dev/null); bin="$dir/$NAME/act-lite.exe" ;;
+            *) tar -xzf "dist/$ARCHIVE" -C "$dir"; bin="$dir/$NAME/act-lite" ;;
+          esac
+          for f in LICENSE NOTICE THIRD-PARTY-LICENSES README.md; do
+            [ -f "$dir/$NAME/$f" ] || { echo "$ARCHIVE does not contain $NAME/$f"; exit 1; }
+          done
           if [ "$TARGET" = x86_64-apple-darwin ] && ! arch -x86_64 true 2>/dev/null; then
             echo "Rosetta is not available on this runner; checking the binary type only"
             file "$bin"
@@ -111,7 +139,7 @@ jobs:
             file "$bin"
             file "$bin" | grep -q aarch64
           else
-            out=$("$bin" --version)
+            out=$("$bin" --version | tr -d '\r')
             echo "$out"
             [ "$out" = "act-lite $version" ]
           fi
@@ -119,8 +147,8 @@ jobs:
         with:
           name: ${{ steps.package.outputs.name }}
           path: |
-            dist/${{ steps.package.outputs.name }}.tar.gz
-            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
+            dist/${{ steps.package.outputs.archive }}
+            dist/${{ steps.package.outputs.archive }}.sha256
           if-no-files-found: error
 
   release:
