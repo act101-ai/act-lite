@@ -189,13 +189,29 @@ impl Drop for Token {
     }
 }
 
+/// `sd` as SDDL, limited to `info`, for tests.
+#[cfg(test)]
+fn sd_to_sddl(sd: PSECURITY_DESCRIPTOR, info: u32) -> String {
+    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+    let mut text = null_mut();
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd,
+            SDDL_REVISION_1,
+            info,
+            &mut text,
+            null_mut(),
+        )
+    };
+    assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+    let text = Local(text.cast());
+    unsafe { from_wide_ptr(text.0.cast()) }
+}
+
 /// The owner and DACL of `path` as SDDL, for tests.
 #[cfg(test)]
 pub(crate) fn security_sddl(path: &Path) -> String {
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
-    };
-    use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
     let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let name = wide(path.as_os_str());
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
@@ -213,19 +229,30 @@ pub(crate) fn security_sddl(path: &Path) -> String {
     };
     assert_eq!(rc, 0, "GetNamedSecurityInfoW failed for {}", path.display());
     let sd = Local(sd);
-    let mut text = null_mut();
+    sd_to_sddl(sd.0, info)
+}
+
+/// The current user's SID as SDDL writes it in an output string: an alias
+/// such as `LA` for a well-known account (the built-in Administrator, which a
+/// CI runner can be), else `S-1-5-21-...`.
+#[cfg(test)]
+fn current_user_in_sddl() -> String {
+    let sddl = wide(OsStr::new(&format!("O:{}", current_user_sid().unwrap())));
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     let ok = unsafe {
-        ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            sd.0,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
             SDDL_REVISION_1,
-            info,
-            &mut text,
+            &mut sd,
             null_mut(),
         )
     };
     assert_ne!(ok, 0, "{}", io::Error::last_os_error());
-    let text = Local(text.cast());
-    unsafe { from_wide_ptr(text.0.cast()) }
+    let sd = Local(sd);
+    sd_to_sddl(sd.0, OWNER_SECURITY_INFORMATION)
+        .strip_prefix("O:")
+        .unwrap()
+        .to_string()
 }
 
 /// Assert that the current user owns `path` and that `path` has a protected
@@ -234,7 +261,7 @@ pub(crate) fn security_sddl(path: &Path) -> String {
 #[cfg(test)]
 pub(crate) fn assert_owner_only(path: &Path, inherit: &str) {
     let sddl = security_sddl(path);
-    let sid = current_user_sid().unwrap();
+    let sid = current_user_in_sddl();
     let (owner, dacl) = sddl
         .strip_prefix("O:")
         .and_then(|rest| rest.split_once("D:"))
