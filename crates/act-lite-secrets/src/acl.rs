@@ -164,23 +164,24 @@ impl Drop for Token {
     }
 }
 
-/// The DACL of `path` as SDDL, for tests.
+/// The owner and DACL of `path` as SDDL, for tests.
 #[cfg(test)]
-pub(crate) fn dacl_sddl(path: &Path) -> String {
+pub(crate) fn security_sddl(path: &Path) -> String {
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
     };
+    use windows_sys::Win32::Security::OWNER_SECURITY_INFORMATION;
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
     let name = wide(path.as_os_str());
-    let mut dacl = null_mut();
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     let rc = unsafe {
         GetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            info,
             null_mut(),
             null_mut(),
-            &mut dacl,
+            null_mut(),
             null_mut(),
             &mut sd,
         )
@@ -192,7 +193,7 @@ pub(crate) fn dacl_sddl(path: &Path) -> String {
         ConvertSecurityDescriptorToStringSecurityDescriptorW(
             sd.0,
             SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
+            info,
             &mut text,
             null_mut(),
         )
@@ -202,21 +203,32 @@ pub(crate) fn dacl_sddl(path: &Path) -> String {
     unsafe { from_wide_ptr(text.0.cast()) }
 }
 
-/// Assert that `path` has a protected DACL whose only entry gives the current
-/// user full control with inheritance flags `inherit`.
+/// Assert that the current user owns `path` and that `path` has a protected
+/// DACL whose only entry gives the current user full control with
+/// inheritance flags `inherit`.
 #[cfg(test)]
 pub(crate) fn assert_owner_only(path: &Path, inherit: &str) {
-    let sddl = dacl_sddl(path);
-    let (flags, aces) = sddl
-        .strip_prefix("D:")
-        .and_then(|rest| rest.find('(').map(|i| rest.split_at(i)))
+    let sddl = security_sddl(path);
+    let sid = current_user_sid().unwrap();
+    let (owner, dacl) = sddl
+        .strip_prefix("O:")
+        .and_then(|rest| rest.split_once("D:"))
+        .unwrap_or_else(|| panic!("no owner or DACL on {}: {sddl}", path.display()));
+    assert_eq!(
+        owner,
+        sid,
+        "{} is not owned by the current user: {sddl}",
+        path.display()
+    );
+    let (flags, aces) = dacl
+        .find('(')
+        .map(|i| dacl.split_at(i))
         .unwrap_or_else(|| panic!("no DACL entries on {}: {sddl}", path.display()));
     assert!(
         flags.contains('P'),
         "DACL of {} is not protected: {sddl}",
         path.display()
     );
-    let sid = current_user_sid().unwrap();
     assert_eq!(
         aces,
         format!("(A;{inherit};FA;;;{sid})"),
