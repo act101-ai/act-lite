@@ -1,7 +1,9 @@
 //! Owner-only access on Windows: the equivalent of unix modes `0700` and
-//! `0600`. Each function sets a protected DACL (inheritance from the parent
-//! off) whose one entry gives the current user full control, so the store is
-//! private wherever it lives, not only under the user profile.
+//! `0600`. Each function makes the current user the owner and sets a
+//! protected DACL (inheritance from the parent off) whose one entry gives the
+//! current user full control, so the store is private wherever it lives, not
+//! only under the user profile. Ownership matters: an owner can always
+//! rewrite the DACL, so a store left owned by another account is not private.
 
 use std::ffi::OsStr;
 use std::io;
@@ -16,10 +18,13 @@ use windows_sys::Win32::Security::Authorization::{
     SE_FILE_OBJECT, SetNamedSecurityInfoW, SetSecurityInfo,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetTokenInformation,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+    GetTokenInformation, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+const DACL: u32 = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
 
 /// Restrict `dir` to the current user. Files created in it later inherit the
 /// same single entry (`OICI`: object and container inherit).
@@ -32,31 +37,46 @@ pub(crate) fn restrict_existing_file(path: &Path) -> io::Result<()> {
     restrict_named(path, "")
 }
 
+/// Set the DACL first: it grants the current user full control, which
+/// includes the `WRITE_OWNER` right that the owner change then needs. A
+/// caller that is not the owner can do this only if the old DACL gave it
+/// `WRITE_DAC`; otherwise the call fails and the store is not used.
 fn restrict_named(path: &Path, inherit: &str) -> io::Result<()> {
     let name = wide(path.as_os_str());
-    with_owner_only_dacl(inherit, |dacl| unsafe {
-        SetNamedSecurityInfoW(
+    with_owner_only(inherit, |owner, dacl| unsafe {
+        match SetNamedSecurityInfoW(
             name.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            DACL,
             null_mut(),
             null_mut(),
             dacl,
             null(),
-        )
+        ) {
+            0 => SetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                owner,
+                null_mut(),
+                null(),
+                null(),
+            ),
+            code => code,
+        }
     })
 }
 
 /// Restrict the open `file` to the current user. The handle must have
-/// `WRITE_DAC` access.
+/// `WRITE_DAC` and `WRITE_OWNER` access.
 pub(crate) fn restrict_file(file: &std::fs::File) -> io::Result<()> {
     let handle = file.as_raw_handle() as HANDLE;
-    with_owner_only_dacl("", |dacl| unsafe {
+    with_owner_only("", |owner, dacl| unsafe {
         SetSecurityInfo(
             handle,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            null_mut(),
+            OWNER_SECURITY_INFORMATION | DACL,
+            owner,
             null_mut(),
             dacl,
             null(),
@@ -64,13 +84,11 @@ pub(crate) fn restrict_file(file: &std::fs::File) -> io::Result<()> {
     })
 }
 
-/// Build the DACL `D:P(A;<inherit>;FA;;;<user>)` and pass it to `apply`,
-/// which returns a Win32 error code (0 is success).
-fn with_owner_only_dacl(inherit: &str, apply: impl FnOnce(*const ACL) -> u32) -> io::Result<()> {
-    let sddl = wide(OsStr::new(&format!(
-        "D:P(A;{inherit};FA;;;{})",
-        current_user_sid()?
-    )));
+/// Build owner `<user>` and DACL `D:P(A;<inherit>;FA;;;<user>)` and pass them
+/// to `apply`, which returns a Win32 error code (0 is success).
+fn with_owner_only(inherit: &str, apply: impl FnOnce(PSID, *const ACL) -> u32) -> io::Result<()> {
+    let sid = current_user_sid()?;
+    let sddl = wide(OsStr::new(&format!("O:{sid}D:P(A;{inherit};FA;;;{sid})")));
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     // SAFETY: `sddl` is NUL-terminated; on success `sd` is a LocalAlloc'd
     // descriptor that `Local` frees.
@@ -89,12 +107,15 @@ fn with_owner_only_dacl(inherit: &str, apply: impl FnOnce(*const ACL) -> u32) ->
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl: *mut ACL = null_mut();
-    // SAFETY: `sd.0` is a valid descriptor; `dacl` points into it and is used
-    // only while `sd` lives.
-    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0 {
+    let mut owner: PSID = null_mut();
+    // SAFETY: `sd.0` is a valid descriptor; `dacl` and `owner` point into it
+    // and are used only while `sd` lives.
+    if unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut dacl, &mut defaulted) } == 0
+        || unsafe { GetSecurityDescriptorOwner(sd.0, &mut owner, &mut defaulted) } == 0
+    {
         return Err(io::Error::last_os_error());
     }
-    match apply(dacl) {
+    match apply(owner, dacl) {
         0 => Ok(()),
         code => Err(io::Error::from_raw_os_error(code as i32)),
     }
