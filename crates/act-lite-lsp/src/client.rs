@@ -1207,7 +1207,8 @@ mod tests {
         std::fs::write(
             dir.path().join("typescript-language-server.cmd"),
             format!(
-                "@start /b cmd /c \"ping -n 4 127.0.0.1 > nul & type nul > {}\"\r\n@ping -n 30 127.0.0.1 > nul\r\n",
+                // Full paths: PATH holds only the shim's directory.
+                "@start /b %SystemRoot%\\System32\\cmd.exe /c \"%SystemRoot%\\System32\\ping.exe -n 4 127.0.0.1 > nul & type nul > {}\"\r\n@%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 > nul\r\n",
                 marker.display()
             ),
         )
