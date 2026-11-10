@@ -161,4 +161,5 @@ jobs:
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains $dir) { Write-Host "FAIL: $dir is not on the user PATH"; $failed = $true }
           Stop-Process -Id $server.Id
-          if ($failed) { exit 1 }
+          # explicit: the runner otherwise exits with $LASTEXITCODE, which the mismatch case sets to 1
+          if ($failed) { exit 1 } else { exit 0 }
