@@ -863,7 +863,6 @@ impl LspClientTrait for LspClient {
         if first_open {
             self.wait_for_indexing(INDEXING_BUDGET_MS.min(left())).await;
         }
-        let wanted = uri.as_str();
         let deadline = Duration::from_millis(if first_open {
             timeout_ms.min(left())
         } else {
@@ -875,7 +874,10 @@ impl LspClientTrait for LspClient {
                 match rx.recv().await {
                     Ok((method, params)) => {
                         if method == "textDocument/publishDiagnostics"
-                            && params.get("uri").and_then(|u| u.as_str()) == Some(wanted)
+                            && params
+                                .get("uri")
+                                .and_then(|u| u.as_str())
+                                .is_some_and(|u| same_document(u, uri))
                         {
                             return true;
                         }
@@ -1078,6 +1080,19 @@ impl LspClientTrait for LspClient {
     }
 }
 
+/// True when `published` names the document `uri`: the same text, or the
+/// same file in another spelling. vscode-languageserver servers write
+/// `file:///C:/a` back as `file:///c%3A/a`.
+fn same_document(published: &str, uri: &Uri) -> bool {
+    published == uri.as_str()
+        || published.parse::<Uri>().is_ok_and(|p| {
+            matches!(
+                (crate::types::uri_to_path(&p), crate::types::uri_to_path(uri)),
+                (Ok(a), Ok(b)) if a == b
+            )
+        })
+}
+
 /// The program to spawn for a server `command`.
 ///
 /// On Windows `Command::new` finds only `.exe` files on `PATH`, but npm
@@ -1132,6 +1147,23 @@ mod tests {
     use super::*;
     use crate::types::JsonRpcError;
     use std::str::FromStr;
+
+    #[test]
+    fn same_document_matches_the_same_text() {
+        let uri: Uri = "file:///work/main.ts".parse().unwrap();
+        assert!(same_document("file:///work/main.ts", &uri));
+        assert!(!same_document("file:///work/other.ts", &uri));
+    }
+
+    /// TypeScript's server publishes diagnostics for `file:///C:/a` as
+    /// `file:///c%3A/a`.
+    #[cfg(windows)]
+    #[test]
+    fn same_document_matches_another_spelling_of_a_drive_path() {
+        let uri: Uri = "file:///C:/work/main.ts".parse().unwrap();
+        assert!(same_document("file:///c%3A/work/main.ts", &uri));
+        assert!(!same_document("file:///c%3A/work/other.ts", &uri));
+    }
 
     /// A server behind a `.cmd` shim runs under `cmd.exe`; dropping the
     /// client ends the whole tree: the grandchild would otherwise create
