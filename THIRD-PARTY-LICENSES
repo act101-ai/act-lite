@@ -1,8 +1,8 @@
-act-lite-cli 1.2.1 MIT
-act-lite-core 1.2.1 MIT
-act-lite-lsp 1.2.1 MIT
-act-lite-parser 1.2.1 MIT
-act-lite-secrets 1.2.1 MIT
+act-lite-cli 1.2.2 MIT
+act-lite-core 1.2.2 MIT
+act-lite-lsp 1.2.2 MIT
+act-lite-parser 1.2.2 MIT
+act-lite-secrets 1.2.2 MIT
 aho-corasick 1.1.5 Unlicense OR MIT
 anstream 1.0.0 MIT OR Apache-2.0
 anstyle 1.0.14 MIT OR Apache-2.0
@@ -2224,10 +2224,10 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRES
 MIT License
 
 Used by:
-  act-lite-cli 1.2.1
-  act-lite-core 1.2.1
-  act-lite-lsp 1.2.1
-  act-lite-secrets 1.2.1
+  act-lite-cli 1.2.2
+  act-lite-core 1.2.2
+  act-lite-lsp 1.2.2
+  act-lite-secrets 1.2.2
   chrono 0.4.45
   siphasher 1.0.1
   tree-sitter-astro-next 0.1.1
@@ -2793,7 +2793,7 @@ SOFTWARE.
 MIT License
 
 Used by:
-  act-lite-parser 1.2.1
+  act-lite-parser 1.2.2
   tree-sitter-css 0.25.0
   tree-sitter-language 0.1.9
 The MIT License (MIT)
@@ -2959,7 +2959,7 @@ THE SOFTWARE IS PROVIDED &quot;AS IS&quot;, WITHOUT WARRANTY OF ANY KIND, EXPRES
 MIT License
 
 Used by:
-  act-lite-parser 1.2.1
+  act-lite-parser 1.2.2
   tree-sitter-dockerfile 0.2.1
 The MIT License (MIT)
 
@@ -3045,7 +3045,7 @@ THE SOFTWARE.
 MIT License
 
 Used by:
-  act-lite-parser 1.2.1
+  act-lite-parser 1.2.2
   tree-sitter-markdown 0.7.1
 The MIT License (MIT)
 

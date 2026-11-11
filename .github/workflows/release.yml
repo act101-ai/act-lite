@@ -167,3 +167,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*
+
+  install-smoke:
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      ACT_LITE_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          export ACT_LITE_INSTALL_DIR="$RUNNER_TEMP/act-lite-bin"
+          sh install.sh
+          test "$("$ACT_LITE_INSTALL_DIR/act-lite" --version)" = "act-lite ${ACT_LITE_VERSION#v}"
+      - name: install.ps1
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $env:ACT_LITE_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'act-lite-bin'
+          ./install.ps1
+          $version = & (Join-Path $env:ACT_LITE_INSTALL_DIR 'act-lite.exe') --version
+          if ($version -ne "act-lite $($env:ACT_LITE_VERSION.Substring(1))") { throw "wrong installed version: $version" }

@@ -179,6 +179,8 @@ fn redactable(values: &[String]) -> Vec<&[u8]> {
 struct Byte {
     byte: u8,
     stream: Stream,
+    /// Already sent to the sink; retained only as masked match history.
+    written: bool,
     /// Its stream has released it.
     released: bool,
     /// Part of a stored value.
@@ -199,7 +201,7 @@ struct Byte {
 struct Merged<O: Write, E: Write> {
     out: ClosableSink<O>,
     err: ClosableSink<E>,
-    /// Arrived bytes not yet written, in the order they are written.
+    /// Pending bytes plus a short suffix already written and masked, in order.
     queue: VecDeque<Byte>,
     /// Per stream: the last byte written was masked.
     masking: [bool; 2],
@@ -207,6 +209,10 @@ struct Merged<O: Write, E: Write> {
     carry: [Vec<u8>; 2],
     /// Streams whose pump has not ended.
     open: usize,
+    /// Bytes emitted before their pump released them, awaiting its acknowledgement.
+    forced: [usize; 2],
+    /// Masked bytes already sent to each stream, for matches across later chunks.
+    history: [Vec<u8>; 2],
 }
 
 impl<O: Write, E: Write> Merged<O, E> {
@@ -218,6 +224,8 @@ impl<O: Write, E: Write> Merged<O, E> {
             masking: [false; 2],
             carry: Default::default(),
             open: 2,
+            forced: [0; 2],
+            history: Default::default(),
         }
     }
 
@@ -265,6 +273,36 @@ impl<O: Write, E: Write> Merged<O, E> {
         }
     }
 
+    /// Mark a value completed in one stream even when the other stream's
+    /// bytes separate its parts in queue order.
+    fn mask_stream(&mut self, stream: Stream, old: usize, values: &[String]) {
+        let vals = redactable(values);
+        if vals.is_empty() {
+            return;
+        }
+        let mut bytes: Vec<(u8, Option<usize>)> = self.history[stream as usize]
+            .iter()
+            .map(|&b| (b, None))
+            .collect();
+        bytes.extend(
+            self.queue
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.stream == stream && !b.written)
+                .map(|(i, b)| (b.byte, Some(i))),
+        );
+        for v in vals {
+            for i in 0..bytes.len().saturating_sub(v.len() - 1) {
+                let hit = &bytes[i..i + v.len()];
+                if hit.iter().any(|(_, p)| p.is_some_and(|p| p >= old))
+                    && hit.iter().map(|(b, _)| *b).eq(v.iter().copied())
+                {
+                    self.mask(hit.iter().filter_map(|(_, p)| *p));
+                }
+            }
+        }
+    }
+
     /// Queue `bytes` just read from `stream`, mask every stored value they
     /// complete in queue order, and write what is ready.
     fn arrive(&mut self, stream: Stream, bytes: &[u8], values: &[String]) -> io::Result<()> {
@@ -272,17 +310,22 @@ impl<O: Write, E: Write> Merged<O, E> {
         self.queue.extend(bytes.iter().map(|&byte| Byte {
             byte,
             stream,
+            written: false,
             released: false,
             masked: false,
             starts: false,
         }));
         self.mask_queued(0, old, values);
-        self.write(values)
+        self.mask_stream(stream, old, values);
+        self.write(values, false)
     }
 
     /// Mark the next `bytes.len()` queued bytes of `stream` released, mask
     /// every stored value contiguous in them, and write what is ready.
     fn release(&mut self, stream: Stream, bytes: &[u8], values: &[String]) -> io::Result<()> {
+        let acknowledged = self.forced[stream as usize].min(bytes.len());
+        self.forced[stream as usize] -= acknowledged;
+        let bytes = &bytes[acknowledged..];
         let at: Vec<usize> = (0..self.queue.len())
             .filter(|&p| self.queue[p].stream == stream && !self.queue[p].released)
             .take(bytes.len())
@@ -298,7 +341,7 @@ impl<O: Write, E: Write> Merged<O, E> {
                 }
             }
         }
-        self.write(values)
+        self.write(values, true)
     }
 
     /// Index of the first unreleased queued byte, or the queue length.
@@ -343,9 +386,9 @@ impl<O: Write, E: Write> Merged<O, E> {
     }
 
     /// Index where writing stops: the first unreleased byte, moved back to
-    /// the start of the longest run of bytes before it that is a proper prefix
-    /// of a stored value. Bytes after an unreleased byte can be written before
-    /// it (`pass_held_tail`), so a run before it is held whatever comes next.
+    /// the start of a possible value prefix. A released prefix can be emitted
+    /// when the held tail in the same stream repeats it:
+    /// any future completion then also matches the held tail.
     /// Nothing stops once no stream is open.
     fn ready(&self, values: &[String]) -> usize {
         if self.open == 0 {
@@ -354,21 +397,68 @@ impl<O: Write, E: Write> Merged<O, E> {
         let u = self.unreleased();
         let vals = redactable(values);
         let longest = vals.iter().map(|v| v.len()).max().unwrap_or(0);
+        let held_stream = self.queue.get(u).map(|b| b.stream);
+        let held = self
+            .queue
+            .range(u..)
+            .take_while(|b| !b.released && Some(b.stream) == held_stream)
+            .count();
         (u.saturating_sub(longest)..u)
             .find(|&p| {
                 vals.iter()
                     .any(|v| v.len() > u - p && self.starts_with(p, &v[..u - p]))
+                    && !(held >= u - p
+                        && self
+                            .queue
+                            .range(p..u)
+                            .all(|b| Some(b.stream) == held_stream)
+                        && self
+                            .queue
+                            .range(p..u)
+                            .map(|b| b.byte)
+                            .eq(self.queue.range(u..u + (u - p)).map(|b| b.byte)))
             })
             .unwrap_or(u)
     }
 
-    /// Write every ready byte, in queue order, each to its own stream.
-    fn write(&mut self, values: &[String]) -> io::Result<()> {
-        self.pass_held_tail(values);
-        let ready = self.ready(values);
+    /// Write ready bytes, then mask and emit the oldest held prefix until no
+    /// more than one proper secret prefix remains unwritten.
+    fn write(&mut self, values: &[String], enforce_bound: bool) -> io::Result<()> {
+        let max_hold = redactable(values)
+            .iter()
+            .map(|v| v.len())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1);
+        let max_history = if self.open == 0 { 0 } else { max_hold };
+        loop {
+            self.pass_held_tail(values);
+            let ready = self.ready(values);
+            self.write_through(ready, max_history)?;
+            if !enforce_bound || self.queue.iter().filter(|b| !b.written).count() <= max_hold {
+                return Ok(());
+            }
+            let p = self.queue.iter().position(|b| !b.written).unwrap();
+            let b = &mut self.queue[p];
+            if !b.released {
+                self.forced[b.stream as usize] += 1;
+                b.released = true;
+            }
+            if max_hold != 0 {
+                b.masked = true;
+                b.starts = false;
+            }
+            self.write_through(p + 1, max_history)?;
+        }
+    }
+
+    /// Emit bytes through `ready` and retain only a bounded masked suffix as
+    /// already-written history for matches that span the two streams.
+    fn write_through(&mut self, ready: usize, max_history: usize) -> io::Result<()> {
         let mut piece = Vec::new();
         let mut current = None;
-        for b in self.queue.drain(..ready).collect::<Vec<_>>() {
+        let drained: Vec<Byte> = self.queue.drain(..ready).collect();
+        for b in drained.iter().filter(|b| !b.written) {
             if current != Some(b.stream) {
                 if let Some(stream) = current {
                     self.emit(stream, &mut piece)?;
@@ -382,9 +472,29 @@ impl<O: Write, E: Write> Merged<O, E> {
                 piece.extend_from_slice(b"***");
             }
             *masking = b.masked;
+            let history = &mut self.history[b.stream as usize];
+            if b.masked {
+                history.push(b.byte);
+                let excess = history.len().saturating_sub(max_history);
+                history.drain(..excess);
+            } else {
+                history.clear();
+            }
         }
         if let Some(stream) = current {
             self.emit(stream, &mut piece)?;
+        }
+        for b in drained
+            .into_iter()
+            .rev()
+            .take_while(|b| b.masked)
+            .take(max_history)
+            .collect::<Vec<_>>()
+            .into_iter()
+        {
+            let mut b = b;
+            b.written = true;
+            self.queue.push_front(b);
         }
         Ok(())
     }
@@ -445,26 +555,18 @@ fn incomplete_tail(bytes: &[u8]) -> usize {
 }
 
 /// Index where a release stops: the start of the longest suffix of
-/// `pending` that is a proper prefix of a redactable value, moved back to the
-/// start of any complete value that would cross it. Bytes from this index on
-/// stay pending.
+/// `pending` that is a proper prefix of a redactable value. Complete values
+/// have already been masked by `Merged::arrive`, so they need not stay pending.
 fn idle_cut(pending: &[u8], values: &[String]) -> usize {
     let vals = redactable(values);
     let longest = vals.iter().map(|v| v.len()).max().unwrap_or(0);
-    let mut cut = (pending.len().saturating_sub(longest)..pending.len())
+    (pending.len().saturating_sub(longest)..pending.len())
         .find(|&i| {
             let tail = &pending[i..];
             vals.iter()
                 .any(|v| v.len() > tail.len() && v.starts_with(tail))
         })
-        .unwrap_or(pending.len());
-    while let Some(i) = (cut.saturating_sub(longest)..cut).find(|&i| {
-        vals.iter()
-            .any(|v| i + v.len() > cut && pending[i..].starts_with(v))
-    }) {
-        cut = i;
-    }
-    cut
+        .unwrap_or(pending.len())
 }
 
 /// Read `reader` on a helper thread; queue each chunk in `merged` as it
@@ -495,22 +597,19 @@ fn pump<R: Read + Send + 'static, O: Write, E: Write>(
     let mut pending: Vec<u8> = Vec::new();
 
     loop {
-        let ready: Vec<u8> = match rx.recv() {
+        match rx.recv() {
             Ok(Ok(chunk)) => {
-                merged
-                    .lock()
-                    .expect("a pump thread panicked")
-                    .arrive(stream, &chunk, values)?;
                 pending.extend_from_slice(&chunk);
-                pending.drain(..idle_cut(&pending, values)).collect()
+                let ready: Vec<u8> = pending.drain(..idle_cut(&pending, values)).collect();
+                let mut merged = merged.lock().expect("a pump thread panicked");
+                merged.arrive(stream, &chunk, values)?;
+                merged.release(stream, &ready, values)?;
+                if merged.closed(stream) {
+                    break;
+                }
             }
             Ok(Err(e)) => return Err(e),
             Err(mpsc::RecvError) => break,
-        };
-        let mut merged = merged.lock().expect("a pump thread panicked");
-        merged.release(stream, &ready, values)?;
-        if merged.closed(stream) {
-            break;
         }
     }
     merged
@@ -815,9 +914,302 @@ mod tests {
         assert_eq!(idle_cut(b"key=super", &values), 4);
         // Values under MIN_REDACT_LEN are never held for.
         assert_eq!(idle_cut(b"key=sho", &values), 7);
-        // A complete value that would cross the cut is held back whole.
+        // A complete value crossing the cut is already masked in Merged.
         let values = vec!["abcdefgh".to_string(), "fghijklm".to_string()];
-        assert_eq!(idle_cut(b"x abcdefghij", &values), 2);
+        assert_eq!(idle_cut(b"x abcdefghij", &values), 7);
+        let periodic = vec!["aaaaaa".to_string()];
+        assert_eq!(idle_cut(&vec![b'a'; 400], &periodic), 395);
+        assert_eq!(idle_cut(&vec![b'b'; 400], &periodic), 400);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn periodic_secret_streams_masked_bytes_before_child_exit() {
+        struct SignalSink(mpsc::Sender<Vec<u8>>);
+        impl Write for SignalSink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.send(buf.to_vec()).unwrap();
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (_tmp, _root, mut secrets) = sandbox();
+        secrets.add("SECA", "aaaaaa").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            run_with(
+                &secrets,
+                &sh("printf '%400s' '' | tr ' ' a; sleep 8"),
+                ClosableSink::new(SignalSink(tx)),
+                ClosableSink::strict(io::sink()),
+            )
+        });
+        let first = rx
+            .recv_timeout(Duration::from_secs(6))
+            .expect("no safe output while child idle");
+        assert_eq!(first, b"***");
+        assert_eq!(worker.join().unwrap().unwrap().code, 0);
+        assert!(rx.try_iter().all(|chunk| !chunk.contains(&b'a')));
+
+        let (_tmp, _root, mut secrets) = sandbox();
+        secrets.add("SECA", "aaaaaa").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            run_with(
+                &secrets,
+                &sh("printf '%400s' '' | tr ' ' b; sleep 2"),
+                ClosableSink::new(SignalSink(tx)),
+                ClosableSink::strict(io::sink()),
+            )
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("control output did not stream while idle"),
+            vec![b'b'; 400]
+        );
+        assert_eq!(worker.join().unwrap().unwrap().code, 0);
+    }
+
+    #[test]
+    fn a_complete_value_crossing_the_idle_cut_stays_masked_across_streams() {
+        let values = vec!["abcdefgh".to_string(), "fghijklm".to_string()];
+        let mut m = both();
+        m.arrive(Stream::Stdout, b"abc", &values).unwrap();
+        m.arrive(Stream::Stderr, b"X", &values).unwrap();
+        m.arrive(Stream::Stdout, b"defghij", &values).unwrap();
+        let pending = b"abcdefghij";
+        let cut = idle_cut(pending, &values);
+        m.release(Stream::Stdout, &pending[..cut], &values).unwrap();
+        m.release(Stream::Stderr, b"X", &values).unwrap();
+        m.finish(Stream::Stdout, &pending[cut..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert_eq!(text(&m.out.inner), "***ij");
+        assert_eq!(text(&m.err.inner), "X");
+    }
+
+    #[test]
+    fn periodic_secret_holds_no_more_than_its_proper_prefix() {
+        struct PausingReader {
+            sent: bool,
+            resume: mpsc::Receiver<()>,
+        }
+        impl Read for PausingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.sent {
+                    self.resume.recv().unwrap();
+                    return Ok(0);
+                }
+                self.sent = true;
+                buf[..400].fill(b'a');
+                Ok(400)
+            }
+        }
+        struct SignalSink(mpsc::Sender<()>);
+        impl Write for SignalSink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.send(()).unwrap();
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        for secret in ["aaaaaa", "aaaaab"] {
+            let (resume_tx, resume_rx) = mpsc::channel();
+            let (written_tx, written_rx) = mpsc::channel();
+            let merged = Arc::new(Mutex::new(Merged::new(
+                ClosableSink::new(SignalSink(written_tx)),
+                ClosableSink::strict(io::sink()),
+            )));
+            let other = merged.clone();
+            let values = vec![secret.to_string()];
+            let worker = thread::spawn(move || {
+                pump(
+                    PausingReader {
+                        sent: false,
+                        resume: resume_rx,
+                    },
+                    Stream::Stdout,
+                    &values,
+                    &other,
+                )
+            });
+            written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let held = merged
+                .lock()
+                .unwrap()
+                .queue
+                .iter()
+                .filter(|b| !b.written)
+                .count();
+            resume_tx.send(()).unwrap();
+            worker.join().unwrap().unwrap();
+            merged
+                .lock()
+                .unwrap()
+                .finish(Stream::Stderr, b"", &[secret.to_string()])
+                .unwrap();
+            assert!(
+                held <= 5,
+                "{secret}: {held} bytes held for a six-byte secret"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_held_tail_still_masks_a_cross_stream_completion() {
+        let values = vec!["aaaaaa".to_string(), "aaaaaX".to_string()];
+        let mut m = both();
+        let a = vec![b'a'; 400];
+        m.arrive(Stream::Stdout, &a, &values).unwrap();
+        let cut = idle_cut(&a, &values);
+        m.release(Stream::Stdout, &a[..cut], &values).unwrap();
+        assert!(m.queue.iter().filter(|b| !b.written).count() <= 5);
+        m.arrive(Stream::Stderr, b"X", &values).unwrap();
+        m.release(Stream::Stderr, b"X", &values).unwrap();
+        m.finish(Stream::Stdout, &a[cut..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert!(!m.out.inner.contains(&b'a'));
+        assert!(!m.err.inner.contains(&b'X'));
+    }
+
+    #[test]
+    fn unmasked_repeated_prefix_still_masks_a_cross_stream_completion() {
+        let values = vec!["aaaaab".to_string()];
+        let mut m = both();
+        let a = vec![b'a'; 400];
+        m.arrive(Stream::Stdout, &a, &values).unwrap();
+        let cut = idle_cut(&a, &values);
+        m.release(Stream::Stdout, &a[..cut], &values).unwrap();
+        assert!(m.queue.len() <= 5);
+        m.arrive(Stream::Stderr, b"b", &values).unwrap();
+        m.release(Stream::Stderr, b"b", &values).unwrap();
+        m.finish(Stream::Stdout, &a[cut..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert!(!m.err.inner.contains(&b'b'));
+    }
+
+    #[test]
+    fn distinct_secret_prefixes_share_one_idle_hold() {
+        let values = vec!["aaaaab".to_string(), "bbbbbC".to_string()];
+        let bytes = b"aaaaabbbbb";
+        let mut m = both();
+        m.arrive(Stream::Stdout, bytes, &values).unwrap();
+        let cut = idle_cut(bytes, &values);
+        m.release(Stream::Stdout, &bytes[..cut], &values).unwrap();
+        assert_eq!(cut, 5);
+        let held = m.queue.iter().filter(|b| !b.written).count();
+        assert!(held <= 5, "{held} bytes held");
+        m.finish(Stream::Stdout, &bytes[cut..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert!(!text(&m.out.inner).contains("aaaaab"));
+    }
+
+    #[test]
+    fn independent_prefixes_can_complete_across_streams() {
+        let values = vec!["aaaaaX".to_string(), "bbbbbC".to_string()];
+        let bytes = b"aaaaabbbbb";
+        let mut m = both();
+        m.arrive(Stream::Stdout, bytes, &values).unwrap();
+        let cut = idle_cut(bytes, &values);
+        m.release(Stream::Stdout, &bytes[..cut], &values).unwrap();
+        assert_eq!(cut, 5);
+        let held = m.queue.iter().filter(|b| !b.written).count();
+        assert!(held <= 5, "{held} bytes held");
+        m.arrive(Stream::Stderr, b"X", &values).unwrap();
+        m.release(Stream::Stderr, b"X", &values).unwrap();
+        m.finish(Stream::Stdout, &bytes[cut..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert_eq!(text(&m.out.inner), "***bbbbb");
+        assert_eq!(text(&m.err.inner), "***");
+    }
+
+    #[test]
+    fn early_masked_prefix_stays_masked_without_completion() {
+        let values = vec!["aaaaaX".to_string(), "bbbbbC".to_string()];
+        let bytes = b"aaaaabbbbb";
+        let mut m = both();
+        m.arrive(Stream::Stdout, bytes, &values).unwrap();
+        m.release(Stream::Stdout, &bytes[..5], &values).unwrap();
+        assert_eq!(text(&m.out.inner), "***");
+        m.finish(Stream::Stdout, &bytes[5..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert_eq!(text(&m.out.inner), "***bbbbb");
+    }
+
+    #[test]
+    fn early_masked_prefix_still_masks_later_bytes_in_its_own_stream() {
+        let values = vec!["aaaaaX".to_string(), "bbbbbC".to_string()];
+        let mut m = both();
+        m.arrive(Stream::Stdout, b"aaaaa", &values).unwrap();
+        m.release(Stream::Stdout, b"", &values).unwrap();
+        m.arrive(Stream::Stderr, b"bbbbb", &values).unwrap();
+        m.release(Stream::Stderr, b"", &values).unwrap();
+        assert!(m.queue.iter().filter(|b| !b.written).count() <= 5);
+        m.arrive(Stream::Stderr, b"q", &values).unwrap();
+        m.release(Stream::Stderr, b"bbbbbq", &values).unwrap();
+        m.arrive(Stream::Stdout, b"X", &values).unwrap();
+        m.release(Stream::Stdout, b"aaaaaX", &values).unwrap();
+        m.finish(Stream::Stdout, b"", &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+        assert!(!m.out.inner.contains(&b'X'));
+    }
+
+    #[test]
+    fn multiple_prefixes_across_streams_share_the_hold_limit() {
+        let values = ["aaaaaX", "bbbbbC", "cccccD", "dddddE"]
+            .map(str::to_string)
+            .to_vec();
+        let mut m = both();
+        for (stream, bytes) in [
+            (Stream::Stdout, b"aaaaaccccc".as_slice()),
+            (Stream::Stderr, b"bbbbbddddd".as_slice()),
+        ] {
+            m.arrive(stream, bytes, &values).unwrap();
+            let cut = idle_cut(bytes, &values);
+            m.release(stream, &bytes[..cut], &values).unwrap();
+            let held = m.queue.iter().filter(|b| !b.written).count();
+            assert!(held <= 5, "{held} bytes held");
+        }
+        m.finish(Stream::Stdout, b"ccccc", &values).unwrap();
+        m.finish(Stream::Stderr, b"ddddd", &values).unwrap();
+    }
+
+    #[test]
+    fn safe_other_stream_bytes_pass_an_early_masked_prefix() {
+        let values = vec!["aaaaaX".to_string(), "bbbbbC".to_string()];
+        let mut m = both();
+        let bytes = b"aaaaabbbbb";
+        m.arrive(Stream::Stdout, bytes, &values).unwrap();
+        m.release(Stream::Stdout, &bytes[..5], &values).unwrap();
+        let safe = vec![b'q'; 400];
+        m.arrive(Stream::Stderr, &safe, &values).unwrap();
+        m.release(Stream::Stderr, &safe, &values).unwrap();
+        assert_eq!(m.err.inner, safe);
+        assert!(m.queue.iter().filter(|b| !b.written).count() <= 5);
+        m.finish(Stream::Stdout, &bytes[5..], &values).unwrap();
+        m.finish(Stream::Stderr, b"", &values).unwrap();
+    }
+
+    #[test]
+    fn periodic_patterns_keep_at_most_a_proper_prefix() {
+        for secret in ["aaaaaa", "ababab", "abcabc"] {
+            let values = vec![secret.to_string()];
+            let bytes: Vec<u8> = secret.bytes().cycle().take(400).collect();
+            let mut m = both();
+            m.arrive(Stream::Stdout, &bytes, &values).unwrap();
+            let cut = idle_cut(&bytes, &values);
+            m.release(Stream::Stdout, &bytes[..cut], &values).unwrap();
+            let held = m.queue.iter().filter(|b| !b.written).count();
+            assert!(held <= 5, "{secret}: {held} bytes held");
+            m.finish(Stream::Stdout, &bytes[cut..], &values).unwrap();
+            m.finish(Stream::Stderr, b"", &values).unwrap();
+            assert!(!text(&m.out.inner).contains(secret));
+        }
     }
 
     /// A writer for stdout alone: stderr is already ended.

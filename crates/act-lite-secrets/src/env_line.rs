@@ -57,8 +57,10 @@ pub fn parse_line(line: &str) -> Result<Parsed<'_>, String> {
     if key.is_empty() {
         return Err("empty key before `=`".into());
     }
-    if key.contains(char::is_whitespace) || key.contains('=') {
-        return Err("invalid key: names must have no whitespace or `=`".into());
+    if key.contains(char::is_whitespace) || key.contains('=') || key.starts_with('#') {
+        return Err(
+            "invalid key: names must have no whitespace or `=`, and must not start with `#`".into(),
+        );
     }
 
     // Token starts after `=` and any whitespace.

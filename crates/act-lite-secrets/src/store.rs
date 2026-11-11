@@ -118,9 +118,18 @@ pub fn load_store(path: &Path) -> Result<Store, SecretsError> {
 }
 
 /// Save a store to disk atomically: write a `0600` temp file in the same
-/// directory, then rename it over `path`. A crash mid-write leaves the old
-/// store intact; the rename also replaces any wider permissions the old file had.
+/// directory, then rename it over `path` and sync the directory on Unix.
+/// A crash mid-write leaves the old store intact; the rename also replaces
+/// any wider permissions the old file had.
 pub fn save_store(path: &Path, store: &Store) -> Result<(), SecretsError> {
+    save_store_with_sync(path, store, sync_parent_dir)
+}
+
+fn save_store_with_sync(
+    path: &Path,
+    store: &Store,
+    sync: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), SecretsError> {
     let dir = path.parent().ok_or_else(|| SecretsError::Io {
         action: "locate the parent directory of",
         path: path.to_path_buf(),
@@ -147,6 +156,19 @@ pub fn save_store(path: &Path, store: &Store) -> Result<(), SecretsError> {
             e,
         ));
     }
+    sync(dir).map_err(io_err("sync", dir))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_dir: &Path) -> std::io::Result<()> {
+    // Windows has no documented ordinary-user equivalent of directory fsync.
+    // Its store rename is not guaranteed durable before the .env rewrite.
     Ok(())
 }
 
@@ -340,6 +362,44 @@ mod tests {
         store.insert("B".into(), "longvalue2".into());
         save_store(&path, &store).unwrap();
         assert_eq!(load_store(&path).unwrap(), store);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_syncs_store_directory_before_env_rewrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("store.env");
+        let env = tmp.path().join(".env");
+        std::fs::write(&env, "A=oldvalue1\n").unwrap();
+        let mut store = Store::new();
+        store.insert("A".into(), "newvalue1".into());
+        let mut synced = false;
+
+        save_store_with_sync(&path, &store, |dir| {
+            assert_eq!(dir, tmp.path());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "A=newvalue1\n");
+            assert_eq!(std::fs::read_to_string(&env).unwrap(), "A=oldvalue1\n");
+            synced = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(synced);
+        std::fs::write(&env, "A=#act:sequestered\n").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_reports_directory_sync_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("store.env");
+        let mut store = Store::new();
+        store.insert("A".into(), "newvalue1".into());
+        let err = save_store_with_sync(&path, &store, |_| {
+            Err(std::io::Error::other("directory sync failed"))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("directory sync failed"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "A=newvalue1\n");
     }
 
     #[test]

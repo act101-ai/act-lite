@@ -193,6 +193,7 @@ impl Secrets {
         let mut already_sequestered = 0usize;
         let mut missing = Vec::new();
         for (key, token) in &parsed {
+            store::validate_name(key)?;
             if token == silhouette::SEQUESTERED_VALUE {
                 if self.store.contains_key(key) {
                     already_sequestered += 1;
@@ -1282,5 +1283,19 @@ mod secrets_tests {
         let err = secrets.import(&root.join(".env"), false).unwrap_err();
         assert!(matches!(err, SecretsError::MalformedEnv { line: 1, .. }));
         assert!(reopen(&tmp, &root).is_empty());
+    }
+
+    #[test]
+    fn import_rejects_exported_comment_key_without_losing_its_value() {
+        let original = "export #TOKEN=fakevalue1\nCONTROLKEY=controlvalue1\n";
+        let (tmp, root, mut secrets) = make_secrets_with_env(original);
+        let env = root.join(".env");
+
+        let err = secrets.import(&env, false).unwrap_err();
+        assert!(matches!(err, SecretsError::MalformedEnv { line: 1, .. }));
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), original);
+        let stored = reopen(&tmp, &root);
+        assert!(stored.get("#TOKEN").is_none());
+        assert!(stored.get("CONTROLKEY").is_none());
     }
 }
