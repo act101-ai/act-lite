@@ -147,10 +147,18 @@ Each stage has three steps:
    or drop a node that depends on a `DROPPED` node. Without these decisions
    the graph never completes.
 
+Run a node's check alone as one command when resuming it, with at most
+trailing `2>&1`. Do not pipe it (including through `tee` or `cat`) or chain
+it with a write.
+
 ### 5.2 One node
 
 The controller (the main session) is the only writer of `graph.md`. Nodes
 never edit it.
+
+If the session offers a tool named `compact`, call `compact` without parameters
+once before starting each row. Use its reply text as the P7 record (`done`).
+If the tool is absent, skip this step.
 
 1. **Plan.** If the node is `TODO`, plan it (§3) in the main checkout. Commit
    the plan and the state change to `PLANNED` together, on the work branch.
@@ -162,8 +170,9 @@ never edit it.
    `nodes/<id>.md` is edited only in the node's checkout.
 3. **Attempt.** The implementer works the plan in the checkout, test first,
    ticking each checkbox and committing as the steps say.
-4. **Measure.** Run the node's Acceptance check and the verification floor
-   in the checkout. Read the output.
+4. **Measure.** Run the node's Acceptance check alone as one command, with at
+   most trailing `2>&1`; do not pipe it or chain it with a write. Run the
+   verification floor in the checkout. Read the output.
 5. **Verification stage** (§4) on the node's diff, against its contract and
    plan.
 6. **Keep or discard.**
@@ -191,7 +200,7 @@ handoff carries the node file, the graph header, the contracts the node
 touches, and an output contract: status, commits, the Acceptance output, and
 any finding. Otherwise the controller runs the nodes itself, one at a time.
 
-Every handoff to an implementer, a planner or a reviewer begins with these
+Every node handoff to an implementer, a planner or a reviewer begins with these
 four lines, in this order and spelling. Write them even when no tool reads
 them.
 
@@ -212,14 +221,20 @@ Files: <comma-separated repository-relative paths the node may change; a path en
   increments it.
 - `Check` is one command as the implementer types it, with no `&&`, `||`,
   `;` or pipe in it. The node's Acceptance line stays as it is; the header
-  gives its command form. A tool that verifies the check ran compares the
-  executed command with this text, and allows only a leading `cd <dir> &&`
-  and a trailing `2>&1`, `| tee <file>` or `| cat`.
+  gives its command form. Run a node's check alone as one command, with at
+  most trailing `2>&1`. Do not pipe it through `tee` or `cat`, and do not
+  chain it with a write. Bionic accepts optional leading `VAR=value` words
+  only for `BIONIC_*`, `RUST_*`, `CARGO_*`, `CI`, `NO_COLOR`, `CLICOLOR*`, and
+  `TERM`; optional leading `cd <dir> &&`; the check; optional trailing
+  `2>&1`; and optional trailing `; echo "exit=$?"`. A pipe anywhere is no match.
 - `Files` is the plan's exact paths for the node plus
   `docs/work/<program>/nodes/<id>.md`, never `graph.md`.
 - A reviewer's handoff has part `review`, an empty `Check:` and an empty
   `Files:`. A planning handoff has part `plan`, an empty `Check:`, and the
   node file in `Files:`.
+- Graph edits and archive operations are controller chores. They never use a node `Unit:`.
+  If a controller chore needs a unit header, use `Unit: <program>` as in §5.1
+  step 3; otherwise omit the header.
 
 After the header, each handoff instructs:
 "If the session offers a tool named `work_begin`, call it first, once, with

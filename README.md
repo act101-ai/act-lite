@@ -1960,12 +1960,54 @@ and adds nine skills: eight that you invoke and one shared skill.
 format that `plan-work` writes and `execute-work` runs, and holds the script
 that checks a work graph. `plan-work` and `execute-work` load it.
 
-Put `act-lite` on your `PATH`, then:
+Install `act-lite` on your `PATH` first (see [Install](#install)). The plugin
+is published in the [act101 marketplace](https://github.com/act101-ai/act101).
 
-```text
-/plugin marketplace add act101-ai/act-lite
-/plugin install act-lite@act-lite-marketplace
+For Claude Code:
+
+```bash
+claude plugin marketplace add act101-ai/act101
+claude plugin install act-lite@act101-marketplace
 ```
+
+For Codex:
+
+```bash
+codex plugin marketplace add act101-ai/act101
+codex plugin add act-lite@act101-marketplace
+```
+
+For OpenCode, keep act-lite's skills in a separate config directory. This
+preserves any act101 skills in the default OpenCode directory:
+
+```bash
+git clone --depth 1 https://github.com/act101-ai/act101.git act101-marketplace
+mkdir -p ~/.config/opencode/act-lite/skills
+cp -R act101-marketplace/plugin-act-lite/skills/. ~/.config/opencode/act-lite/skills/
+```
+
+Save this as `~/.config/opencode/act-lite/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "act-lite": {
+      "type": "local",
+      "command": ["act-lite", "mcp", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Launch OpenCode with that config directory:
+
+```bash
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode/act-lite" opencode
+```
+
+OpenCode also loads your ordinary global MCP config. This installation leaves
+act101's skill files in place.
 
 ## License
 

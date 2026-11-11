@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "act-lite-cli"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "act-lite-core",
  "act-lite-lsp",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "act-lite-core"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "inventory",
  "proptest",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "act-lite-lsp"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "act-lite-core",
  "act-lite-parser",
@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "act-lite-parser"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "act-lite-core",
  "insta",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "act-lite-secrets"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "dirs",
  "sha2 0.10.9",
