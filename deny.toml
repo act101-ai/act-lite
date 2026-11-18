@@ -6,6 +6,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # `chrono` is unmaintained (an INFO notice, not a vulnerability) and has no
+    # safe upgrade. rmcp 3.9 depends on it unconditionally, and schemars pulls
+    # it too; act-lite does not use it directly. Operator ruling 2026-11-17:
+    # ignore. Remove this entry when rmcp and schemars no longer pull chrono.
+    "RUSTSEC-2026-0543",
+]
 
 [licenses]
 version = 2
