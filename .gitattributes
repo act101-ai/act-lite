@@ -1,2 +1,5 @@
 # Text files are checked out with LF on every platform; fixtures are compared byte for byte.
 * text=auto eol=lf
+
+# cmd.exe reads batch files with CRLF endings; keep those bytes in every copy of the plugin.
+plugin/bin/*.cmd -text

@@ -26,6 +26,7 @@ jobs:
     runs-on: ${{ github.event.inputs.os || 'ubuntu-latest' }}
     outputs:
       installer_ps: ${{ steps.scope.outputs.installer_ps }}
+      launcher: ${{ steps.scope.outputs.launcher }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +56,8 @@ jobs:
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|deny\.toml)' && echo "deny=true" >> "$GITHUB_OUTPUT" || echo "deny=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml)$' && echo "msrv=true" >> "$GITHUB_OUTPUT" || echo "msrv=false" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(plugin/skills/work-graph/scripts/|plugin/bin/|plugin/\.mcp\.json$|plugin/\.claude-plugin/|tests/scripts/)' && echo "python=true" >> "$GITHUB_OUTPUT" || echo "python=false" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$changed" | grep -qE '^(plugin/bin/|plugin/\.mcp\.json$|plugin/\.claude-plugin/|tests/scripts/plugin_launcher)' && echo "launcher=true" >> "$GITHUB_OUTPUT" || echo "launcher=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^(Cargo\.(toml|lock)|crates/[^/]*/Cargo\.toml|about\.(toml|hbs))$' && echo "licenses=true" >> "$GITHUB_OUTPUT" || echo "licenses=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^install\.sh$' && echo "installer=true" >> "$GITHUB_OUTPUT" || echo "installer=false" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$changed" | grep -qE '^install\.ps1$' && echo "installer_ps=true" >> "$GITHUB_OUTPUT" || echo "installer_ps=false" >> "$GITHUB_OUTPUT"
@@ -107,6 +109,80 @@ jobs:
       - name: shellcheck install.sh
         if: steps.scope.outputs.installer == 'true' && runner.os == 'Linux'
         run: shellcheck install.sh
+      - name: shellcheck plugin launcher
+        if: steps.scope.outputs.launcher == 'true' && runner.os == 'Linux'
+        run: shellcheck -s sh plugin/bin/act-lite-mcp
+
+  plugin-launcher-windows:
+    needs: floor
+    if: ${{ !cancelled() && needs.floor.outputs.launcher == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PSScriptAnalyzer act-lite-mcp.ps1
+        shell: pwsh
+        run: |
+          $found = Invoke-ScriptAnalyzer -Path plugin/bin/act-lite-mcp.ps1 -Severity Warning, Error
+          $found | Format-Table -AutoSize
+          if ($found) { exit 1 }
+      - name: start the plugin's MCP server as Claude Code does
+        shell: pwsh
+        run: |
+          $failed = $false
+          if ([IO.File]::ReadAllText("$PWD\plugin\bin\act-lite-mcp.cmd") -match "[^`r]`n") { Write-Host 'FAIL: act-lite-mcp.cmd has LF line endings'; $failed = $true }
+          # A local release for the plugin version that holds a real act-lite.exe (from v1.2.5).
+          $version = (Get-Content -Raw plugin/.claude-plugin/plugin.json | ConvertFrom-Json).version
+          $tag = "v$version"
+          $target = 'x86_64-pc-windows-msvc'
+          $name = "act-lite-$tag-$target"
+          $src = 'act-lite-v1.2.5-x86_64-pc-windows-msvc'
+          $work = Join-Path $env:RUNNER_TEMP 'work'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Invoke-WebRequest -UseBasicParsing -OutFile "$work\src.zip" "https://github.com/act101-ai/act-lite/releases/download/v1.2.5/$src.zip"
+          Expand-Archive "$work\src.zip" "$work\src"
+          New-Item -ItemType Directory -Force "$work\stage\$name" | Out-Null
+          Copy-Item "$work\src\$src\act-lite.exe" "$work\stage\$name\act-lite.exe"
+          foreach ($kind in 'good', 'bad') {
+            New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\release-$kind\$tag" | Out-Null
+            Compress-Archive -Path "$work\stage\$name" -DestinationPath "$env:RUNNER_TEMP\release-$kind\$tag\$name.zip"
+            $hash = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\release-$kind\$tag\$name.zip").Hash.ToLower()
+            if ($kind -eq 'bad') { $hash = '0' * 64 }
+            [IO.File]::WriteAllText("$env:RUNNER_TEMP\release-$kind\$tag\$name.zip.sha256", "$hash  $name.zip`n")
+          }
+          $servers = foreach ($kind in 'good', 'bad') {
+            $port = if ($kind -eq 'good') { 8765 } else { 8766 }
+            Start-Process python -ArgumentList '-m', 'http.server', $port, '--bind', '127.0.0.1', '--directory', "$env:RUNNER_TEMP\release-$kind" -PassThru
+          }
+          for ($i = 0; $i -lt 50; $i++) {
+            try { Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8765/$tag/$name.zip.sha256" | Out-Null; break } catch { Start-Sleep -Milliseconds 200 }
+          }
+          npm install --silent --prefix "$env:RUNNER_TEMP\node" cross-spawn@7.0.6
+          $env:CROSS_SPAWN = "$env:RUNNER_TEMP\node\node_modules\cross-spawn"
+          $check = 'tests/scripts/plugin_launcher_spawn.cjs'
+
+          Write-Host '== first start downloads, verifies and runs'
+          $data = Join-Path $env:RUNNER_TEMP 'data'
+          New-Item -ItemType Directory -Force "$data\v0.0.1" | Out-Null
+          $env:CLAUDE_PLUGIN_DATA = $data
+          $env:ACT_LITE_BASE_URL = 'http://127.0.0.1:8765'
+          node $check
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$data\$tag\act-lite.exe")) { Write-Host 'FAIL: first start'; $failed = $true }
+          $left = @(Get-ChildItem -Force $data | ForEach-Object Name)
+          if (($left -join ',') -ne $tag) { Write-Host "FAIL: data directory holds $($left -join ',')"; $failed = $true }
+
+          Write-Host '== later start uses the kept binary without network'
+          $env:ACT_LITE_BASE_URL = 'http://127.0.0.1:9'
+          node $check
+          if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL: later start'; $failed = $true }
+
+          Write-Host '== checksum mismatch installs nothing'
+          $env:CLAUDE_PLUGIN_DATA = Join-Path $env:RUNNER_TEMP 'data-bad'
+          $env:ACT_LITE_BASE_URL = 'http://127.0.0.1:8766'
+          node $check
+          if ($LASTEXITCODE -eq 0 -or (Test-Path "$env:CLAUDE_PLUGIN_DATA\$tag\act-lite.exe")) { Write-Host 'FAIL: installed despite a checksum mismatch'; $failed = $true }
+
+          $servers | ForEach-Object { Stop-Process -Id $_.Id }
+          if ($failed) { exit 1 } else { exit 0 }
 
   installer-windows:
     needs: floor
