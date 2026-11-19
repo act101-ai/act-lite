@@ -170,10 +170,13 @@ jobs:
           $left = @(Get-ChildItem -Force $data | ForEach-Object Name)
           if (($left -join ',') -ne $tag) { Write-Host "FAIL: data directory holds $($left -join ',')"; $failed = $true }
 
-          Write-Host '== later start uses the kept binary without network'
+          Write-Host '== later start uses the kept binary without network, and removes only stale downloads'
+          foreach ($d in 'stale', 'fresh') { New-Item -ItemType Directory -Force "$data\.download.$d" | Out-Null }
+          (Get-Item "$data\.download.stale").LastWriteTime = (Get-Date).AddHours(-1)
           $env:ACT_LITE_BASE_URL = 'http://127.0.0.1:9'
           node $check
           if ($LASTEXITCODE -ne 0) { Write-Host 'FAIL: later start'; $failed = $true }
+          if ((Test-Path "$data\.download.stale") -or -not (Test-Path "$data\.download.fresh")) { Write-Host 'FAIL: stale download cleanup'; $failed = $true }
 
           Write-Host '== checksum mismatch installs nothing'
           $env:CLAUDE_PLUGIN_DATA = Join-Path $env:RUNNER_TEMP 'data-bad'
