@@ -1962,12 +1962,12 @@ that checks a work graph. `plan-work` and `execute-work` load it.
 
 The plugin is published in the
 [act101 marketplace](https://github.com/act101-ai/act101). In Claude Code on
-Linux and macOS it needs no separate install: on first start it downloads the
-`act-lite` release that matches the plugin version, checks its SHA-256, and
-keeps it in the plugin data directory. If `act-lite` of that version is
-already on your `PATH`, the plugin uses it. The first start needs network
-access and `curl`. For Codex and OpenCode, install `act-lite` on your `PATH`
-first (see [Install](#install)).
+Linux, macOS and Windows (x86_64) it needs no separate install: on first start
+it downloads the `act-lite` release that matches the plugin version, checks its
+SHA-256, and keeps it in the plugin data directory. If `act-lite` of that
+version is already on your `PATH`, the plugin uses it. The first start needs
+network access, and `curl` on Linux and macOS. For Codex and OpenCode, install
+`act-lite` on your `PATH` first (see [Install](#install)).
 
 For Claude Code:
 
