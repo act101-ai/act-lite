@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 
 
@@ -117,6 +118,20 @@ class PluginLauncherTests(unittest.TestCase):
         (old / "act-lite").write_text("old")
         self.assertEqual(self.run_launcher().returncode, 0)
         self.assertFalse(old.exists())
+
+    def test_stale_downloads_are_removed_and_fresh_ones_kept(self):
+        self.assertEqual(self.run_launcher().returncode, 0)
+        stale = self.data / ".download.stale"
+        fresh = self.data / ".download.fresh"
+        for d in (stale, fresh):
+            d.mkdir()
+            (d / "partial.tar.gz").write_bytes(b"x")
+        hour_ago = time.time() - 3600
+        os.utime(stale, (hour_ago, hour_ago))
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stale.exists())
+        self.assertTrue(fresh.exists())
 
     def test_unsupported_platform_fails_on_stderr(self):
         env_result = subprocess.run(
