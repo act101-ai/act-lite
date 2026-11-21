@@ -58,8 +58,8 @@ A workflow applies only when it is written down or the operator states it.
    workflow the project declares. Find what the repo contains where the
    request lands, what the touched files declare, who uses the symbols the
    change touches, and, for a structural change, what else breaks if they
-   change. Answer from the repo what the repo can answer; ask the operator
-   only the rest. A text match is not a binding: report each finding as what
+   change. Answer from the repo what the repo can answer; decide the rest
+   by the test in step 3. A text match is not a binding: report each finding as what
    it is. Report the play-back of the system (what the code does where the
    request lands, and how the request relates to it) in the same message as
    the questions of step 3, or with the document when there are none. It is
