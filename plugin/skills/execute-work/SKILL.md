@@ -42,7 +42,8 @@ The graph's format is normative in
 ## Who owns what
 
 - **The operator defines the terms.** What the operator said, in this
-  conversation or in a project file, is decided. Do not ask it again, do
+  conversation or in a project file, is decided within the topic it was
+  said about. Do not ask it again, do
   not ask the operator to confirm it, and do not redefine it. "Done" means
   what the operator or the project says it means. Without such a
   definition, done is: the work branch is committed, pushed, and in a pull
@@ -123,6 +124,10 @@ written down or the operator states it. If an adopted workflow conflicts
 with a default in this skill, the higher one in this order applies. Record
 it in the header with its citation.
 
+An operator instruction or authorization has the scope of the topic under
+discussion when it was given. Approval is an explicit answer to the
+question asked.
+
 ## 3. Plan a node (`TODO` → `PLANNED`)
 
 ### 3.1 Check the premise
@@ -139,11 +144,17 @@ outcome found, take that action and record the outcome in the Log. An
 outcome that the contract does not cover is an open choice (Open choices).
 A premise that fails is never a question for the operator.
 
+A spec claim about external tool behaviour must have committed evidence (a
+probe or a fixture) before the plan is written.
+
 ### 3.2 Write the plan
 
 Append the plan under `## Plan` in the node file. Write for an implementer
 who has not seen the codebase or the spec and who writes idiomatic code once
-the interface and the test are exact.
+the interface and the test are exact. The aim is a plan the implementer
+completes without returning to the planner. When a subagent writes the
+plan, its brief holds every decision the controller has made, as a list the
+planner confirms item by item.
 
 - **Steps.** Each step is one action with a checkable result: write the
   failing test; run it and see it fail; implement; run it and see it pass;
@@ -199,12 +210,28 @@ Each stage has three steps:
      partway; which component owns each piece of state the change touches,
      and whether every reader agrees with it; hostile, malformed and large
      input; and the seams with recently merged work.
-2. **Verify each finding.** Read the code or text it cites and reproduce it;
-   for code, write a failing test. Mark it confirmed or refuted, with the
-   evidence. Record a refuted finding with its reason and drop it.
-3. **Remediate.** Fix every confirmed finding in this stage, test first for
-   code. A confirmed finding outside the stage's scope becomes a new node
-   (§5.4). The stage passes when no confirmed finding is open.
+
+   A fresh reviewer and the brief above apply to the first review of a
+   stage only. A follow-up round goes to the same reviewer or to a fresh
+   one, with only the finding list, the decisions and the remediation diff.
+   It reports each finding as closed or not closed. It may raise a new
+   finding only in code that the remediation added.
+2. **Triage.** Between review and remediation, the controller does these
+   for each finding:
+   - **Confirm** it: read the code or text it cites, or run a small check.
+     Record a refuted finding with its reason and drop it.
+   - **Rank** it by severity (a wrong result, data loss, security or a
+     broken contract; or only test strength or text) and by blast radius
+     (users, code paths, or tests only).
+   - **Decide.** Fix it now if it blocks, with the cheapest correct fix.
+     Otherwise defer it with a reason, make it a new node (§5.4), or reject
+     it with a reason.
+
+   The agent that remediates does not judge the findings.
+3. **Remediate.** Fix each finding that the controller decided to fix now,
+   in this stage, test first for code. The stage passes when the controller
+   finds no blocking defect open. A reviewer is not required to agree:
+   review is input, and the controller decides.
 
 ## 5. Run the graph
 
@@ -260,8 +287,8 @@ If the tool is absent, skip this step.
 6. **Keep or discard.**
    - Acceptance passes and the stage passes: keep (§5.5).
    - Otherwise: start a new round on the same branch, driven by the failure
-     output and the confirmed findings. From the second round, set the
-     node's Capability to `judgment`.
+     output and the findings the controller decided to fix now (§4 step 2).
+     From the second round, set the node's Capability to `judgment`.
    - After three failed rounds: discard the node's branch and checkout, set
      `BLOCKED(<diagnosis>)`, and re-plan the node (split it, change its scope
      or its approach) before any further attempt. When the new plan is
@@ -277,10 +304,11 @@ If the tool is absent, skip this step.
 ### 5.3 Implementers, reviewers and capabilities
 
 When the session can delegate, each running node gets one fresh implementer
-in its checkout, and its verification stage gets one fresh reviewer. Each
-handoff carries the node file, the graph header, the contracts the node
-touches, and an output contract: status, commits, the Acceptance output, and
-any finding. Otherwise the controller runs the nodes itself, one at a time.
+in its checkout, and its verification stage gets one fresh reviewer for its
+first review; a follow-up round follows §4 step 1. Each handoff carries the
+node file, the graph header, the contracts the node touches, and an output
+contract: status, commits, the Acceptance output, and any finding.
+Otherwise the controller runs the nodes itself, one at a time.
 
 Every node handoff to an implementer, a planner or a reviewer begins with these
 four lines, in this order and spelling. Write them even when no tool reads
@@ -342,11 +370,13 @@ Choose the subagent by its capability as the session describes it; do not set a 
 
 ### 5.4 Found issues
 
-Every defect found during a node is in scope. A defect that blocks the node
-is fixed in the node. Any other defect is written into the spec (below) and
-gets a new node with its contract and edges, and the graph is validated again.
-Implementers and reviewers report defects in their output; the
-controller writes the new node. Nothing goes to a follow-ups list.
+A defect that stops the node's Acceptance check is fixed in the node. Every
+other defect is written into the spec (below) and gets a new node with its
+contract and edges, and the graph is validated again; or the controller
+defers or rejects it with a reason and records the reason in the node file.
+A node under review gets no new scope. Implementers and reviewers report
+defects in their output; the controller decides each one (§4 step 2) and
+writes the new node. Nothing goes to a follow-ups list.
 
 Change a spec by rewriting the affected section as final text, never by
 appending an amendment: the implementer reads the section, and two texts that
@@ -381,15 +411,16 @@ When every node is `DONE` or `DROPPED`:
 
 1. Run the verification stage (§4) over the whole branch, from where it left
    the default branch to its head, with a `judgment` reviewer and the
-   header's review focus. Confirmed findings become nodes and run through
-   §5.2.
+   header's review focus. Each finding that the controller decides to fix
+   now (§4 step 2) becomes a node and runs through §5.2.
 2. When the stage passes, deliver the branch in §2 precedence: the
    operator's instruction; else the project's delivery workflow; else bring
    the work branch's pull request up to date, carrying this stage's result
    and the head it reviewed, and make it mergeable: checks green, no
    conflict. Fix a failed check yourself. A defect found in delivery
-   becomes a node (§5.4); delivery resumes when that node is `DONE`. Merge
-   only when the operator asks.
+   becomes a node, or is deferred or rejected with a reason (§5.4);
+   delivery resumes when each new node is `DONE`. Merge only when the
+   operator asks.
 
 ### 5.7 Branches
 

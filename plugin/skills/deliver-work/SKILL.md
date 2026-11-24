@@ -46,8 +46,8 @@ request.
      answers. Step 3 reviews against them.
    - **A plan or work graph** with an open item is unfinished: say so and
      stop. When the work comes from one, a defect found while delivering
-     goes back to it as a new item, and delivery resumes at step 2 when
-     that item is done.
+     goes back to it as a new item, or is deferred or rejected with a reason
+     (step 3); delivery resumes at step 2 when each new item is done.
 
 2. **Verify the tree being delivered.**
    - Bring the branch up to date with its base by merging the base into it.
@@ -72,17 +72,32 @@ request.
    range, the requirements and the project's rules, and nothing else: no
    summary, reasoning, concern or history from this session. Its task: find defects, not approve; report each with its
    location, the failure it causes and the evidence, and name each
-   requirement the diff does not meet.
-   - Verify each finding: read the cited code and reproduce it, for code
-     with a failing test. Mark it confirmed or refuted, with the evidence.
-   - Fix each confirmed finding test-first, then run step 2's checks again.
+   requirement the diff does not meet. A fresh reviewer and this brief apply
+   to the first review only. A follow-up round goes to the same reviewer or
+   to a fresh one, with only the finding list, the decisions and the
+   remediation diff. It reports each finding as closed or not closed. It
+   may raise a new finding only in code that the remediation added.
+   - Triage each finding between review and remediation:
+     - confirm it by reading the cited code or by a small check; record a
+       refuted finding with its reason;
+     - rank it by severity (a wrong result, data loss, security or a broken
+       contract; or only test strength or text) and by blast radius (users,
+       code paths, or tests only);
+     - decide: fix it now if it blocks, with the cheapest correct fix;
+       otherwise defer it with a reason or as a new item (step 1), or reject
+       it with a reason.
+     The agent that remediates does not judge the findings.
+   - Fix each finding decided as fix now test-first, then run step 2's
+     checks again.
    - A requirement the delivered code does not meet is fixed in the code;
      when the operator accepts the delivered behavior instead, rewrite the
      affected section of the requirement document as final text that
      describes what shipped, and add a dated line to its change log, marked
      as the operator's call.
-   - Keep each refuted finding with its evidence for the report.
-   - The stage passes when no confirmed finding is open.
+   - Keep each refuted, deferred and rejected finding with its reason for
+     the report.
+   - The stage passes when you find no blocking defect open. A reviewer is
+     not required to agree: review is input, and you decide.
 
 A capability names the class of task. A session maps it to the subagent or model it uses for that class of task — `judgment` for demanding or nuanced coding work, `implementation` for normal coding work, `mechanical` and `lookup` for simple work — and never to a newer or frontier model beyond that class. When the session's configuration assigns a model to a role (an implementer, a reviewer, a planner), that assignment wins over the capability.
 
@@ -140,9 +155,11 @@ A capability names the class of task. A session maps it to the subagent or model
    discard (below).
    - **Merge** only when authorized. First confirm the head being merged is
      the head that passed steps 2, 3 and 6. Show a failing check or an open
-     finding to the operator and wait for their answer. Use the project's
-     merge method; when the project declares none, use the method that the
-     base branch's recent history shows, and name it in the report.
+     blocking finding to the operator and wait for their answer. Deferred
+     and rejected findings go in the report; the merge does not wait on
+     them. Use the project's merge method; when the project declares none,
+     use the method that the base branch's recent history shows, and name
+     it in the report.
    - **Merge without a forge** into the local base branch. When the base has
      moved, merge it into the work branch first and run steps 2 and 3 again.
      When the base branch has commits that are not on the remote base, stop
@@ -171,8 +188,8 @@ A capability names the class of task. A session maps it to the subagent or model
 - branch, base, and PR link;
 - every commit hash on the branch since its base;
 - each check and its result, and the CI state;
-- the review: fixed findings, refuted findings with their evidence, and the
-  requirement sections rewritten;
+- the review: fixed findings; refuted, deferred and rejected findings with
+  their reason; and the requirement sections rewritten;
 - every open item, every step skipped at the operator's request, and every
   check that did not run, marked not run with its reason.
 

@@ -44,14 +44,16 @@ templates `graph-template.md` and `node-template.md` and the ledger contract
 ## Who owns what
 
 - **The operator defines the terms.** What the operator said, in this
-  conversation or in a project file, is decided. Do not ask it again, do
+  conversation or in a project file, is decided within the topic it was
+  said about. Do not ask it again, do
   not ask the operator to confirm it, and do not redefine it. "Done" means
   what the operator or the project says it means. Without such a
   definition, done is: the work graph is committed, pushed, and in a pull
   request that can merge, with its checks green and no conflict.
 - **The author owns the work.** The author is the session that holds the
   conversation. When a subagent writes the text, its brief holds every
-  decision, and the session that wrote the brief is still the author. A
+  decision the author has made, as a list the planner confirms item by
+  item, and the session that wrote the brief is still the author. A
   defect in the work is the author's failure. A review measures the
   author; it does not move the responsibility, and it is not run again in
   place of the author's own checks.
@@ -145,7 +147,9 @@ workflow for part of the work, use it.
    in §2 precedence: the operator's instruction; else the project's design
    workflow; else agree intent, scope and constraints with the operator and
    write them to a spec. Take what the repo and the conversation give.
-   Decide the rest by the test in Questions.
+   Decide the rest by the test in Questions. A spec claim about external
+   tool behaviour must have committed evidence (a probe or a fixture)
+   before the plan is written.
 2. **Map the files.** List the files the work creates or changes and what
    each is responsible for. Decide the decomposition here: one clear
    responsibility per file; files that change together live together; follow
@@ -170,7 +174,8 @@ workflow for part of the work, use it.
    that the executor stops, asks or waits for the operator, that the
    operator runs a node or a check, or that an outcome is a question for
    the operator.
-7. **Author's checks** on the graph. Fix what you find in place:
+7. **Author's checks** on the graph. The aim is a plan the implementer
+   completes without returning to the planner. Fix what you find in place:
    1. **Spec coverage.** Every requirement in every authority spec maps to a
       node.
    2. **Interface match.** Every Consumes resolves to a Produces of a node
@@ -248,17 +253,28 @@ The audit has three steps:
    After the header, the handoff instructs: "If the session offers a tool
    named `work_begin`, call it first, once, with `unit`, `round`, `check` and
    `files` from the header above. If the tool is absent, skip this step."
-2. **Verify each finding.** Read the spec or graph text it cites and
-   reproduce it. Mark it confirmed or refuted, with the evidence. Record a
-   refuted finding with its reason and drop it.
-3. **Remediate.** Fix every confirmed finding in the graph: a missing node, a
-   wrong or missing edge, an unresolved Consumes, a contract that restates
-   the spec or writes the code. The audit passes when no confirmed finding
-   is open. It does not run a second time. A finding goes to the operator
-   only when it passes the test in Questions; the fix for a finding is the
-   author's call. A finding that shows the graph cannot run, or several
-   findings of one kind, shows which of the author's checks (§3 step 7) was
-   skipped: do that check again over the whole graph.
+2. **Triage.** Between review and remediation, the author does these for
+   each finding:
+   - **Confirm** it: read the spec or graph text it cites, or run a small
+     check. Record a refuted finding with its reason and drop it.
+   - **Rank** it by severity (a wrong result, data loss, security or a
+     broken contract; or only test strength or text) and by blast radius
+     (users, code paths, or tests only).
+   - **Decide.** Fix it now if it blocks, with the cheapest correct fix.
+     Otherwise defer it with a reason, make it a new node, or reject it
+     with a reason.
+
+   The agent that remediates does not judge the findings.
+3. **Remediate.** Fix each finding that the author decided to fix now in
+   the graph: a missing node, a wrong or missing edge, an unresolved
+   Consumes, a contract that restates the spec or writes the code. The
+   audit passes when the author finds no blocking defect open. A reviewer
+   is not required to agree: review is input, and the author decides. A
+   follow-up checks only the remediations (step 1). A finding goes to the
+   operator only when it passes the test in Questions; the fix for a
+   finding is the author's call. A finding that shows the graph cannot run,
+   or several findings of one kind, shows which of the author's checks (§3
+   step 7) was skipped: do that check again over the whole graph.
 
 ## 6. Hand over
 
