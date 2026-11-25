@@ -41,17 +41,12 @@ The graph's format is normative in
 
 ## Who owns what
 
-- **Execution asks no questions.** Questions to the operator belong to
-  specification (the project's define-work and plan-work workflows). Once
-  execution starts, the controller asks no question about order, priority,
-  scope or mechanics. It decides, and records each decision: the author's
-  call in the node file, a line in the spec's change log, or an entry in the
-  graph's Log. It stops only when it literally cannot continue (§5.2,
-  **Stops**). An output style or habit that ends a turn with a question does
-  not apply during execution. Planning exists so that execution never asks:
-  the plan made the decisions, and each premise and live-check outcome has
-  its fallback in the node's contract. A run that stops to ask the operator
-  a question is a failed run.
+- **The operator's rules for execution** (operator instruction,
+  2026-11-25):
+  1. Questions to the operator belong to the specification. After the
+     specification, the controller does the work, asks no question, and
+     records each decision.
+  2. The controller does not stop unless it literally cannot continue.
 - **The operator defines the terms.** What the operator said, in this
   conversation or in a project file, is decided. Do not ask it again, do
   not ask the operator to confirm it, and do not redefine it. "Done" means
@@ -66,6 +61,10 @@ The graph's format is normative in
   place of the author's own checks.
 - **Mechanics are the author's.** Structure, order, internal names, how to
   test, and how to fix a finding are never questions for the operator.
+- **Execution asks the operator nothing.** Planning exists so that
+  execution never asks: the plan made the decisions, and each premise and
+  live-check outcome has its fallback in the node's contract. A run that
+  stops to ask the operator a question is a failed run.
 - **No stop loses work.** Commit and push each artifact when it is first
   written and after each change, so that the session can end at any moment
   without loss.
@@ -82,7 +81,8 @@ as the author's call, with its reason, and in the spec's change log when it
 changes a spec (§5.4). Then continue. Do not wait for an answer, and do not
 end the session to get one.
 
-The operator is asked only for these:
+Two actions wait for an operator instruction. The controller does not ask
+for it:
 
 1. **Delivery.** The pull request is reported to the operator, and a merge
    happens only when the operator asks for it (§5.6).
@@ -92,7 +92,7 @@ The operator is asked only for these:
    that the work did not create.
 
 Neither of these stops other work: the run continues every step that does
-not need the answer.
+not need the instruction.
 
 An action the session cannot do (for example, hardware or access it does
 not have) is not a question either. Apply the fallback that the node's
@@ -229,9 +229,7 @@ Each stage has three steps:
 5. Remove the checkouts whose node is `DONE` or `DROPPED` (§5.5 step 4).
 6. Start each scheduled node (§5.2). `IN-PROGRESS` nodes continue at the
    first unchecked step of their plan.
-7. Decide each stuck node. Before you treat a node as waiting on the
-   operator or as blocked, check the block (§5.2, **Waiting nodes**).
-   Then re-plan a `BLOCKED` node (§5.2 step 6); re-edge
+7. Decide each stuck node: re-plan a `BLOCKED` node (§5.2 step 6); re-edge
    or drop a node that depends on a `DROPPED` node. Without these decisions
    the graph never completes.
 
@@ -282,33 +280,6 @@ If the tool is absent, skip this step.
      verdict is `keep` for a kept node, `discard` for a failed round and
      `blocked` for a node set `BLOCKED`. If the tool is absent, skip this
      step.
-
-**Waiting nodes.** Before the controller treats a node as waiting on the
-operator or as blocked, it reads the node's live contract again and checks
-the block against the repo and the machine now. A block carried from an
-earlier summary, handoff or report is not evidence. The controller builds and
-tests: it runs every test, live check and premise check itself. Nothing in
-execution is kept for the operator. A graph constraint that keeps work for
-the operator without an operator citation is deleted (Rules need the
-operator's approval). The controller tries to clear the block itself: it
-finds a substitute input that the contract allows, applies the fallback that
-the contract fixes (Open choices), installs a tool in a scratch or user-local
-place, or re-edges or splits the node. A node waits only when the session
-literally cannot do the action: it has no tool for it, it has no access (for
-example, operator credentials or hardware), or a permission is denied. The
-controller records what it tried and the evidence in the graph's Log. A
-waiting node does not stop any other node.
-
-**Stops.** The controller stops only when:
-
-- the graph is complete (then §5.6);
-- every remaining node waits (**Waiting nodes**), and the attempt to clear
-  each block is recorded; or
-- a tool or permission failure prevents any further action.
-
-Context compaction, a session summary, a long run or a merged PR is never a
-stop. A summary or handoff never records a stop decision or a "blocked" claim
-as fact. It records the evidence and the next action.
 
 ### 5.3 Implementers, reviewers and capabilities
 
@@ -436,15 +407,12 @@ reaches the default branch only when the operator says so.
 
 ## 6. Report
 
-Give the report at a permitted stop only (§5.2, **Stops**). Between nodes,
-the controller keeps working. The report is a report: it contains no question
-about order, priority, scope or mechanics. Report:
+When the graph is complete, or when the controller literally cannot
+continue, report:
 
 - the graph path and the work branch;
 - counts per state, and the nodes closed this session with their commits;
 - each stuck node and the decision the controller made for it;
-- for each waiting node: the exact action the operator must do (the command,
-  the input), what the controller tried, and the evidence;
 - each choice made as the author's call, with its Log entry;
 - the pull request link and the state of its checks;
 - every check that did not run, marked not run with its reason and the
